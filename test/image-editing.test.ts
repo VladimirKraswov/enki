@@ -28,7 +28,7 @@ it('uses actual attachment bytes, remembers latest across process restart and ed
  const f=await fixture();try{
   expect((await f.call('image_inputs')).inputs[0].source).toBe('attachment:1');
   await f.call('edit_image',{prompt:'same portrait, blue hair',source:'attachment:1',request_key:'first'});
-  expect(f.posts[0].source_image).toEqual({data_base64:png.toString('base64'),mime_type:'image/png'});expect(f.posts[0].edit_strength).toBe(.7);
+  expect(f.posts[0].source_image).toEqual({data_base64:png.toString('base64'),mime_type:'image/png'});expect(f.posts[0].edit_strength).toBeUndefined();expect(f.posts[0].width).toBe(512);expect(f.posts[0].height).toBe(512);
   await f.call('get_images',{job_id:job});
   await f.stage('human-two',false);
   const restarted=scopedImages({configFile:f.configFile,cwd:f.dir,fetcher:async(_url:string,o:any)=>{if(o.method==='POST'){f.posts.push(JSON.parse(o.body));return new Response(JSON.stringify({id:crypto.randomUUID(),status:'queued'}));}if(_url.endsWith('/health'))return new Response('{"status":"ready"}');throw Error('The server pruned this old image; the local immutable copy must be used');}});

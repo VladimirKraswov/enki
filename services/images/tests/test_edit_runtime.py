@@ -47,7 +47,7 @@ class ReferenceRuntime(unittest.TestCase):
         callback.phase = lambda name, detail, **extra: phases.append((name, extra))
         source = Image.new('RGB', (64, 64), (23, 67, 189))
         body = SimpleNamespace(source_image=SimpleNamespace(open_image=lambda: source.copy()),
-                               edit_strength=0.7, model='enki-image-auto', material=None,
+                               edit_strength=0.7, model='sdxl-lightning', material=None,
                                width=512, height=512, steps=8, seed=79)
         with TemporaryDirectory() as directory:
             encoder = Path(directory) / 'sdxl-lightning' / 'vae_encoder'
@@ -75,7 +75,41 @@ class ReferenceRuntime(unittest.TestCase):
     def test_missing_encoder_explains_unavailable_edit_without_faking_a_result(self):
         modules = {'openvino_genai': SimpleNamespace(),
                    'periodic': SimpleNamespace(prepare_periodic=lambda *args: None)}
-        body = SimpleNamespace(source_image=object(), edit_strength=0.7, model='enki-image-auto', material=None)
+        body = SimpleNamespace(source_image=object(), edit_strength=0.7, model='sdxl-lightning', material=None)
         with TemporaryDirectory() as directory, patch.dict(os.environ, {'IMAGE_MODELS_DIR': directory}), patch.dict('sys.modules', modules):
             with self.assertRaisesRegex(ValueError, 'VAE'):
                 ImageRuntime()('a', body, lambda *args: False)
+
+    def test_auto_edit_uses_instruction_model_full_four_steps_and_no_strength_argument(self):
+        calls, phases = [], []
+        class Pipeline:
+            def generate(self, prompt, **options):
+                calls.append(('generate', prompt, options))
+                return SimpleNamespace(data=options['image'])
+        def create(source, threads, cache_dir):
+            calls.append(('load', source, threads, cache_dir)); return Pipeline()
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Klein must use its validated factory, never the SDXL fallback')
+        modules = {'openvino_genai': SimpleNamespace(Image2ImagePipeline=forbidden, Text2ImagePipeline=forbidden),
+                   'openvino': SimpleNamespace(Tensor=lambda array: array),
+                   'periodic': SimpleNamespace(prepare_periodic=forbidden),
+                   'klein': SimpleNamespace(create_pipeline=create)}
+        callback = lambda *args: False
+        callback.phase = lambda name, detail, **extra: phases.append((name, extra))
+        source = Image.new('RGB', (512,512), (23,67,189))
+        body = SimpleNamespace(source_image=SimpleNamespace(open_image=lambda:source.copy()),
+                               edit_strength=.9,model='enki-image-auto',material=None,
+                               width=512,height=512,steps=8,seed=79)
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {'IMAGE_MODELS_DIR':directory}), patch.dict('sys.modules', modules):
+            result=ImageRuntime()('Make only the hair blue',body,callback)
+        options=next(entry[2] for entry in calls if entry[0]=='generate')
+        self.assertEqual((options['num_inference_steps'],options['guidance_scale']),(4,1.0))
+        self.assertNotIn('strength',options)
+        self.assertEqual(options['image'].shape,(1,512,512,3));self.assertEqual(options['image'].dtype,np.uint8)
+        self.assertEqual(result.size,(512,512))
+        np.testing.assert_array_equal(options['image'][0,0,0],[23,67,189])
+        inference=next(extra['inference'] for name,extra in phases if name=='generating')
+        self.assertEqual(inference['model'],'flux-klein-4b');self.assertEqual(inference['steps'],4)
+        self.assertTrue(inference['instruction_editing']);self.assertIsNone(inference['effective_strength'])
+        self.assertIsNone(inference['strength']);self.assertEqual(inference['requested_strength'],.9)
+        self.assertIn('совместимости',inference['strength_note'])

@@ -92,11 +92,13 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
    if(!Array.isArray(items)||items.length>8||name==='generate_icon_pack'&&!items.length||items.some(s=>typeof s!=='string'||!s.trim()||s.length>160))throw Error('В наборе должно быть от 1 до 8 кратких описаний');
    const input=name==='edit_image'?await source(args.source):null;
    if(input&&c.provider!=='enki')throw Error('Редактирование по исходнику требует Enki CPU. Этот OpenAI-совместимый адаптер поддерживает только генерацию по тексту; исходник не будет проигнорирован.');
-   let defaultWidth=c.provider==='enki'&&c.model==='lcm-dreamshaper-v7'?512:1024,defaultHeight=defaultWidth;
+   const instructionEdit=!!input&&c.provider==='enki'&&['enki-image-auto','flux-klein-4b'].includes(c.model);
+   let defaultWidth=c.provider==='enki'&&(c.model==='lcm-dreamshaper-v7'||instructionEdit)?512:1024,defaultHeight=defaultWidth;
+   const defaultArea=defaultWidth*defaultHeight,quantum=instructionEdit?16:8;
    if(input&&Number.isFinite(input.width)&&Number.isFinite(input.height)&&input.width>0&&input.height>0){
     const ratio=Math.max(1/6,Math.min(6,input.width/input.height));
-    defaultWidth=Math.min(1536,Math.max(256,Math.floor(Math.sqrt(1048576*ratio)/8)*8));
-    defaultHeight=Math.min(1536,Math.max(256,Math.floor((defaultWidth/ratio)/8)*8));
+    defaultWidth=Math.min(1536,Math.max(256,Math.floor(Math.sqrt(defaultArea*ratio)/quantum)*quantum));
+    defaultHeight=Math.min(1536,Math.max(256,Math.floor((defaultWidth/ratio)/quantum)*quantum));
     while(defaultWidth*defaultHeight>1048576){if(defaultWidth>=defaultHeight)defaultWidth-=8;else defaultHeight-=8;}
    }
    const width=args.width??defaultWidth,height=args.height??defaultHeight,steps=args.steps??4,seed=args.seed??42;
@@ -118,8 +120,9 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
    const readyBy=Date.now()+20000;
    while(true){const health=JSON.parse(await request(c,'/health','GET',undefined,signal));if(health.status==='ready')break;if(health.status==='error')throw Error('Модель генератора не загрузилась. Проверьте журнал сервиса; генерация не запускалась.');if(Date.now()>=readyBy)throw Error('Модель ещё загружается; генерация не запускалась. Проверьте image_status и используйте тот же request_key.');await wait(1000,signal)}
    if(input&&(!Number.isFinite(args.strength??0.7)||(args.strength??0.7)<0.5||(args.strength??0.7)>0.95))throw Error('Сила перерисовки должна быть от 0.5 до 0.95. Текущая SDXL округляет этот диапазон до одного шага; плавная регулировка не поддерживается.');
+   if(instructionEdit&&(width%16||height%16))throw Error('Размеры редактирования FLUX должны быть кратны 16.');
    if(input&&c.model==='lcm-dreamshaper-v7')throw Error('Для перерисовки выберите enki-image-auto или sdxl-lightning в настройках.');
-   const payload={model:c.model,prompt:name==='generate_material'?'seamless texture swatch, PBR albedo material scan, full frame closeup, perpendicular flat view, even diffuse lighting, '+args.prompt+', no scene, no perspective, no objects, no text':args.prompt,width,height,steps,seed,items,...(name==='generate_material'?{material:args.material??{}}:{}),...(input?{source_image:{data_base64:input.bytes.toString('base64'),mime_type:input.mime},edit_strength:args.strength??0.7}:{})};
+   const payload={model:c.model,prompt:name==='generate_material'?'seamless texture swatch, PBR albedo material scan, full frame closeup, perpendicular flat view, even diffuse lighting, '+args.prompt+', no scene, no perspective, no objects, no text':args.prompt,width,height,steps,seed,items,...(name==='generate_material'?{material:args.material??{}}:{}),...(input?{source_image:{data_base64:input.bytes.toString('base64'),mime_type:input.mime},...(args.strength!==undefined?{edit_strength:args.strength}:{})}:{})};
    const reserved=await reserveImage(ctx,args.request_key,{...payload,...(input?{source_image:{sha256:input.sha256,ref:input.ref}}:{})});if(reserved.cached)return reserved.cached;
    if(reserved.pending){
     let previous;

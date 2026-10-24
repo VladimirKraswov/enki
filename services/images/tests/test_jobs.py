@@ -99,8 +99,11 @@ class JobTests(unittest.TestCase):
   self.jobs.generate=edit
   req=module.Request(prompt='make the corner green',width=256,height=256,source_image=source)
   accepted=self.jobs.submit(req,'edit-input');jid=accepted['id']
-  self.assertEqual(accepted['mode'],'image-to-image');self.assertEqual(accepted['steps'],1)
-  self.assertEqual(accepted['source_image']['width'],64);self.assertEqual(accepted['edit_strength'],.7)
+  # The qualified instruction-editing profile intentionally replaces auto SDXL redraw.
+  self.assertEqual(accepted['mode'],'image-to-image');self.assertEqual(accepted['steps'],4)
+  self.assertEqual(accepted['model'],'flux-klein-4b')
+  self.assertEqual(accepted['source_image']['width'],64);self.assertIsNone(accepted['edit_strength'])
+  self.assertEqual(accepted['requested_edit_strength'],.7);self.assertTrue(accepted['instruction_editing'])
   self.assertEqual(self.jobs.submit(req,'edit-input')['id'],jid);self.assertEqual(self.jobs.pending.qsize(),1)
   self.run_pending();self.assertEqual(seen,[((64,32),(255,0,0),.7)])
   folder=Path(self.tmp.name)/jid;manifest=json.loads((folder/'manifest.json').read_text())
@@ -160,6 +163,8 @@ class JobTests(unittest.TestCase):
   self.assertEqual(oversized.status_code,413)
   self.assertEqual(self.jobs.pending.qsize(),1)
   health=client.get('/health',headers=auth).json();self.assertTrue(health['editing']);self.assertEqual(health['edit_strength']['default'],.7)
+  self.assertEqual(health['edit_default_model'],'flux-klein-4b');self.assertEqual(health['edit_default_size'],512)
+  self.assertEqual(health['edit_strength']['supported_models'],['sdxl-lightning'])
  def test_restart_retains_source_without_replaying_edit(self):
   jid=self.jobs.submit(module.Request(prompt='edit',source_image=self.source()),'restart-edit')['id']
   other=module.Jobs(self.tmp.name,None)
@@ -180,4 +185,56 @@ class JobTests(unittest.TestCase):
   for bad in ('','x'*161):
    self.assertEqual(client.get('/jobs/by-key',params={'request_key':bad},headers=auth).status_code,422)
   self.assertEqual(self.jobs.pending.qsize(),1)
+ def test_klein_edit_size_and_legacy_sdxl_redraw_are_explicit(self):
+  source=self.source()
+  automatic=module.Request(prompt='change hair',source_image=source)
+  self.assertEqual((automatic.width,automatic.height),(512,512))
+  self.assertEqual((module.Request(prompt='new image').width,module.Request(prompt='new image').height),(1024,1024))
+  with self.assertRaisesRegex(ValueError,'кратны 16'):
+   module.Request(prompt='edit',source_image=source,width=512,height=520)
+  legacy=module.Request(prompt='redraw',model='sdxl-lightning',source_image=source,width=512,height=520)
+  state=self.jobs.submit(legacy,'explicit-sdxl')
+  self.assertEqual(state['model'],'sdxl-lightning');self.assertEqual(state['steps'],1)
+  self.assertEqual(state['edit_strength'],.7);self.assertFalse(state['instruction_editing'])
+  with self.assertRaisesRegex(ValueError,'source_image'):module.Request(prompt='new image',model='flux-klein-4b')
+ def test_health_reports_startup_residency_and_does_not_claim_ready_before_loading(self):
+  class Runtime:
+   def resident_status(self):return {'ready':False,'primary':[{'model':'sdxl-lightning','loaded':True},{'model':'flux-klein-4b','loaded':False}]}
+   def __call__(self,*_):raise AssertionError('Health must not generate')
+  self.jobs.generate=Runtime();self.jobs.ready=False
+  self.jobs.loading_detail='Загружаю FLUX Klein'
+  client=TestClient(module.create_app(self.jobs,'x'*32));auth={'Authorization':'Bearer '+'x'*32}
+  health=client.get('/health',headers=auth).json()
+  self.assertEqual(health['status'],'loading');self.assertEqual(health['phase'],'loading_model')
+  self.assertEqual(health['detail'],'Загружаю FLUX Klein');self.assertFalse(health['resident']['ready'])
+  self.assertEqual(client.post('/jobs',json={'prompt':'a'},headers=auth|{'Idempotency-Key':'before-ready'}).status_code,503)
+  self.assertTrue(self.jobs.pending.empty())
+ def test_startup_preloads_both_models_without_generation_and_exposes_loading_progress(self):
+  import threading,time,os
+  from unittest.mock import patch
+  entered,release=threading.Event(),threading.Event();loaded=[]
+  class Runtime:
+   def preload(self,phase):
+    phase('loading_model','Загружаю SDXL');loaded.append('sdxl-lightning')
+    phase('loading_model','Загружаю FLUX Klein');entered.set()
+    if not release.wait(2):raise RuntimeError('test loader not released')
+    loaded.append('flux-klein-4b')
+   def resident_status(self):return {'ready':len(loaded)==2,'primary':[{'model':model,'loaded':model in loaded} for model in ('sdxl-lightning','flux-klein-4b')]}
+   def __call__(self,*_):raise AssertionError('Warmup must never generate a dummy image')
+  self.jobs.generate=Runtime();self.jobs.ready=False
+  root=Path(self.tmp.name)/'models';(root/'sdxl-lightning').mkdir(parents=True)
+  (root/'sdxl-lightning/model_index.json').write_text('{}')
+  auth={'Authorization':'Bearer '+'x'*32}
+  with patch.dict(os.environ,{'IMAGE_MODELS_DIR':str(root)}),TestClient(module.create_app(self.jobs,'x'*32,lambda:module.load_models(self.jobs))) as client:
+   try:
+    self.assertTrue(entered.wait(1));health=client.get('/health',headers=auth).json()
+    self.assertEqual(health['status'],'loading');self.assertEqual(health['detail'],'Загружаю FLUX Klein')
+    self.assertFalse(health['resident']['ready']);self.assertTrue(health['resident']['primary'][0]['loaded'])
+    self.assertEqual(client.post('/jobs',json={'prompt':'a'},headers=auth|{'Idempotency-Key':'startup'}).status_code,503)
+   finally:release.set()
+   deadline=time.monotonic()+1
+   while not self.jobs.ready and time.monotonic()<deadline:time.sleep(.01)
+   health=client.get('/health',headers=auth).json()
+   self.assertEqual(health['status'],'ready');self.assertTrue(health['resident']['ready'])
+   self.assertEqual(health['phase'],'ready');self.assertTrue(self.jobs.pending.empty())
 if __name__=='__main__':unittest.main()

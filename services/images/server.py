@@ -1,4 +1,4 @@
-"""Enki CPU image worker. One resident OpenVINO pipeline; durable, bounded jobs."""
+"""Enki CPU image worker. Resident SDXL/Klein pipelines; durable, bounded jobs."""
 import base64
 import hashlib
 import hmac
@@ -107,9 +107,15 @@ class Request(BaseModel):
     @model_validator(mode="after")
     def validate_request(self):
         if not self.prompt.strip(): raise ValueError("Нужен непустой prompt")
-        selected=resolve_profile(self.model, self.prompt, self.material is not None)
+        editing=self.source_image is not None
+        selected=resolve_profile(self.model, self.prompt, self.material is not None, editing)
+        if editing:
+            if 'width' not in self.model_fields_set: self.width=512
+            if 'height' not in self.model_fields_set: self.height=512
         if self.width % 8 or self.height % 8 or self.width*self.height > 1048576:
             raise ValueError("Размеры кратны 8; не больше 1048576 пикселей")
+        if selected=='flux-klein-4b' and (self.width%16 or self.height%16):
+            raise ValueError('FLUX Klein: ширина и высота должны быть кратны 16. Например, 512×512; для SDXL достаточно кратности 8')
         if self.model == 'lcm-dreamshaper-v7' and self.width*self.height > 640000:
             raise ValueError('Черновая LCM: не больше 640000 пикселей')
         if self.material and self.items: raise ValueError("Материал создаётся из одной согласованной текстуры")
@@ -146,6 +152,7 @@ class Jobs:
                 self.db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(state),jid))
         self.db.commit()
         self.ready=False; self.load_error=False
+        self.loading_phase='loading_model'; self.loading_detail='Подготавливаю модели генерации и редактирования'
     def get(self, jid):
         with self.lock:
             row=self.db.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()
@@ -176,14 +183,17 @@ class Jobs:
             count=self.db.execute('SELECT count(*) FROM jobs').fetchone()[0]
             if count>=200: raise HTTPException(507,'Хранилище изображений заполнено; удалите старые задания')
             if self.pending.full(): raise HTTPException(429,'Очередь генерации заполнена. Повторите позже с тем же ключом')
-            selected=resolve_profile(body.model,body.prompt,body.material is not None)
+            selected=resolve_profile(body.model,body.prompt,body.material is not None,body.source_image is not None)
             recipe=resolve_surface(body.material.surface,body.prompt) if body.material else None
             actual_steps=0 if recipe else PROFILES[selected]['steps'] or body.steps
             if body.source_image: actual_steps=edit_parameters(selected,body.edit_strength)[1]
             if recipe:selected='procedural-'+recipe+'-v1'
             jid=str(uuid.uuid4());state={'id':jid,'status':'queued','created':time.time(),'completed':0,'total':len(body.items) or 1,'step':0,'steps':actual_steps,'files':[],'width':body.width,'height':body.height,'model':selected}
             if body.source_image:
-                state.update(mode='image-to-image',source_image=body.source_image.metadata(),edit_strength=body.edit_strength)
+                instruction_editing=selected=='flux-klein-4b'
+                state.update(mode='image-to-image',source_image=body.source_image.metadata(),
+                    edit_strength=None if instruction_editing else body.edit_strength,
+                    requested_edit_strength=body.edit_strength,instruction_editing=instruction_editing)
                 folder=self.root/jid
                 try:
                     folder.mkdir(mode=0o700)
@@ -253,7 +263,11 @@ class Jobs:
                 request=body.model_dump(exclude={'source_image':True,'edit_strength':not bool(body.source_image)})
                 if body.source_image: request['source_image']=body.source_image.metadata()
                 manifest={'model':inference['model'] if inference else body.model,'engine':'OpenVINO GenAI CPU','request':request,'inference':inference,'files':files,'transparency':False,'vision_review':'pending: inspect returned images with a vision-capable agent'}
-                if body.source_image: manifest.update(mode='image-to-image',source_image=body.source_image.metadata(),edit_strength=body.edit_strength)
+                if body.source_image:
+                    instruction_editing=self.get(jid)['model']=='flux-klein-4b'
+                    manifest.update(mode='image-to-image',source_image=body.source_image.metadata(),
+                        edit_strength=None if instruction_editing else body.edit_strength,
+                        requested_edit_strength=body.edit_strength,instruction_editing=instruction_editing)
                 if body.material: manifest.update(material=body.material.model_dump(),height_source=inference.get('height_source') if inference and inference.get('height_source') else 'Approximation from the base image luminance; not measured or recovered geometry',color_spaces={'image-01.png':'sRGB color','normal.png':'linear / non-color tangent normal','height.png':'linear 16-bit height','roughness.png':'linear roughness, NOT glossiness','metallic.png':'linear metallic'},preview='relight.png and relight-right.png use the selected normal convention under opposite side lights; tile-preview.png shows repetition when enabled')
                 (folder/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
                 with zipfile.ZipFile(folder/'images.zip','w',compression=zipfile.ZIP_DEFLATED) as archive:
@@ -264,6 +278,16 @@ class Jobs:
                 import logging;logging.exception('Image worker failed for job %s',jid)
             finally: self.pending.task_done()
 
+def load_models(jobs):
+    root=Path(os.getenv('IMAGE_MODELS_DIR','/opt/enki-images/models'))
+    # Klein's factory validates its pinned enki-klein.json/version pointer;
+    # its canonical directory intentionally has no direct model_index.json.
+    if any(not (root / p['folder'] / 'model_index.json').exists() for model,p in PROFILES.items() if p['folder'] and model!='flux-klein-4b'):
+        raise RuntimeError('Quality models are not installed')
+    def phase(name,detail,**_):
+        with jobs.lock: jobs.loading_phase=name; jobs.loading_detail=detail
+    jobs.generate.preload(phase)
+
 def create_app(jobs,token,load=None):
     if len(token)<32: raise ValueError('Set a private API token of at least 32 characters')
     def auth(authorization: str=Header(default='')):
@@ -273,7 +297,7 @@ def create_app(jobs,token,load=None):
         def start():
             try:
                 if load: load()
-                jobs.ready=True; jobs.run()
+                jobs.ready=True; jobs.loading_phase=None; jobs.loading_detail=None; jobs.run()
             except Exception:
                 jobs.load_error=True
                 import logging;logging.exception('Image model load failed')
@@ -281,7 +305,14 @@ def create_app(jobs,token,load=None):
         yield
     app=FastAPI(title='Enki CPU Images',lifespan=lifespan,dependencies=[Depends(auth)])
     @app.get('/health')
-    def health(): return {'status':'ready' if jobs.ready else 'error' if jobs.load_error else 'loading','model':MODEL,'models':list(PROFILES),'material_surfaces':['auto','image','brick','granite'],'engine':'OpenVINO GenAI CPU','queue':jobs.pending.qsize(),'max_items':8,'max_pixels':1048576,'editing':True,'edit_models':['enki-image-auto','sdxl-lightning'],'edit_strength':{'min':0.5,'max':0.95,'default':0.7},'max_source_bytes':MAX_SOURCE_BYTES,'max_source_side':4096,'max_source_pixels':16777216}
+    def health():
+        resident=jobs.generate.resident_status() if hasattr(jobs.generate,'resident_status') else None
+        return {'status':'ready' if jobs.ready else 'error' if jobs.load_error else 'loading','model':MODEL,'models':list(PROFILES),'material_surfaces':['auto','image','brick','granite'],'engine':'OpenVINO GenAI CPU','queue':jobs.pending.qsize(),'max_items':8,'max_pixels':1048576,
+            'editing':True,'edit_models':['enki-image-auto','flux-klein-4b','sdxl-lightning'],
+            'edit_default_model':'flux-klein-4b','edit_default_size':512,'edit_dimension_multiple':16,
+            'edit_strength':{'min':0.5,'max':0.95,'default':0.7,'supported_models':['sdxl-lightning'],'note':'FLUX Klein управляется текстовой инструкцией; edit_strength принят только для совместимости'},
+            'resident':resident,'phase':'ready' if jobs.ready else 'error' if jobs.load_error else jobs.loading_phase,'detail':jobs.loading_detail,
+            'max_source_bytes':MAX_SOURCE_BYTES,'max_source_side':4096,'max_source_pixels':16777216}
     @app.post('/jobs',status_code=202)
     async def submit(request:HTTPRequest,idempotency_key:str=Header(default='')):
         # Bound streamed/chunked bodies before JSON/Pydantic allocation, not just Content-Length.
@@ -340,10 +371,7 @@ if __name__=='__main__':
     import uvicorn
     from PIL import Image
     from runtime import ImageRuntime
-    def load():
-        root=Path(os.getenv('IMAGE_MODELS_DIR','/opt/enki-images/models'))
-        if any(not (root / p['folder'] / 'model_index.json').exists() for p in PROFILES.values() if p['folder']):
-            raise RuntimeError('Quality models are not installed')
-    jobs=Jobs(os.getenv('IMAGE_STATE_DIR','/var/lib/enki-images/jobs'),ImageRuntime())
+    runtime=ImageRuntime()
+    jobs=Jobs(os.getenv('IMAGE_STATE_DIR','/var/lib/enki-images/jobs'),runtime)
     token=Path(os.environ['IMAGE_TOKEN_FILE']).read_text().strip()
-    uvicorn.run(create_app(jobs,token,load),host='127.0.0.1',port=18084,log_level='warning')
+    uvicorn.run(create_app(jobs,token,lambda:load_models(jobs)),host='127.0.0.1',port=18084,log_level='warning')

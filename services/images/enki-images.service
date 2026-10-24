@@ -1,5 +1,5 @@
 [Unit]
-Description=Enki CPU image generation (OpenVINO SDXL quality profiles)
+Description=Enki CPU images (resident SDXL generation and FLUX Klein editing)
 After=network-online.target
 [Service]
 User=enki-images
@@ -20,7 +20,7 @@ CPUQuota=1200%
 CPUWeight=20
 CPUAffinity=20-31
 Nice=10
-MemoryMax=32G
+MemoryMax=64G
 TasksMax=128
 StateDirectory=enki-images
 NoNewPrivileges=true
