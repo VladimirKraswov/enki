@@ -8,7 +8,8 @@
 - [x] Both primary pipelines preload and remain resident, optional variants bounded to1; approximately30.4GiB combined qualification RSS,64GiB unit cap, actual readiness in health/settings.
 - [x] Actual native MCP/API proof: attached portrait → blue hair → red dress → white flower, provenance hashes follow the previous result; third attempt in one human request rejected. Subsequent SDXL generation succeeded with both models still resident.56 CPU tests;113 canonical1136 frontend/177 native, both pinned Hub packets49 source/20 hot byte-exact.
 - [x] Windows lock contention recognizes the platform fs2 code;7 focused native checks pass. Queue recovery and invocation ordering from114 preserved.
-- [ ] Final115 canonical publication and actual ordinary Enki reference → edit → follow-up acceptance after owner-approved pause/install/resume.
+- [x] Stable115 canonical1138 frontend/6 skipped,178 native/3 ignored,83 Hub,3 ASR,15 publisher; all build/architecture/bundle/fmt/strictClippy gates pass. Receipt/head/both pinned signatures and51 source/20 hot files byte-exact; main pushed.
+- [x] Owner-approved native update installed115 through signed Hub source build; entire installed tree matches the hash-bound install plan and code signature validates. External OpenCode server preserved. Ordinary Qwen Medium chat with a real PNG chose image_inputs → edit_image; owner follow-up automatically used latest. Two successful512px Klein jobs137.61/139.02s, source SHA links exact previous output, no tool errors, actual image reads and visible inline card. Both primary models remain resident. Windows/Linux live acceptance remains separate.
 
 ## CPU image quality and periodic texture inference (0.2.109)
 
