@@ -1,12 +1,14 @@
 # Enki roadmap
 
-## Reference image editing and bounded revisions (0.2.113)
+## Reference image editing and bounded revisions (0.2.115)
 
 - [x] Actual authenticated bounded PNG/JPEG/WebP references; qualified FLUX.2 Klein4B instruction edits with private immutable source/provenance. Blue-hair request succeeded at512px/131s; source/config/weight reproduction verified. SDXL remains new-image renderer and explicit legacy redraw.
 - [x] Trusted OpenCode/Pi session/request context; current/retained original and persistent latest-result editing, including text-only chat models with explicit Vision limitations.
 - [x] Native OS-lock journal enforces two total jobs per human request; automatic wakes retain the budget, scoped idempotency/read-only lost-ack recovery, monotonic latest and safe local reuse.
 - [x] Both primary pipelines preload and remain resident, optional variants bounded to1; approximately30.4GiB combined qualification RSS,64GiB unit cap, actual readiness in health/settings.
-- [ ] Final canonical gates, signed Hub packets and actual ordinary Enki reference → edit → follow-up acceptance.
+- [x] Actual native MCP/API proof: attached portrait → blue hair → red dress → white flower, provenance hashes follow the previous result; third attempt in one human request rejected. Subsequent SDXL generation succeeded with both models still resident.56 CPU tests;113 canonical1136 frontend/177 native, both pinned Hub packets49 source/20 hot byte-exact.
+- [x] Windows lock contention recognizes the platform fs2 code;7 focused native checks pass. Queue recovery and invocation ordering from114 preserved.
+- [ ] Final115 canonical publication and actual ordinary Enki reference → edit → follow-up acceptance after owner-approved pause/install/resume.
 
 ## CPU image quality and periodic texture inference (0.2.109)
 

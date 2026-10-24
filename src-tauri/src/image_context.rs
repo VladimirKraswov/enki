@@ -396,6 +396,13 @@ fn state_valid(value: &serde_json::Value) -> bool {
         && (value["latest"].is_null() || value["latest"].is_object())
 }
 
+fn is_lock_contention(error: &std::io::Error, contended_raw: Option<i32>) -> bool {
+    // Windows fs2 uses ERROR_LOCK_VIOLATION, which std does not classify as
+    // WouldBlock. Match the platform's explicit fs2 code, never arbitrary errors.
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || matches!((error.raw_os_error(), contended_raw), (Some(actual), Some(expected)) if actual == expected)
+}
+
 fn state_exchange(
     root: &Path,
     id: &str,
@@ -426,11 +433,12 @@ fn state_exchange(
         .open(lock_path)
         .map_err(|_| "Состояние изображений недоступно")?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let contended_raw = fs2::lock_contended_error().raw_os_error();
     loop {
         match lock.try_lock_exclusive() {
             Ok(()) => break,
             Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
+                if is_lock_contention(&e, contended_raw)
                     && std::time::Instant::now() < deadline =>
             {
                 std::thread::sleep(std::time::Duration::from_millis(25))
@@ -734,6 +742,28 @@ mod tests {
             assert!(state_exchange(&root, &id, std::io::Cursor::new([]), Vec::new()).is_err());
         }
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn recognizes_windows_lock_contention_without_retrying_unrelated_errors() {
+        // fs2's Windows LockFileEx contention contract is Win32 error 33, even
+        // though its ErrorKind is Uncategorized. Exercise that raw-code path on
+        // every host, then use the actual OS lock in the following test.
+        assert!(is_lock_contention(
+            &std::io::Error::from_raw_os_error(33),
+            Some(33)
+        ));
+        assert!(!is_lock_contention(
+            &std::io::Error::from_raw_os_error(13),
+            Some(33)
+        ));
+        assert!(!is_lock_contention(
+            &std::io::Error::other("not an OS lock conflict"),
+            None
+        ));
+        assert!(is_lock_contention(
+            &std::io::Error::from(std::io::ErrorKind::WouldBlock),
+            None
+        ));
     }
     #[test]
     fn state_uses_os_lock_and_survives_a_previous_owner_dropping_it() {
