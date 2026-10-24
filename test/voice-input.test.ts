@@ -152,6 +152,10 @@ it('does not invite speech until a real audio checkpoint arrives, and cleans up 
  });
  await click('Надиктовать');
  expect(document.body.textContent).toContain('Пока не говорите');expect(document.body.textContent).not.toContain('Можно говорить');
+ const preparing=document.querySelector('.voice-recording .voice-preparing');
+ expect(preparing).not.toBeNull();
+ expect(preparing!.querySelectorAll('.voice-preparing-bars i')).toHaveLength(5);
+ expect(preparing!.textContent).toContain('Готовлю запись');
  await act(async()=>{recorder.ondataavailable({data:new Blob(['actual-audio'])});});
  expect(document.body.textContent).toContain('Можно говорить');expect(document.querySelector('canvas')).not.toBeNull();
  await click('Остановить диктовку');await act(async()=>{await vi.waitFor(()=>expect(stop).toHaveBeenCalledOnce());});expect(stop).toHaveBeenCalledOnce();

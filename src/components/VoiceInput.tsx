@@ -222,7 +222,13 @@ export function VoiceInput({ disabled, onActiveChange }: {
           <span className="voice-ready" role="status">Можно говорить</span>
           <span className="voice-timer" title={noVad ? 'Автостоп по тишине недоступен. Остановите запись вручную.' : 'Запись остановится после минуты тишины'}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span>
           <button className="voice-finish icon-btn" aria-label="Закончить и распознать" title="Закончить диктовку" onClick={finish}><Icon name="stop" size={14}/></button>
-        </> : <span>{phase === 'requesting' ? 'Подключаю микрофон… Пока не говорите' : phase === 'preparing' ? 'Подготавливаю запись… Пока не говорите' : 'Распознаю последние фрагменты…'}</span>}
+        </> : <div className="voice-preparing">
+          <span className="voice-preparing-bars" aria-hidden="true"><i/><i/><i/><i/><i/></span>
+          <span className="voice-preparing-text">
+            <b>{phase === 'requesting' ? 'Подключаю микрофон…' : phase === 'preparing' ? 'Готовлю запись…' : 'Распознаю…'}</b>
+            <small>{phase === 'transcribing' ? 'Последние фрагменты' : 'Пока не говорите'}</small>
+          </span>
+        </div>}
       </div>}
   </div>;
 }
