@@ -117,3 +117,13 @@ it("shutdown during discovery does not register late tools", async () => {
   await pending;
   expect(f.tools.size).toBe(0);
 });
+it('binds image calls to Pi SessionManager and replaces forged model context', async () => {
+  const f = await fixture();
+  await writeFile(path.join(root,'global.json'),JSON.stringify({version:1,sources:[],servers:[{...server,id:'enki-images'}]}));
+  const ctx={...f.ctx,sessionManager:{getSessionId:()=> 'pi_background'}};
+  await f.events.session_start({},ctx);
+  const tool=f.tools.get('mesh_enki_images_read_project');
+  await tool.execute('test',{__enkiImageContext:{engine:'opencode',sessionID:'forged'},prompt:'keep'},new AbortController().signal,undefined,{...ctx,sessionManager:{getSessionId:()=> 'pi_actual'}});
+  expect(f.connection.call).toHaveBeenCalledWith('read_project',{prompt:'keep',__enkiImageContext:{engine:'pi',sessionID:'pi_actual'}},expect.any(AbortSignal));
+  await f.events.session_shutdown();
+});

@@ -18,7 +18,8 @@ for name,(repo,revision) in models.items():
  target=Path(snapshot_download(repo,revision=revision,local_dir=models_root/name,
      allow_patterns=['model_index.json','scheduler/*.json','unet/*.json','unet/*.xml','unet/*.bin',
          'text_encoder/*.json','text_encoder/*.xml','text_encoder/*.bin','text_encoder_2/*.json','text_encoder_2/*.xml','text_encoder_2/*.bin',
-         'tokenizer/*','tokenizer_2/*','vae_decoder/*.json','vae_decoder/*.xml','vae_decoder/*.bin'],max_workers=2))
+         'tokenizer/*','tokenizer_2/*','vae_decoder/*.json','vae_decoder/*.xml','vae_decoder/*.bin',
+         'vae_encoder/*.json','vae_encoder/*.xml','vae_encoder/*.bin'],max_workers=2))
  # These exports omit GenAI's tokenizer IR. Reuse ONLY verified identical CLIP
  # vocabularies/merges from Intel's pinned SDXL export; do not execute repo code.
  for part in ('tokenizer','tokenizer_2'):
@@ -27,5 +28,5 @@ for name,(repo,revision) in models.items():
   for f in (tokenizers/part).glob('openvino_*'):shutil.copy2(f,target/part/f.name)
  p=target/'model_index.json';data=json.loads(p.read_text());data['_class_name']='StableDiffusionXLPipeline';p.write_text(json.dumps(data,indent=2))
  prepare_text_inputs(target)
- (target/'enki-model.json').write_text(json.dumps({'repo':repo,'revision':revision,'tokenizers_revision':'d54e5b43fcb6b4b358f3a134269115d3fcb3eb25'}))
-print('Downloaded pinned quality SDXL and optional LCM draft IR; ready for CPU validation')
+ (target/'enki-model.json').write_text(json.dumps({'repo':repo,'revision':revision,'tokenizers_revision':'d54e5b43fcb6b4b358f3a134269115d3fcb3eb25','image_to_image':True}))
+print('Downloaded pinned quality SDXL with VAE encoder and optional LCM draft IR; ready for CPU validation')

@@ -6,6 +6,8 @@ The owner device is provisioned for CPU Inference. Other devices set their own A
 
 Shared MCP **enki-images / «Генерация изображений»**, OpenCode and Pi:
 
+- `image_inputs`: list this session’s attached originals, previous original and last generated result;
+- `edit_image`: actual image-to-image redraw from `attachment:N` or `latest`;
 - `generate_image`: start drawing;
 - `generate_icon_pack`:1–8 subjects with shared style, palette and background;
 - `generate_material`: texture + aligned normal/height/roughness/metallic and opposite lighting previews;
@@ -24,3 +26,15 @@ Quality: use model `enki-image-auto` (visually qualified SDXL for general art, a
 Materials: ask “Создай текстуру камня с normal map, высотой и roughness; OpenGL, рельеф6, покажи под боковым светом.” Tileable materials use circular convolutions during denoising AND VAE decoding, not border crossfades that painted bands into the previous output. Brick/granite use explicitly reported procedural PBR recipes with authored aligned height; use material.surface=image to force neural generation instead. Other image-based surfaces approximate height from albedo. Roughness/metallic are explicit scalar values. See [CPU service](../services/images/README.md) for conventions, limitations, deployment and tests. The agent should use linear/non-color imports for data maps and choose the engine's OpenGL/DirectX convention.
 
 Native update required for settings commands and shared runtime. A UI-only activation cannot install the native reader, OS vault integration or shared tool files. Publication does not interrupt active agents; install through the normal idle native-update flow. Windows/Linux live qualification remains separate from Mac/browser and CPU API acceptance.
+
+## Reference images and iterative editing (0.2.111)
+
+Attach a PNG/JPEG/WebP and ask «Перерисуй это в стиле аниме». Enki privately stages original bytes for the actual engine/session/message, while the agent selects `image_inputs` → `edit_image(source=attachment:1)` → status → results. Follow-up «Поменяй волосы на синие» uses `source=latest`, the last completed primary image in this session. «Перерисуй исходник заново» can reuse the retained original; a new attached original replaces it. Source hashes, normalized geometry and actual inference mode/steps are recorded in each manifest. Original input is private, excluded from public result downloads and ZIP.
+
+The agent writes a short visual prompt describing the complete intended result, preserves unrequested details and reviews the actual returned pixels when its model supports Vision. A text-only chat model can forward a real reference to the image service, but gets an explicit named reference instead of incompatible image input and must not claim visual review. Ordinary Vision attachments exceeding edit limits still reach the chat model and are marked unsupported for editing.
+
+**At most two total generation jobs per human request**: initial plus one correction, across image/material/icon/edit tools. This is enforced by a durable per-session journal under a native OS file lock, survives process restarts and concurrent calls, and does not refill on automatic timer wakes. Identical request keys are scoped to the real session/message. A lost acknowledgement is recovered with a read-only lookup, never a replayed POST. A new human message grants a new two-attempt budget.
+
+SDXL Lightning uses actual `Image2ImagePipeline` with a pinned VAE encoder; it performs whole-frame redraw/style transfer, not masked local retouching or instruction-following object replacement. The exact distilled 2-step schedule is preserved: requested strength .5–.95 quantizes to one actual denoise step (effective .5), so it is not fine-grained control. Object/color edits are best effort; no new model is silently substituted. Alpha is composited on white; transparency is not preserved. Source aspect is retained by default, including EXIF rotation; changing canvas uses contain/letterboxing, never silent cropping. Current editing requires the Enki CPU provider. The generic OpenAI-compatible adapter remains text-to-image only and reports unsupported editing explicitly.
+
+Edit input limits: four attached originals, each8MiB, combined16MiB, PNG/JPEG/WebP, <=4096 per side and16MP. Local generated PNGs are hash-checked before reuse, so follow-up editing can continue after the server’s seven-day cleanup. New native installation is required for trusted context/OS-lock CLI and updated shared tools; UI-only hot activation cannot supply them.

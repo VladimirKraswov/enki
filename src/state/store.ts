@@ -44,6 +44,7 @@ import { newMessageId, type QueuedPrompt } from "./queue";
 import type { AsrSettings } from "../voice/asr";
 import { attachmentDrafts, attachmentScope, type DraftAttachment } from "../attachments/drafts";
 import { prepareAttachments } from "../attachments/prepare";
+import { stageImagePromptContext, imagePromptParts } from '../images/context';
 import { pathIsWithin } from "../util/paths";
 import { DEFAULT_HELPER_ENDPOINT } from "../attachments/helper";
 // Central application store: connection lifecycle, project/session selection,
@@ -2479,6 +2480,10 @@ class Store {
           () => current() && !signal.aborted && (this.queueStops.get(task.sessionID) ?? 0) === stopped, async () => {
         if (!pi) await ownWork(backend.endpoint, task.directory, task.sessionID, messageID, this.client.headers.Authorization);
         if (!current() || signal.aborted || (this.queueStops.get(task.sessionID) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
+        await stageImagePromptContext({engine:task.engine,sessionId:task.sessionID,directory:task.directory,messageId:messageID,parts:[],automatic:true,
+          supportsVision:!!(pi ? piModelInfo(this.state.piHealth,task.model) : this.modelInfo(task.model.providerID,task.model.modelID))?.capabilities?.input?.image,
+          local:pi || isLocalComputer(this.state.prefs.endpoint,!!this.currentHost())});
+        if (!current() || signal.aborted || (this.queueStops.get(task.sessionID) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
         sending = true;
         await backend.prompt(task.sessionID, task.directory, {
           messageID, model: { providerID: task.model.providerID, modelID: task.model.modelID },
@@ -2544,6 +2549,7 @@ class Store {
     // mid-flight must not redirect an accepted prompt to a different agent.
     const engineId = this.engineIdFor();
     const backend = this.engine(engineId);
+    const referenceImages = isNative() && (engineId === PI_BACKEND_ID || isLocalComputer(this.state.prefs.endpoint, !!this.currentHost()));
     const selected = this.state.activeSessionId;
     const sentAtStatus = this.statusSequence;
     const status = selected ? this.activityStatus(selected) : null;
@@ -2597,7 +2603,7 @@ class Store {
       if (engineId !== PI_BACKEND_ID) await this.configureSharedTools(directory);
       if (!sameContext() || this.state.activeSessionId !== selected) return false;
       const parts = attachments.length && modelInfo
-        ? await prepareAttachments(attachments, engineId === PI_BACKEND_ID ? { ...modelInfo, capabilities: { ...modelInfo.capabilities, input: { ...modelInfo.capabilities?.input, pdf: false, audio: false, video: false } } } : modelInfo, this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT, this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, operation.signal, onProgress, this.archiveStager(backend))
+        ? await prepareAttachments(attachments, engineId === PI_BACKEND_ID ? { ...modelInfo, capabilities: { ...modelInfo.capabilities, input: { ...modelInfo.capabilities?.input, pdf: false, audio: false, video: false } } } : modelInfo, this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT, this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, operation.signal, onProgress, this.archiveStager(backend), {imageReferences:referenceImages})
         : [];
       if (!sameContext() || this.state.activeSessionId !== selected)
         throw new Error("Чат изменился во время подготовки вложений. Вложения остались в черновике.");
@@ -2661,13 +2667,16 @@ class Store {
         () => sameContext() && this.state.activeSessionId === target && !operation.signal.aborted, async () => {
       if (engineId !== PI_BACKEND_ID) await ownWork(backend.endpoint, directory, target, messageID, this.client.headers.Authorization);
       if (!sameContext() || operation.signal.aborted) throw new NotDispatched("Отправка отменена.");
+      await stageImagePromptContext({engine:engineId,sessionId:target,directory,messageId:messageID,parts,supportsVision:!!modelInfo?.capabilities?.input?.image,
+        local:referenceImages});
+      if (!sameContext() || operation.signal.aborted) throw new NotDispatched("Отправка отменена.");
       this.submissions.dispatched(operation);
       await backend.prompt(target, directory, {
         messageID,
         model: { providerID: model.providerID, modelID: model.modelID },
         agent: agent ?? undefined,
         variant: model.variant ?? undefined,
-        parts: agentParts(this.state.prefs.workshop, target, directory, [{ type: "text", text: trimmed }, ...parts]),
+        parts: agentParts(this.state.prefs.workshop, target, directory, [{ type: "text", text: trimmed }, ...imagePromptParts(parts,!!modelInfo?.capabilities?.input?.image,referenceImages)]),
       });
       });
       if (attachments.length) {
@@ -3103,6 +3112,8 @@ class Store {
       await modelServices.ensure(item.model.providerID, item.model.modelID, this.engineIdFor(sid, item.directory), {context: sid});
       if (!current()) throw new Error("Чат изменился; запрос не отправлен.");
       const parts: Awaited<ReturnType<typeof prepareAttachments>> = [];
+      const imageModelInfo = engineId === PI_BACKEND_ID ? piModelInfo(this.state.piHealth,item.model) : this.modelInfo(item.model.providerID,item.model.modelID);
+      const referenceImages = isNative() && (engineId === PI_BACKEND_ID || isLocalComputer(this.state.prefs.endpoint,!!this.currentHost()));
       if (item.attachments?.files.length) {
         if (!backend.capabilities.attachments) throw new Error("Этот агент не принимает вложения.");
         const info = engineId === PI_BACKEND_ID ? piModelInfo(this.state.piHealth, item.model) : this.modelInfo(item.model.providerID, item.model.modelID);
@@ -3113,7 +3124,7 @@ class Store {
         if (files.some(file => !file)) throw new Error("Вложения очереди не найдены. Верните запрос в черновик и приложите файлы заново.");
         parts.push(...await prepareAttachments(files as DraftAttachment[], engineId === PI_BACKEND_ID
           ? { ...info, capabilities: { ...info.capabilities, input: { ...info.capabilities?.input, pdf: false, audio: false, video: false } } } : info,
-          this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT, this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, new AbortController().signal, undefined, this.archiveStager(backend)));
+          this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT, this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, new AbortController().signal, undefined, this.archiveStager(backend), {imageReferences:referenceImages}));
       }
       if (!current()) throw new Error("Чат изменился; запрос не отправлен.");
       // These are waits, not delivery failures: no POST has happened. Keep
@@ -3138,6 +3149,10 @@ class Store {
         waitingBeforePost = true;
         throw new NotDispatched("Ожидаем завершения текущего действия агента.");
       }
+      await stageImagePromptContext({engine:engineId,sessionId:sid,directory:item.directory,messageId:messageID,parts,
+        supportsVision:!!imageModelInfo?.capabilities?.input?.image,
+        local:referenceImages});
+      if (!current() || (this.queueStops.get(sid) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
       posted = true;
       await submit(sid, item.directory, {
         messageID,
@@ -3147,7 +3162,7 @@ class Store {
         },
         agent: item.agent,
         variant: item.model.variant ?? undefined,
-        parts: agentParts(this.state.prefs.workshop, sid, item.directory, steer ? steeringParts(sid, [{ type: "text", text: item.text }, ...parts]) : [{ type: "text", text: item.text }, ...parts]),
+        parts: agentParts(this.state.prefs.workshop, sid, item.directory, steer ? steeringParts(sid, [{ type: "text", text: item.text }, ...imagePromptParts(parts,!!imageModelInfo?.capabilities?.input?.image,referenceImages)]) : [{ type: "text", text: item.text }, ...imagePromptParts(parts,!!imageModelInfo?.capabilities?.input?.image,referenceImages)]),
       });
       });
       if (workspaceBackend !== this.backend) return;

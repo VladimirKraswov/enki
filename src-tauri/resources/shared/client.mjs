@@ -20,6 +20,9 @@ export async function connectServer(spec, cwd, token, signal) {
     if (!path.isAbsolute(spec.command))
       throw new Error("Absolute executable required");
     const env = {};
+    // Only the app-owned image service uses the native crash-safe state lock.
+    if(spec.id==='enki-images'&&path.isAbsolute(process.env.MESH_CAPABILITIES_COMMAND??''))
+      env.MESH_CAPABILITIES_COMMAND=process.env.MESH_CAPABILITIES_COMMAND;
     for (const name of spec.envKeys || []) {
       if (
         !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) ||

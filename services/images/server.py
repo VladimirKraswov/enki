@@ -15,13 +15,66 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request as HTTPRequest
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
-from runtime import PROFILES, resolve_profile
+from runtime import PROFILES, edit_parameters, resolve_profile
 from procedural import resolve_surface
 MODEL = "enki-image-auto"
+MAX_SOURCE_BYTES = 8 * 1024 * 1024
+MAX_JOB_BODY_BYTES = 12 * 1024 * 1024
+
+class SourceImage(BaseModel):
+    """Inline authenticated input, decoded once; never put base64 in SQLite/results."""
+    model_config = ConfigDict(extra="forbid")
+    data_base64: str = Field(min_length=1, max_length=4*((MAX_SOURCE_BYTES+2)//3), exclude=True, repr=False)
+    mime_type: str | None = Field(default=None,max_length=64)
+    _png: bytes = PrivateAttr(default=b'')
+    _metadata: dict = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_image(self):
+        if self._png: return self
+        from PIL import Image, ImageOps, UnidentifiedImageError
+        try:
+            raw=base64.b64decode(self.data_base64, validate=True)
+        except (ValueError, TypeError): raise ValueError('Исходное изображение: нужен корректный base64 без data: URL')
+        if not raw or len(raw)>MAX_SOURCE_BYTES: raise ValueError('Исходное изображение: не больше 8 МиБ')
+        try:
+            with Image.open(io.BytesIO(raw)) as original:
+                mime={'PNG':'image/png','JPEG':'image/jpeg','WEBP':'image/webp'}.get(original.format)
+                if not mime: raise ValueError('Исходное изображение: поддерживаются PNG, JPEG и WebP')
+                if self.mime_type is not None and self.mime_type!=mime: raise ValueError('Тип исходного изображения не совпадает с содержимым')
+                width,height=original.size
+                if max(width,height)>4096 or width*height>16777216 or min(width,height)<1:
+                    raise ValueError('Исходное изображение: стороны до 4096, не больше 16 мегапикселей')
+                if getattr(original,'n_frames',1)!=1: raise ValueError('Для редактирования выберите один неподвижный кадр')
+                original.load()
+                oriented=ImageOps.exif_transpose(original)
+                alpha='A' in oriented.getbands() or 'transparency' in oriented.info
+                if alpha:
+                    image=Image.alpha_composite(Image.new('RGBA',oriented.size,'white'),oriented.convert('RGBA')).convert('RGB')
+                else: image=oriented.convert('RGB')
+                image.info.clear()
+                encoded=io.BytesIO();image.save(encoded,format='PNG')
+                png=encoded.getvalue()
+                if len(png)>MAX_SOURCE_BYTES: raise ValueError('Декодированное изображение слишком велико; уменьшите его до 8 МиБ PNG')
+                self._png=png
+                self._metadata={'sha256':hashlib.sha256(png).hexdigest(),'original_sha256':hashlib.sha256(raw).hexdigest(),
+                    'width':image.width,'height':image.height,'mime_type':mime,'stored_mime_type':'image/png',
+                    'alpha_composited_on':'white' if alpha else None}
+                self.data_base64=''  # Keep only the normalized bounded input while queued.
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+            raise ValueError('Исходное изображение повреждено или имеет неподдерживаемый формат')
+        return self
+
+    def open_image(self):
+        from PIL import Image
+        with Image.open(io.BytesIO(self._png)) as image: return image.convert('RGB')
+
+    def metadata(self): return dict(self._metadata)
 
 class Material(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -49,18 +102,35 @@ class Request(BaseModel):
     seed: int = Field(default=42, ge=0, le=2147483647)
     material: Material | None = None
     items: list[str] = Field(default_factory=list, max_length=8)
+    source_image: SourceImage | None = None
+    edit_strength: float = Field(default=0.7, ge=0.5, le=0.95)
     @model_validator(mode="after")
     def validate_request(self):
         if not self.prompt.strip(): raise ValueError("Нужен непустой prompt")
-        resolve_profile(self.model, self.prompt, self.material is not None)
+        selected=resolve_profile(self.model, self.prompt, self.material is not None)
         if self.width % 8 or self.height % 8 or self.width*self.height > 1048576:
             raise ValueError("Размеры кратны 8; не больше 1048576 пикселей")
         if self.model == 'lcm-dreamshaper-v7' and self.width*self.height > 640000:
             raise ValueError('Черновая LCM: не больше 640000 пикселей')
         if self.material and self.items: raise ValueError("Материал создаётся из одной согласованной текстуры")
+        if self.source_image:
+            if self.material or self.items: raise ValueError('Редактирование использует один исходник; material и items недоступны')
+            edit_parameters(selected,self.edit_strength)
+        elif 'edit_strength' in self.model_fields_set:
+            raise ValueError('edit_strength применим только вместе с source_image')
         if any(not s.strip() or len(s)>160 for s in self.items):
             raise ValueError("Элементы набора: от 1 до 160 символов")
         return self
+
+def request_record(body):
+    # Exclude new absent fields byte-for-byte for already accepted T2I keys.
+    exclude={'source_image':True,'edit_strength':True}
+    if body.material and body.material.surface=='auto': exclude['material']={'surface'}
+    raw=body.model_dump_json(exclude=exclude)
+    if body.source_image:
+        payload=json.loads(raw);payload.update(source_image=body.source_image.metadata(),edit_strength=body.edit_strength)
+        raw=json.dumps(payload,ensure_ascii=False,separators=(',',':'))
+    return raw
 
 class Jobs:
     def __init__(self, root, generate, max_pending=8):
@@ -81,6 +151,12 @@ class Jobs:
             row=self.db.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()
             if not row: raise HTTPException(404,'Задание не найдено или удалено по сроку хранения')
             return json.loads(row[0])
+    def by_key(self, key):
+        if not key or len(key)>160: raise HTTPException(400,'Нужен Idempotency-Key (до 160 символов)')
+        with self.lock:
+            row=self.db.execute('SELECT id FROM jobs WHERE key=?',(key,)).fetchone()
+            if not row: raise HTTPException(404,'Задание с этим ключом не найдено')
+            return self.get(row[0])
     def update(self,jid,**fields):
         with self.lock:
             state=self.get(jid); state.update(fields)
@@ -90,7 +166,7 @@ class Jobs:
         if not key or len(key)>160: raise HTTPException(400,'Нужен Idempotency-Key (до 160 символов)')
         if not self.ready: raise HTTPException(503,'Модель загружается' if not self.load_error else 'Модель не загрузилась; проверьте журнал сервиса')
         # Adding an optional recipe must not invalidate old accepted request keys.
-        raw=body.model_dump_json(exclude={'material':{'surface'}} if body.material and body.material.surface=='auto' else None); fingerprint=hashlib.sha256(raw.encode()).hexdigest()
+        raw=request_record(body); fingerprint=hashlib.sha256(raw.encode()).hexdigest()
         with self.lock:
             row=self.db.execute('SELECT id,fingerprint FROM jobs WHERE key=?',(key,)).fetchone()
             if row:
@@ -103,8 +179,21 @@ class Jobs:
             selected=resolve_profile(body.model,body.prompt,body.material is not None)
             recipe=resolve_surface(body.material.surface,body.prompt) if body.material else None
             actual_steps=0 if recipe else PROFILES[selected]['steps'] or body.steps
+            if body.source_image: actual_steps=edit_parameters(selected,body.edit_strength)[1]
             if recipe:selected='procedural-'+recipe+'-v1'
             jid=str(uuid.uuid4());state={'id':jid,'status':'queued','created':time.time(),'completed':0,'total':len(body.items) or 1,'step':0,'steps':actual_steps,'files':[],'width':body.width,'height':body.height,'model':selected}
+            if body.source_image:
+                state.update(mode='image-to-image',source_image=body.source_image.metadata(),edit_strength=body.edit_strength)
+                folder=self.root/jid
+                try:
+                    folder.mkdir(mode=0o700)
+                    # Input is retained privately, not added to downloadable output files.
+                    with (folder/'source.png').open('xb') as output:
+                        os.fchmod(output.fileno(),0o600);output.write(body.source_image._png)
+                except OSError:
+                    import shutil
+                    shutil.rmtree(folder,ignore_errors=True)
+                    raise HTTPException(507,'Не удалось сохранить исходник; задание не запущено')
             self.db.execute('INSERT INTO jobs VALUES(?,?,?,?,?)',(jid,key,fingerprint,raw,json.dumps(state)));self.db.commit()
             self.pending.put_nowait((jid,body));return state
     def prune(self):
@@ -161,7 +250,10 @@ class Jobs:
                         files.append({'name':name,'label':item or body.prompt,'seed':body.seed,'mime':'image/png'})
                     self.update(jid,completed=index+1,files=files)
                 inference=self.get(jid).get('inference')
-                manifest={'model':inference['model'] if inference else body.model,'engine':'OpenVINO GenAI CPU','request':body.model_dump(),'inference':inference,'files':files,'transparency':False,'vision_review':'pending: inspect returned images with a vision-capable agent'}
+                request=body.model_dump(exclude={'source_image':True,'edit_strength':not bool(body.source_image)})
+                if body.source_image: request['source_image']=body.source_image.metadata()
+                manifest={'model':inference['model'] if inference else body.model,'engine':'OpenVINO GenAI CPU','request':request,'inference':inference,'files':files,'transparency':False,'vision_review':'pending: inspect returned images with a vision-capable agent'}
+                if body.source_image: manifest.update(mode='image-to-image',source_image=body.source_image.metadata(),edit_strength=body.edit_strength)
                 if body.material: manifest.update(material=body.material.model_dump(),height_source=inference.get('height_source') if inference and inference.get('height_source') else 'Approximation from the base image luminance; not measured or recovered geometry',color_spaces={'image-01.png':'sRGB color','normal.png':'linear / non-color tangent normal','height.png':'linear 16-bit height','roughness.png':'linear roughness, NOT glossiness','metallic.png':'linear metallic'},preview='relight.png and relight-right.png use the selected normal convention under opposite side lights; tile-preview.png shows repetition when enabled')
                 (folder/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
                 with zipfile.ZipFile(folder/'images.zip','w',compression=zipfile.ZIP_DEFLATED) as archive:
@@ -189,9 +281,23 @@ def create_app(jobs,token,load=None):
         yield
     app=FastAPI(title='Enki CPU Images',lifespan=lifespan,dependencies=[Depends(auth)])
     @app.get('/health')
-    def health(): return {'status':'ready' if jobs.ready else 'error' if jobs.load_error else 'loading','model':MODEL,'models':list(PROFILES),'material_surfaces':['auto','image','brick','granite'],'engine':'OpenVINO GenAI CPU','queue':jobs.pending.qsize(),'max_items':8,'max_pixels':1048576}
+    def health(): return {'status':'ready' if jobs.ready else 'error' if jobs.load_error else 'loading','model':MODEL,'models':list(PROFILES),'material_surfaces':['auto','image','brick','granite'],'engine':'OpenVINO GenAI CPU','queue':jobs.pending.qsize(),'max_items':8,'max_pixels':1048576,'editing':True,'edit_models':['enki-image-auto','sdxl-lightning'],'edit_strength':{'min':0.5,'max':0.95,'default':0.7},'max_source_bytes':MAX_SOURCE_BYTES,'max_source_side':4096,'max_source_pixels':16777216}
     @app.post('/jobs',status_code=202)
-    def submit(body:Request,idempotency_key:str=Header(default='')): return jobs.submit(body,idempotency_key)
+    async def submit(request:HTTPRequest,idempotency_key:str=Header(default='')):
+        # Bound streamed/chunked bodies before JSON/Pydantic allocation, not just Content-Length.
+        raw=bytearray()
+        async for chunk in request.stream():
+            if len(raw)+len(chunk)>MAX_JOB_BODY_BYTES: raise HTTPException(413,'Запрос изображения слишком велик; исходник до 8 МиБ')
+            raw.extend(chunk)
+        # Decode/normalize on a worker thread so health/progress remain responsive.
+        try: body=await run_in_threadpool(Request.model_validate_json,bytes(raw))
+        except ValidationError as error:
+            # Pydantic's default input field would echo private images/base64 into errors/logs.
+            detail=[{'type':e['type'],'loc':[p if isinstance(p,int) else str(p)[:80] for p in e['loc'][:8]],'msg':e['msg'][:512]} for e in error.errors(include_input=False,include_context=False,include_url=False)[:16]]
+            raise HTTPException(422,detail)
+        return await run_in_threadpool(jobs.submit,body,idempotency_key)
+    @app.get('/jobs/by-key')
+    def lookup(request_key:str=Query(min_length=1,max_length=160)): return jobs.by_key(request_key)
     @app.get('/jobs/{jid}')
     def status(jid:str): return jobs.get(jid)
     @app.delete('/jobs/{jid}')

@@ -73,6 +73,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../resources/shared/image-generation-core.mjs"),
     ),
     (
+        "image-generation-context.mjs",
+        include_str!("../resources/shared/image-generation-context.mjs"),
+    ),
+    (
         "web-search-core.mjs",
         include_str!("../resources/shared/web-search-core.mjs"),
     ),
@@ -851,6 +855,10 @@ fn proxy_command(
     command.env_remove("ENKI_IMAGE_API_KEY");
     if id == "enki-images" {
         command.env("ENKI_IMAGE_API_KEY", crate::images::load_api_key()?);
+        command.env(
+            "MESH_CAPABILITIES_COMMAND",
+            std::env::current_exe().map_err(|_| "Нативный Enki недоступен")?,
+        );
     }
     if server.bearer {
         let (project, _) = read_at(&root, key)?;

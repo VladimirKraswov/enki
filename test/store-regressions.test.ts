@@ -322,6 +322,8 @@ it('Stop after a POST keeps acknowledgement ownership and clears only its submit
 });
 
 it("waits for local browser MCP attachment before delivering the first prompt", async () => {
+  const images=await import("../src/images/context");
+  const staged=vi.spyOn(images,"stageImagePromptContext").mockResolvedValue(undefined);
   const platform = await import("../src/native/platform");
   vi.spyOn(platform, "isNative").mockReturnValue(true);
   store.state = { ...store.state, activeSessionId: "ses_a", sessions: [session("ses_a")],
@@ -333,6 +335,8 @@ it("waits for local browser MCP attachment before delivering the first prompt", 
   const pending = store.sendPrompt("Use the built-in browser");
   await flush(); expect(setup).toHaveBeenCalledOnce(); expect(prompt).not.toHaveBeenCalled();
   resolve(); await pending; expect(prompt).toHaveBeenCalledOnce();
+  expect(staged).toHaveBeenCalledWith(expect.objectContaining({engine:"opencode",sessionId:"ses_a",directory:"/test/A",parts:[],local:true}));
+  expect(staged.mock.calls[0][0].messageId).toBe(prompt.mock.calls[0][2].messageID);
 });
 
 it("does not attach local browser tools when delivering to a remote endpoint", async () => {

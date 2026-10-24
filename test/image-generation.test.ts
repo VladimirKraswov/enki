@@ -1,8 +1,15 @@
 import {expect,it} from 'vitest';
 // @ts-expect-error Shared Node module intentionally runs outside the WebView.
-import {createImages,validateConfig} from '../src-tauri/resources/shared/image-generation-core.mjs';
+import {createImages as unscopedImages,validateConfig} from '../src-tauri/resources/shared/image-generation-core.mjs';
 import {imageResult,turnImageResults} from '../src/images/results';
 import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
+import crypto from 'node:crypto';
+import {testImageTransaction} from './helpers/image-state';
+function createImages(options:any){
+ const sessionID=crypto.randomUUID(),identity={engine:'opencode',sessionID};
+ const setup=(async()=>{const directory=await fs.realpath(options.cwd??process.cwd()),root=path.join(path.dirname(options.configFile),'image-context');await fs.mkdir(root,{recursive:true});const id=crypto.createHash('sha256').update(JSON.stringify([directory,'opencode',sessionID])).digest('hex');await fs.writeFile(path.join(root,id+'.json'),JSON.stringify({version:1,directory,engine:'opencode',sessionID,messageID:'test',images:[],supportsVision:true}));})();
+ const run=unscopedImages({...options,stateTransaction:testImageTransaction});return async(name:string,args:any)=>{await setup;return run(name,{...args,__enkiImageContext:identity});};
+}
 it('rejects public HTTP, credential URLs and malicious image references',()=>{
  for(const endpoint of ['http://example.com','http://192.168.1.2.evil.test','https://key@example.com','https://a/?key=x','file:///tmp'])expect(()=>validateConfig({enabled:true,provider:'enki',model:'m',endpoint})).toThrow();
  expect(validateConfig({enabled:true,provider:'enki',model:'m',endpoint:'http://192.168.1.2/api/'}).endpoint).toBe('http://192.168.1.2/api');
@@ -14,7 +21,7 @@ it('creates bounded idempotent jobs with auth and never replays a failed POST',a
  const config=path.join(dir,'settings.json');await fs.writeFile(config,JSON.stringify({enabled:true,provider:'enki',model:'m',endpoint:'http://127.0.0.1/api'}));
  const calls:any[]=[];const run=createImages({configFile:config,cwd:dir,token:()=> 'private-token',fetcher:async(url:string,options:any)=>{calls.push({url,options});return new Response(url.endsWith('/health')?'{"status":"ready"}':'{"id":"job","status":"queued"}',{status:202})}});
  expect(await run('generate_icon_pack',{prompt:'flat blue icons',items:['sword','shield'],request_key:'stable'})).toEqual({id:'job',status:'queued'});
- expect(calls).toHaveLength(2);expect(calls[1].options.headers.Authorization).toBe('Bearer private-token');expect(calls[1].options.headers['Idempotency-Key']).toBe('stable');expect(JSON.parse(calls[1].options.body).items).toEqual(['sword','shield']);
+ expect(calls).toHaveLength(2);expect(calls[1].options.headers.Authorization).toBe('Bearer private-token');expect(calls[1].options.headers['Idempotency-Key']).toMatch(/^enki-[a-f0-9]{64}$/);expect(JSON.parse(calls[1].options.body).items).toEqual(['sword','shield']);
  await expect(run('generate_image',{prompt:'x',request_key:'k',width:801})).rejects.toThrow();expect(calls).toHaveLength(2);
  let attempts=0;const failed=createImages({configFile:config,fetcher:async(url:string)=>{if(url.endsWith('/health'))return new Response('{"status":"ready"}');attempts++;throw Error('lost acknowledgement')}});
  await expect(failed('generate_image',{prompt:'x',request_key:'same'})).rejects.toThrow('lost acknowledgement');expect(attempts).toBe(1);

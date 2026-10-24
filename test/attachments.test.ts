@@ -71,3 +71,9 @@ it("does not discard visual content when a model lacks image input", async () =>
   vi.stubGlobal("fetch", fetcher);
   await expect(prepareAttachments([attachment("scan.pdf", "application/pdf", "%PDF-1.4")], noVision, "http://127.0.0.1:18107", asr, new AbortController().signal)).rejects.toThrow("не принимает изображения");
 });
+it('allows a scoped original-image reference for editing with a text-only model', async () => {
+  const noVision: ModelInfo = { ...vision, capabilities: { input: { text:true,image:false } } };
+  const prepared=await prepareAttachments([attachment('original.png','image/png','original-bytes')],noVision,'',asr,new AbortController().signal,undefined,undefined,{imageReferences:true});
+  expect(prepared).toEqual([{type:'file',filename:'original.png',mime:'image/png',url:`data:image/png;base64,${btoa('original-bytes')}`}]);
+  await expect(prepareAttachments([attachment('original.png','image/png','original-bytes')],noVision,'',asr,new AbortController().signal)).rejects.toThrow('не принимает изображения');
+});

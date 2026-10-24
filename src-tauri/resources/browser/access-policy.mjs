@@ -44,6 +44,12 @@ export async function sessionAccess(client, directory, sessionID) {
 }
 export default async function accessPolicy({ client, directory }) {
   return {
+    'tool.execute.before': async (input, output) => {
+      if (!/^mesh_enki_images_[a-z0-9_]+$/.test(input.tool)) return;
+      if (typeof input.sessionID !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(input.sessionID))
+        throw new Error('Image call requires a valid agent session');
+      output.args.__enkiImageContext = { engine: 'opencode', sessionID: input.sessionID };
+    },
     'tool.execute.after': async (input, output) => {
       const feedback = executionFeedback('opencode', input.tool, output.output);
       if (!feedback) return;

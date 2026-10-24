@@ -10,6 +10,7 @@ pub mod entry;
 mod hosts;
 pub mod hub;
 pub mod hub_updates;
+mod image_context;
 mod images;
 mod journal;
 mod lifecycle;
@@ -78,6 +79,7 @@ pub fn run() {
             images::image_settings,
             images::image_asset,
             images::image_probe,
+            image_context::image_prompt_context,
             journal::operation_journal,
             lifecycle::own_work,
             lifecycle::quit_report,

@@ -1,5 +1,12 @@
 # Enki roadmap
 
+## Reference image editing and bounded revisions (0.2.111)
+
+- [x] Actual CPU image-to-image from bounded authenticated PNG/JPEG/WebP input, pinned VAE encoder, private immutable source and provenance. Original composition retained in real two-source same-seed CPU checks.
+- [x] Trusted OpenCode/Pi session/request context; current/retained original and persistent latest-result editing, including text-only chat models with explicit Vision limitations.
+- [x] Native OS-lock journal enforces two total jobs per human request; automatic wakes retain the budget, scoped idempotency/read-only lost-ack recovery, monotonic latest and safe local reuse.
+- [ ] Final canonical gates, signed Hub packets and actual ordinary Enki reference → edit → follow-up acceptance.
+
 ## CPU image quality and periodic texture inference (0.2.109)
 
 - [x] Quality/explicit-draft profiles, native SDXL inference resolution, exact distilled sampling, style preservation, one resident CPU pipeline and honest loading status.

@@ -1,6 +1,11 @@
 //! Shared CLI dispatcher for Enki and the legacy MCP executable alias.
 pub fn run_cli() {
-    if std::env::args().nth(1).as_deref() == Some("--workshop-prepare") {
+    if std::env::args().nth(1).as_deref() == Some("--image-state-lock") {
+        if let Err(error) = crate::image_context::state_lock_cli() {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    } else if std::env::args().nth(1).as_deref() == Some("--workshop-prepare") {
         if let Err(e) = crate::workshop::cli() {
             eprintln!("{e}");
             std::process::exit(1);

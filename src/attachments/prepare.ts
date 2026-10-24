@@ -71,6 +71,7 @@ export async function prepareAttachments(
   files: DraftAttachment[], model: ModelInfo, helperEndpoint: string, asr: AsrSettings, signal: AbortSignal,
   onProgress: (label: string) => void = () => {},
   stage?: ArchiveStager,
+  options: { imageReferences?: boolean } = {},
 ): Promise<PreparedPart[]> {
   const input = model.capabilities?.input;
   const parts: PreparedPart[] = [];
@@ -92,7 +93,7 @@ export async function prepareAttachments(
       continue;
     }
     if (kind === "image") {
-      if (!input?.image) throw new Error(`Модель ${model.name ?? model.id} не принимает изображения.`);
+      if (!input?.image && !options.imageReferences) throw new Error(`Модель ${model.name ?? model.id} не принимает изображения.`);
       const direct = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.mime);
       const mime = direct ? file.mime : "image/png";
       let url: string;

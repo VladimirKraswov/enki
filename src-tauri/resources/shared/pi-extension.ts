@@ -120,7 +120,7 @@ export function attachShared(pi: ExtensionAPI, load = loadConnection) {
               label: `${spec.name} · ${tool.name}`,
               description: tool.description || "Shared MCP tool",
               parameters: tool.inputSchema as TSchema,
-              async execute(_id, params, signal) {
+              async execute(_id, params, signal, _update, executionContext) {
                 if (generation !== epoch || signal?.aborted)
                   throw new Error(safeError);
                 const active = (await readRegistry(root, key)).servers.find(
@@ -132,9 +132,17 @@ export function attachShared(pi: ExtensionAPI, load = loadConnection) {
                   );
                 let result;
                 try {
+                  const arguments_ = { ...params as Record<string, unknown> };
+                  if (spec.id === 'enki-images') {
+                    // SessionManager is authoritative even for background chats;
+                    // never accept a session identity supplied by the model.
+                    const sessionID = (executionContext ?? ctx).sessionManager.getSessionId();
+                    if (!/^[A-Za-z0-9_-]{1,200}$/.test(sessionID)) throw new Error(safeError);
+                    arguments_.__enkiImageContext = { engine: 'pi', sessionID };
+                  }
                   result = await c.call(
                     tool.name,
-                    params as Record<string, unknown>,
+                    arguments_,
                     signal,
                   );
                 } catch {
