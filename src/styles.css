@@ -3184,7 +3184,8 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .session-item > svg { flex:none; }
 .session-indicators { display:inline-flex; align-items:center; justify-content:flex-end; gap:5px; flex:0 0 30px; width:30px; min-width:30px; }
 .session-indicators > *, .session-timer { flex:none; }
-.session-timer { display:inline-flex; color:var(--text-dim); }
+.session-timer { display:inline-flex; color:var(--accent); }
+.project-timer { display:inline-flex; flex:none; color:var(--accent); }
 .workshop-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sidebar-timers { display:flex; align-items:center; gap:8px; padding:8px 10px; color:var(--text-dim); width:100%; font-size:12px; }
 .sidebar-timers:hover { background:var(--bg-sunken); border-radius:8px; }

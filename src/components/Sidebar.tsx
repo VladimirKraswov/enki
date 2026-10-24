@@ -1,5 +1,7 @@
 import {SessionSpinner} from "./SessionSpinner";
 import {taskScheduler} from "../schedules/tasks";
+import {activeTimers, directoryTimers} from "../schedules/indicators";
+import {TimerBadge} from "./TimerBadge";
 import {ScheduleDialog} from "./ScheduleDialog";
 import { UpdateBadge } from "../updates/runtime";
 import { InformationDialog } from "./InformationDialog";
@@ -20,8 +22,7 @@ export const pickFolder = pickProjectFolder;
 function ActivityMark({ id, directory, pending = false }: { id: string; directory: string; pending?: boolean }) {
   const scheduler=taskScheduler();
   const tasks=useSyncExternalStore(scheduler.subscribe,scheduler.snapshot);
-  const server=store.state.prefs.workspaceKey??store.state.prefs.endpoint;
-  const timers=tasks.filter(t=>t.enabled&&t.server===server&&t.directory===directory&&t.sessionID===id);
+  const timers=activeTimers(tasks,id);
   const status = store.activityStatus(id);
   if (status?.type === "busy" || status?.type === "retry") {
     const connection = store.state.connection;
@@ -29,10 +30,17 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
       return <span className="pending-dot" role="status" aria-label="Нет свежего статуса задачи" title="Нет связи: выполнение пока не подтверждено">?</span>;
     return <SessionSpinner/>;
   }
-  if (pending || status?.type === "waiting" || store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.server===server&&t.directory===directory&&t.sessionID===id&&t.state==="error"))
+  if (pending || status?.type === "waiting" || store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.sessionID===id&&t.state==="error"))
     return <span className="pending-dot" aria-label="Требуется внимание" title="Проверьте ответ, ошибку или расписание чата">!</span>;
   return <>{store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />}
-    {timers.length>0 && <span className="session-timer" role="status" aria-label="Запланировано пробуждение" title={timers.map(t=>`${t.title}: ${new Date(t.nextAt).toLocaleString("ru")}`).join("\n")}><Icon name="clock" size={14}/></span>}</>;
+    <TimerBadge tasks={timers} label="Запланировано пробуждение"/></>;
+}
+
+/** Collapsed projects still advertise a timer so it is not hidden behind the disclosure. */
+function ProjectTimerMark({ directory }: { directory: string }) {
+  const scheduler=taskScheduler();
+  const tasks=useSyncExternalStore(scheduler.subscribe,scheduler.snapshot);
+  return <TimerBadge tasks={directoryTimers(tasks,directory)} label="В проекте есть таймер" size={13} className="project-timer"/>;
 }
 
 const sidebarSnapshot = (s: import('../state/types').AppState) => ({
@@ -215,6 +223,7 @@ export function Sidebar() {
                 <Icon name={expanded ? "down" : "chevron"} size={12} />
                 <Icon name="folder" size={17} />
                 <span className="project-name">{name}</span>
+                {!expanded && <ProjectTimerMark directory={dir}/>}
                 {!expanded && store.hasRunningInDirectory(dir) && (s.prefs.projectEngine?.[dir] === "pi" || s.connection.phase === "connected" && !(dir === s.directory && s.connection.statusError) && (s.connection.globalStreamState ?? s.connection.streamState) === "open"
                   ? <SessionSpinner label="В проекте выполняется задача"/>
                   : <span className="pending-dot" role="status" aria-label="Нет свежего статуса проекта">?</span>)}
