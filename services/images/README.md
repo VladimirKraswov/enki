@@ -4,7 +4,7 @@ Resident **OpenVINO GenAI + SDXL quality profiles** on CPU. `enki-image-auto` se
 
 ## Proven deployment
 
-CT201 `cpu-inference`, `192.168.31.59`, Xeon E5-2698 v4 (AVX2). Existing nginx exposes `/api/images/` on its existing ports8080/8443; Python listens only127.0.0.1:18084. `enki-images.service` uses a dedicated system user,12 inference threads, CPU affinity20–31,1200% CPU quota, Nice10, CPUWeight20 and32GiB cap. No ASR/GPU/Hub model lifecycle changes.
+CT201 `cpu-inference`, `192.168.31.59`, Xeon E5-2698 v4 (AVX2). Existing nginx exposes `/api/images/` on its existing ports8080/8443; Python listens only127.0.0.1:18084. Update the existing nginx image-location include from this repository: its12MiB body limit accommodates an8MiB base64 input; the app independently streams/bounds/decodes the payload. Reload nginx after nginx -t; do not restart ASR. `enki-images.service` uses a dedicated system user,12 inference threads, CPU affinity20–31,1200% CPU quota, Nice10, CPUWeight20 and32GiB cap. No ASR/GPU/Hub model lifecycle changes.
 
 Pinned quality exports (model data only; no repository Python is executed):
 

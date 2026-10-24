@@ -11,7 +11,7 @@ export function validateConfig(c){
  return {...c,endpoint:u.href.replace(/\/$/,'')};
 }
 export async function bounded(response,max=12*1024*1024){
- if(!response.ok){await response.body?.cancel();throw Error(`Генератор HTTP ${response.status}: ${[401,403].includes(response.status)?'проверьте API-ключ':response.status===429?'очередь занята':response.status===503?'модель загружается или сервис недоступен':[400,422].includes(response.status)?'параметры не поддерживаются; проверьте размеры, модель и material':'проверьте настройки и статус задания'}`)}
+ if(!response.ok){await response.body?.cancel();throw Error(`Генератор HTTP ${response.status}: ${[401,403].includes(response.status)?'проверьте API-ключ':response.status===413?'исходник превышает лимит API или прокси; уменьшите изображение либо проверьте лимит загрузки (Enki: до 8 МиБ исходника, 12 МиБ запроса)':response.status===429?'очередь занята':response.status===503?'модель загружается или сервис недоступен':[400,422].includes(response.status)?'параметры не поддерживаются; проверьте размеры, модель и material':'проверьте настройки и статус задания'}`)}
  const chunks=[];let size=0;
  for await(const chunk of response.body){size+=chunk.length;if(size>max){await response.body?.cancel().catch(()=>{});throw Error('Слишком большой ответ генератора')}chunks.push(chunk)}
  return Buffer.concat(chunks);
@@ -117,7 +117,7 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
    }
    const readyBy=Date.now()+20000;
    while(true){const health=JSON.parse(await request(c,'/health','GET',undefined,signal));if(health.status==='ready')break;if(health.status==='error')throw Error('Модель генератора не загрузилась. Проверьте журнал сервиса; генерация не запускалась.');if(Date.now()>=readyBy)throw Error('Модель ещё загружается; генерация не запускалась. Проверьте image_status и используйте тот же request_key.');await wait(1000,signal)}
-   if(input&&(!Number.isFinite(args.strength??0.7)||(args.strength??0.7)<0.5||(args.strength??0.7)>0.95))throw Error('Сила перерисовки должна быть от 0.5 до 0.95: меньше сохраняет исходник, больше сильнее меняет композицию.');
+   if(input&&(!Number.isFinite(args.strength??0.7)||(args.strength??0.7)<0.5||(args.strength??0.7)>0.95))throw Error('Сила перерисовки должна быть от 0.5 до 0.95. Текущая SDXL округляет этот диапазон до одного шага; плавная регулировка не поддерживается.');
    if(input&&c.model==='lcm-dreamshaper-v7')throw Error('Для перерисовки выберите enki-image-auto или sdxl-lightning в настройках.');
    const payload={model:c.model,prompt:name==='generate_material'?'seamless texture swatch, PBR albedo material scan, full frame closeup, perpendicular flat view, even diffuse lighting, '+args.prompt+', no scene, no perspective, no objects, no text':args.prompt,width,height,steps,seed,items,...(name==='generate_material'?{material:args.material??{}}:{}),...(input?{source_image:{data_base64:input.bytes.toString('base64'),mime_type:input.mime},edit_strength:args.strength??0.7}:{})};
    const reserved=await reserveImage(ctx,args.request_key,{...payload,...(input?{source_image:{sha256:input.sha256,ref:input.ref}}:{})});if(reserved.cached)return reserved.cached;

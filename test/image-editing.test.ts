@@ -31,9 +31,25 @@ it('uses actual attachment bytes, remembers latest across process restart and ed
   expect(f.posts[0].source_image).toEqual({data_base64:png.toString('base64'),mime_type:'image/png'});expect(f.posts[0].edit_strength).toBe(.7);
   await f.call('get_images',{job_id:job});
   await f.stage('human-two',false);
-  const restarted=scopedImages({configFile:f.configFile,cwd:f.dir,fetcher:async(_url:string,o:any)=>{if(o.method==='POST'){f.posts.push(JSON.parse(o.body));return new Response(JSON.stringify({id:crypto.randomUUID(),status:'queued'}));}return new Response(_url.endsWith('/health')?'{"status":"ready"}':png);}});
+  const restarted=scopedImages({configFile:f.configFile,cwd:f.dir,fetcher:async(_url:string,o:any)=>{if(o.method==='POST'){f.posts.push(JSON.parse(o.body));return new Response(JSON.stringify({id:crypto.randomUUID(),status:'queued'}));}if(_url.endsWith('/health'))return new Response('{"status":"ready"}');throw Error('The server pruned this old image; the local immutable copy must be used');}});
   await restarted('edit_image',{source:'latest',prompt:'same portrait, red hair',request_key:'next',__enkiImageContext:f.identity});
   expect(f.posts[1].source_image.data_base64).toBe(png.toString('base64'));
+ }finally{await f.cleanup();}
+});
+it('keeps the newest generation when POST acknowledgements and later retrievals arrive in reverse order',async()=>{
+ const f=await fixture();try{
+  const a='11234567-1234-1234-1234-123456789abc',b='21234567-1234-1234-1234-123456789abc';
+  const run=scopedImages({configFile:f.configFile,cwd:f.dir,fetcher:async(url:string,o:any)=>{
+   if(url.endsWith('/health'))return new Response('{"status":"ready"}');
+   if(o.method==='POST'){const prompt=JSON.parse(o.body).prompt;if(prompt==='first')await new Promise(resolve=>setTimeout(resolve,80));return new Response(JSON.stringify({id:prompt==='first'?a:b,status:'queued'}));}
+   if(url.endsWith('manifest.json'))return new Response('{}');if(url.endsWith('images.zip'))return new Response('zip');
+   if(url.includes('/files/')||url.includes('/preview/'))return new Response(png);
+   return new Response(JSON.stringify({status:'completed',files:[{name:'image-01.png'}]}));
+  }});
+  const call=(name:string,args:any={})=>run(name,{...args,__enkiImageContext:f.identity});
+  await Promise.all([call('generate_image',{prompt:'first',request_key:'a'}),call('generate_image',{prompt:'second',request_key:'b'})]);
+  await call('get_images',{job_id:b});await call('get_images',{job_id:a});
+  expect((await call('image_inputs')).latest.job_id).toBe(b);
  }finally{await f.cleanup();}
 });
 it('enforces TWO total jobs across generation and editing, durable idempotency and new human reset',async()=>{

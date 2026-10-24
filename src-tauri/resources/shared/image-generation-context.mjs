@@ -37,6 +37,7 @@ export async function withImageState(context,fn){
  let size=0;child.stdout.on('data',chunk=>{size+=chunk.length;if(size>2*1048576)child.kill();});
  child.stderr.resume();
  let processError;child.on('error',e=>{processError=e;lines.close();});
+ child.stdin.on('error',e=>{processError=e;child.kill();lines.close();});
  const exited=new Promise(resolve=>child.on('exit',code=>resolve(code)));
  const timer=setTimeout(()=>child.kill(),10000);
  try{
