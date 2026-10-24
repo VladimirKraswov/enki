@@ -4,6 +4,9 @@ import crypto from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {isIP} from 'node:net';
 import {imageContext,imageBytes,imageRequestKey,withImageState,reserveImage,recordImage,latestImage,rememberImage} from './image-generation-context.mjs';
+let requestSequence = 0;
+/** Order generations by invocation, not by whichever async config/context read finished first. */
+const nextRequestOrder = () => Date.now() * 1000 + (++requestSequence % 1000);
 export function validateConfig(c){
  if(!c||typeof c.enabled!=='boolean'||!['enki','openai'].includes(c.provider)||typeof c.model!=='string'||!c.model.trim()||c.model.length>200)throw Error('Некорректные настройки генератора');
  const u=new URL(c.endpoint);const ip=isIP(u.hostname)===4?u.hostname.split('.').map(Number):[];const local=u.hostname==='localhost'||ip.length===4&&(ip[0]===127||ip[0]===10||ip[0]===192&&ip[1]===168||ip[0]===172&&ip[1]>=16&&ip[1]<=31);
@@ -41,6 +44,7 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
   return pathToFileURL(dest).href;
  };
  return async(name,args={},signal)=>{
+  const order=nextRequestOrder();
   const c=await config();
   const context=args.__enkiImageContext&&name!=='image_status'&&name!=='cancel_image'?await imageContext(configFile,cwd,args.__enkiImageContext):null;
   if(context&&stateTransaction)context.transaction=stateTransaction;
@@ -107,7 +111,7 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
     if(name==='generate_material')throw Error('Материалы с normal/height-картами требуют провайдера Enki CPU');
     if(items.length)throw Error('Пакеты иконок требуют провайдера Enki; для другого API вызывайте generate_image по одному');
     const payload={model:c.model,prompt:args.prompt,size:`${width}x${height}`,n:1,response_format:'b64_json'};
-    const reserved=await reserveImage(ctx,args.request_key,payload);if(reserved.cached)return reserved.cached;
+    const reserved=await reserveImage(ctx,args.request_key,payload,order);if(reserved.cached)return reserved.cached;
     if(reserved.pending)throw Error('Запрос уже отправлялся; подтверждение потерялось. Этот API не поддерживает безопасное восстановление статуса. Новый POST не выполняется.');
     const result=JSON.parse(await request(c,'/images/generations','POST',payload,signal,imageRequestKey(ctx,args.request_key)));
     const b64=result.data?.[0]?.b64_json;
@@ -123,7 +127,7 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
    if(instructionEdit&&(width%16||height%16))throw Error('Размеры редактирования FLUX должны быть кратны 16.');
    if(input&&c.model==='lcm-dreamshaper-v7')throw Error('Для перерисовки выберите enki-image-auto или sdxl-lightning в настройках.');
    const payload={model:c.model,prompt:name==='generate_material'?'seamless texture swatch, PBR albedo material scan, full frame closeup, perpendicular flat view, even diffuse lighting, '+args.prompt+', no scene, no perspective, no objects, no text':args.prompt,width,height,steps,seed,items,...(name==='generate_material'?{material:args.material??{}}:{}),...(input?{source_image:{data_base64:input.bytes.toString('base64'),mime_type:input.mime},...(args.strength!==undefined?{edit_strength:args.strength}:{})}:{})};
-   const reserved=await reserveImage(ctx,args.request_key,{...payload,...(input?{source_image:{sha256:input.sha256,ref:input.ref}}:{})});if(reserved.cached)return reserved.cached;
+   const reserved=await reserveImage(ctx,args.request_key,{...payload,...(input?{source_image:{sha256:input.sha256,ref:input.ref}}:{})},order);if(reserved.cached)return reserved.cached;
    if(reserved.pending){
     let previous;
     try{previous=JSON.parse(await request(c,'/jobs/by-key?request_key='+encodeURIComponent(imageRequestKey(ctx,args.request_key)),'GET',undefined,signal));}

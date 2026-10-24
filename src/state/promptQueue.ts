@@ -9,6 +9,13 @@ import { newMessageId, type QueuedPrompt } from './queue';
 import { savePrefs, flushPrefs } from './prefs';
 import { errText } from './errors';
 
+/** Errors that must pause the queue: a fatal provider/auth failure or an explicit stop.
+ * Recoverable failures (output limit, context overflow, connection, tool errors) keep
+ * the queue armed so the next item still runs, as the owner expects. */
+export function isQueuePausingError(error: string | null | undefined): boolean {
+  return !!error && /insufficient.?balance|insufficient.?credits|payment required|недостаточно средств|quota exceeded|unauthorized|invalid api key|authentication failed|\baborted\b|\bstopped\b/i.test(error);
+}
+
 /** Queue/editor orchestration; transport dispatch remains behind the host port. */
 export interface PromptQueueHost {
   snapshot(): AppState;
@@ -288,7 +295,7 @@ export class PromptQueueController {
       (this.host.engineIdFor() !== PI_BACKEND_ID && this.state.connection.streamState !== "open")
     )
       return;
-    if (!explicit && this.state.chat.sessions[sid]?.lastError) {
+    if (!explicit && isQueuePausingError(this.state.chat.sessions[sid]?.lastError)) {
       this.queueArmed.delete(sid);
       return;
     }

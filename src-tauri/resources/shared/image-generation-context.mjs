@@ -54,7 +54,7 @@ export async function withImageState(context,fn){
  }finally{clearTimeout(timer);lines.close();child.stdin.destroy();child.kill();}
 }
 export function imageRequestKey(context,key){return 'enki-'+hash(JSON.stringify([context.directory,context.engine,context.sessionID,context.messageID,key]));}
-export async function reserveImage(context,key,payload){
+export async function reserveImage(context,key,payload,order){
  const fingerprint=hash(JSON.stringify(payload));
  return withImageState(context,state=>{
   const attempts=state.requests[context.messageID]??=[];
@@ -62,7 +62,7 @@ export async function reserveImage(context,key,payload){
   if(previous){if(previous.fingerprint!==fingerprint)throw Error('Этот request_key уже относится к другим параметрам. Не изменяйте принятый запрос.');if(previous.result)return {cached:previous.result};return {pending:true};}
   if(attempts.length>=2)throw Error('Достигнут предел: две попытки генерации на одну просьбу. Покажите лучший результат и его ограничения; следующую правку начните только после нового сообщения пользователя.');
   state.sequence=(state.sequence??0)+1;
-  attempts.push({key,fingerprint,sequence:state.sequence});
+  attempts.push({key,fingerprint,sequence:state.sequence,...(order!==undefined?{order}:{})});
   const messages=Object.keys(state.requests);while(messages.length>32)delete state.requests[messages.shift()];
   return {};
  });
@@ -72,7 +72,7 @@ export async function recordImage(context,key,result){
   const attempt=state.requests[context.messageID]?.find(a=>a.key===key);if(!attempt)throw error();
   // Receipts contain identifiers, not image pixels or verbose per-file prompts.
   attempt.result=result.enkiImages?result:{id:result.id,status:result.status,model:result.model};
-  const job=result.id??result.job_id;if(typeof job==='string'&&/^[a-f0-9-]{36}$/.test(job)&&!state.jobs.includes(job)){state.jobs.push(job);state.jobs=state.jobs.slice(-200);state.jobOrder??={};state.jobOrder[job]=attempt.sequence;for(const id of Object.keys(state.jobOrder))if(!state.jobs.includes(id))delete state.jobOrder[id];}
+  const job=result.id??result.job_id;if(typeof job==='string'&&/^[a-f0-9-]{36}$/.test(job)&&!state.jobs.includes(job)){state.jobs.push(job);state.jobs=state.jobs.slice(-200);state.jobOrder??={};state.jobOrder[job]=attempt.order??attempt.sequence;for(const id of Object.keys(state.jobOrder))if(!state.jobs.includes(id))delete state.jobOrder[id];}
  });
 }
 export async function latestImage(context){return withImageState(context,state=>state.latest);}

@@ -8,8 +8,9 @@ import { ownWork } from "../operations/ownership";
 import { StreamNotifications, selectedSnapshot, shallowEqual } from "./notifications";
 import { DEFAULT_BASE_URL } from "../api/client";
 import { NotDispatched, operationJournal, type Operation } from "../operations/journal";
-import { PromptQueueController } from "./promptQueue";
+import { PromptQueueController, isQueuePausingError } from "./promptQueue";
 import { errText } from "./errors";
+import { describeMessageError } from "../chat/errors";
 import { SubmissionLifecycle, type Submission } from "./submission";
 import { projectErrorText } from "../api/projectError";
 import type { MessagePart } from '../api/types';
@@ -3439,9 +3440,10 @@ class Store {
       event.type === "message.updated"
         ? (event.properties?.info as { sessionID?: string; error?: unknown })
         : undefined;
-    if (event.type === "session.error" && affected)
+    if (event.type === "session.error" && affected && isQueuePausingError(describeMessageError(event.properties?.error)))
       this.queueArmed.delete(affected);
-    if (info?.error && info.sessionID) this.queueArmed.delete(info.sessionID);
+    if (info?.error && info.sessionID && isQueuePausingError(describeMessageError(info.error)))
+      this.queueArmed.delete(info.sessionID);
     const changed = reduceEvent(this.state.chat, event);
     if (changed) {
       this.state = { ...this.state, rev: this.state.rev + 1 };

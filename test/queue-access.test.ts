@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { accessRules, accessMode } from "../src/state/access";
 import { newMessageId } from "../src/state/queue";
+import { isQueuePausingError } from "../src/state/promptQueue";
 vi.mock("../src/api/events", () => ({
   globalEventStreamUrl: () => "http://localhost/global/event",
   eventStreamUrl: () => "",
@@ -100,6 +101,22 @@ it("session error does not trigger the remaining queue on idle", async () => {
   await flush();
   expect(store.client.prompt).not.toHaveBeenCalled();
   expect(store.isQueueArmed()).toBe(false);
+});
+it("a recoverable message error keeps the queue armed and drains the next item", async () => {
+  store.enqueuePrompt("first"); store.enqueuePrompt("second");
+  store.handleEvent({type:"session.error",properties:{sessionID:"ses_a",error:{name:"APIError",data:{statusCode:500,message:"Internal error"}}}});
+  expect(store.isQueueArmed()).toBe(true);
+  status("idle"); await flush();
+  expect(store.client.prompt).toHaveBeenCalledTimes(1);
+  expect(store.getQueue()).toHaveLength(1);
+});
+it("classifies fatal or explicit-stop errors as pausing, recoverable ones as retryable", () => {
+  expect(isQueuePausingError("Insufficient Balance")).toBe(true);
+  expect(isQueuePausingError("The response was aborted.")).toBe(true);
+  expect(isQueuePausingError("Достигнут лимит ответа модели. Можно сжать контекст и продолжить работу.")).toBe(false);
+  expect(isQueuePausingError("Нет соединения с API модели. Проверьте подключение к сервису модели.")).toBe(false);
+  expect(isQueuePausingError("Internal error")).toBe(false);
+  expect(isQueuePausingError(null)).toBe(false);
 });
 it("keeps queue in its original session and does not bypass permission waits", async () => {
   store.enqueuePrompt("later");
