@@ -38,3 +38,11 @@ it('refuses ambiguous packages and unsupported platforms instead of publishing a
  await expect(readFile(join(root,'.local','ci-artifacts.json'))).rejects.toThrow();
  await expect(readFile(join(root,'job-output'))).rejects.toThrow();
 }));
+
+it('checks every member beyond the old 1 MiB subprocess listing bound',()=>{
+ const line='-rwxr-xr-x 0/0        12404680 2026-10-08 12:55 ';
+ const listing=`${line}usr/bin/enki\n`+`${line}usr/lib/Enki/agent-runtime/app/node_modules/package/file.js\n`.repeat(12000);
+ expect(Buffer.byteLength(listing)).toBeGreaterThan(1024*1024);
+ expect(()=>assertDebianPayload(listing)).not.toThrow();
+ expect(()=>assertDebianPayload(`${listing}${line}usr/share/Info.plist\n`)).toThrow('Debian payload/platform isolation failed');
+});
