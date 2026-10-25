@@ -28,7 +28,7 @@ function errorInfo(error: unknown): Record<string, string | number> {
 function emit(type: string, detail: Record<string, unknown>): void {
   console.log("ENKI_WINDOWS_DIAGNOSTIC " + JSON.stringify({ type, ...detail }));
 }
-function receiptInfo(receipt: CommandReceipt | undefined): Record<string, unknown> {
+function receiptInfo(receipt: CommandReceipt | null | undefined): Record<string, unknown> {
   return receipt ? { state: receipt.state, error: receipt.error == null ? receipt.error ?? null : safe(receipt.error) } : { state: "missing" };
 }
 function traceRealFsync(): void {
