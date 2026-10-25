@@ -31,6 +31,18 @@ function emit(type: string, detail: Record<string, unknown>): void {
 function receiptInfo(receipt: CommandReceipt | null | undefined): Record<string, unknown> {
   return receipt ? { state: receipt.state, error: receipt.error == null ? receipt.error ?? null : safe(receipt.error) } : { state: "missing" };
 }
+async function canonicalMetadata(scope: string, input: string): Promise<void> {
+  // Metadata for these fresh owned directories only; never emit full paths.
+  const sync = fs.realpathSync(input), native = fs.realpathSync.native(input), asyncPath = await fs.promises.realpath(input);
+  const stats = [input, sync, native, asyncPath].map(value => fs.lstatSync(value, { bigint: true }));
+  emit("owned-canonical-paths", {
+    scope, inputEqualsSync: input === sync, inputEqualsNative: input === native, inputEqualsAsync: input === asyncPath,
+    syncEqualsNative: sync === native, syncEqualsAsync: sync === asyncPath, nativeEqualsAsync: native === asyncPath,
+    samePhysicalDirectory: stats.every(stat => stat.isDirectory() && !stat.isSymbolicLink()
+      && stat.dev === stats[0]!.dev && stat.ino === stats[0]!.ino),
+    keyConfigParentEqualsInput: scope === "agentDir" ? path.dirname(path.join(input, "keybindings.json")) === input : null,
+  });
+}
 function traceRealFsync(): void {
   // Forward the exact syscall unchanged; capture its actual throw and caller
   // before a runtime outcome handler can turn it into a receipt or timeout.
@@ -76,6 +88,9 @@ it("diagnostic: an ordinary real SDK prompt exposes receipt state/error before a
   try {
     h = await harness(); roots.push(h.data);
     const directory = h.project("windows-diagnostic"); roots.push(directory);
+    stage = "owned-canonical-metadata";
+    await canonicalMetadata("agentDir", h.runtime.paths.agentDir);
+    await canonicalMetadata("projectParent", directory);
     stage = "session";
     const sessionID = await newSession(h, directory);
     h.scripted.setResponses([fauxAssistantMessage("OWNED_WINDOWS_DIAGNOSTIC")]);
