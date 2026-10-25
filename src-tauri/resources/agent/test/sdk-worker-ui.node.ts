@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { ModelRuntime, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -234,7 +235,7 @@ test("shutdown cancels a staged real custom factory and disposes the editor and 
 test("host-wide real theme is broadcast, explicit themes load, and closing one chat preserves the other's UI", async t => {
   const f = await foundation(t);
   const themeFile = path.join(f.agentDir, "enki-theme.json");
-  const sdkRoot = path.resolve(path.dirname(new URL(import.meta.resolve("@earendil-works/pi-coding-agent")).pathname), "..");
+  const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "..");
   const raw: unknown = JSON.parse(fs.readFileSync(path.join(sdkRoot, "dist/modes/interactive/theme/dark.json"), "utf8"));
   assert.ok(raw && typeof raw === "object"); fs.writeFileSync(themeFile, JSON.stringify({ ...raw, name: "enki-explicit-fixture" }));
   const original = f.deps.resources; f.deps.resources = async record => ({ ...await original(record), themePaths: [themeFile] });

@@ -88,7 +88,9 @@ test("import preserves immutable original, separately owns v3 runtime and retain
   assert.equal(result.created, true); assert.equal(result.id, legacyPiSessionId(f.origin, f.meta.id));
   assert.deepEqual(fs.readFileSync(f.importer.archiveFile(result.archive)), before);
   assert.deepEqual(fs.readFileSync(f.source), before);
-  assert.equal(fs.statSync(f.importer.archiveFile(result.archive)).mode & 0o777, 0o400);
+  const archiveMode = fs.statSync(f.importer.archiveFile(result.archive)).mode;
+  if (process.platform === "win32") assert.equal(archiveMode & 0o222, 0, "owned archive is readonly");
+  else assert.equal(archiveMode & 0o777, 0o400);
   const working = f.importer.runtimeFile(result.id), parsed = validatePiBytes(fs.readFileSync(working));
   assert.equal(parsed.version, 3); assert.equal(parsed.sessionId, result.id);
   fs.appendFileSync(working, JSON.stringify({ type: "message", id: "new.user.entry", parentId: parsed.leafId, timestamp: "2026-01-01T00:00:11.000Z", message: { role: "user", content: "new runtime-owned entry", timestamp: 1767225611000 } }) + "\n");
@@ -156,9 +158,11 @@ test("owned staging replacement before publication fails identity/hash verificat
   let replaced = false;
   const mocked = t.mock.method(fs, "chmodSync", (file: fs.PathLike, mode: fs.Mode) => {
     originalChmod(file, mode);
-    if (String(file).endsWith("original.jsonl") && String(file).includes("staging")) setImmediate(() => {
+    if (mode === 0o400 && String(file).endsWith("original.jsonl") && String(file).includes("staging")) setImmediate(() => {
       const rows = records(); (rows[2].message as ObjectValue).content = "REPLACED_STAGED_ORIGINAL";
-      const replacement = `${file}.replacement`; fs.writeFileSync(replacement, encode(rows), { mode: 0o400 }); fs.renameSync(replacement, file); replaced = true;
+      const replacement = `${file}.replacement`; fs.writeFileSync(replacement, encode(rows), { mode: 0o400 });
+      if (process.platform === "win32") originalChmod(file, 0o600);
+      fs.renameSync(replacement, file); replaced = true;
     });
   });
   await assert.rejects(f.importer.import(f.source, f.meta, { origin: f.origin }), /изменилась|подмен/);
@@ -192,9 +196,9 @@ test("post-commit staging cleanup failure stays recoverable without deleting the
 });
 for (const crashPhase of ["archive", "working"] as const) test(`process death after ${crashPhase} rename recovers ownership journal and permits one retry`, async t => {
   const f = setup(t), child = path.join(f.root, "crash-child.ts");
-  const modules = (relative: string) => JSON.stringify(fileURLToPath(new URL(relative, import.meta.url)));
+  const modules = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href);
   const crashRoot = crashPhase === "archive" ? f.roots.archives : f.roots.sessions;
-  fs.writeFileSync(child, `import fs from 'node:fs';\nimport { Database } from ${modules("../../src/store/db.ts")};\nimport { EventJournal } from ${modules("../../src/store/events.ts")};\nimport { SessionCatalog } from ${modules("../../src/sessions/catalog.ts")};\nimport { PiCliImporter } from ${modules("../../src/legacy/pi-cli.ts")};\nconst options=JSON.parse(process.argv[2]);\nconst db=new Database(options.db);\nconst original=fs.renameSync;\nfs.renameSync=(from,to)=>{original(from,to);if(String(to).startsWith(${JSON.stringify(crashRoot)}+'/'))process.exit(77);};\nawait new PiCliImporter(db,new SessionCatalog(db,new EventJournal(db)),options.roots).import(options.source,options.meta,{origin:options.origin});\nprocess.exit(78);\n`);
+  fs.writeFileSync(child, `import fs from 'node:fs';\nimport path from 'node:path';\nimport { Database } from ${modules("../../src/store/db.ts")};\nimport { EventJournal } from ${modules("../../src/store/events.ts")};\nimport { SessionCatalog } from ${modules("../../src/sessions/catalog.ts")};\nimport { PiCliImporter } from ${modules("../../src/legacy/pi-cli.ts")};\nconst options=JSON.parse(process.argv[2]);\nconst db=new Database(options.db);\nconst original=fs.renameSync;\nfs.renameSync=(from,to)=>{original(from,to);if(path.dirname(String(to))===${JSON.stringify(crashRoot)})process.exit(77);};\nawait new PiCliImporter(db,new SessionCatalog(db,new EventJournal(db)),options.roots).import(options.source,options.meta,{origin:options.origin});\nprocess.exit(78);\n`);
   const childResult = spawnSync(process.execPath, ["--experimental-transform-types", child, JSON.stringify({ db: f.db.file, roots: f.roots, source: f.source, meta: f.meta, origin: f.origin })], { encoding: "utf8", timeout: 20000 });
   assert.equal(childResult.status, 77, childResult.stderr); assert.equal(f.db.get("SELECT state FROM migration_journal WHERE kind='pi-cli'")?.state, "publishing");
   assert.equal(f.catalog.all().length, 0); assert.equal(fs.readdirSync(f.roots.archives).length, 1);
