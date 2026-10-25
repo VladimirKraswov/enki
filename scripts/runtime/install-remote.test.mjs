@@ -32,11 +32,13 @@ test('tampered candidate payload fails all-file verification even with the corre
   assert.deepEqual(fs.readdirSync(f.dist), []);
 });
 test('immutable publisher verifies both newly copied and already existing versions, refusing corruption', t => {
-  const f = fixture(t), lease = acquireArtifactLease(f.dist); t.after(() => lease.release());
+  const f = fixture(t), lease = acquireArtifactLease(f.dist);
+  try {
   const target = publishImmutable(f.dist, f.candidate, f.hash); assert.deepEqual(verifyArtifact(target), []);
   const before = fs.statSync(target); assert.equal(publishImmutable(f.dist, f.candidate, f.hash), target); assert.equal(fs.statSync(target).ino, before.ino);
   fs.writeFileSync(path.join(target, 'node/bin/node'), 'CORRUPT_EXISTING');
   assert.throws(() => publishImmutable(f.dist, f.candidate, f.hash), /hash mismatch/); assert.equal(fs.readFileSync(path.join(target, 'node/bin/node'), 'utf8'), 'CORRUPT_EXISTING');
+  } finally { lease.release(); } // Close the owned OS lease before fixture teardown.
 });
 test('publisher OS lease spans asynchronous work and concurrent acquisition cannot replace or unlink it', async t => {
   const f = fixture(t), first = acquireArtifactLease(f.dist); const file = path.join(f.dist, '.runtime-artifact-lease.sqlite'), before = fs.statSync(file).ino;

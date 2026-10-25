@@ -11,9 +11,9 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
 test('build environment selects pinned Node first and cannot inherit npm credentials or owner configs', t => {
   const work = temporary(t), node = path.join(work, 'node');
-  const env = buildEnvironment(node, work, 'darwin', { PATH: '/malicious/node', HOME: '/owner', NODE_OPTIONS: '--require /owner/hook',
+  const env = buildEnvironment(node, work, process.platform, { PATH: '/malicious/node', HOME: '/owner', NODE_OPTIONS: '--require /owner/hook',
     npm_config_registry: 'https://untrusted/', NPM_TOKEN: 'secret', GOOGLE_APPLICATION_CREDENTIALS: '/owner/adc', LANG: 'C' });
-  assert.equal(env.PATH.split(path.delimiter)[0], path.join(node, 'bin'));
+  assert.equal(env.PATH.split(path.delimiter)[0], process.platform === 'win32' ? node : path.join(node, 'bin'));
   assert.equal(env.HOME, '/owner', 'HOME must never be repurposed'); assert.notEqual(env.npm_config_userconfig, env.npm_config_globalconfig);
   for (const key of ['NODE_OPTIONS', 'NPM_TOKEN', 'GOOGLE_APPLICATION_CREDENTIALS']) assert.equal(env[key], undefined);
   for (const key of ['npm_config_userconfig', 'npm_config_globalconfig']) assert.equal(fs.readFileSync(env[key], 'utf8'), '');

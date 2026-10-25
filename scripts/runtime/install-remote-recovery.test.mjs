@@ -4,6 +4,9 @@
 // the daemon identity/log carries runtime-version `version` (16 hex, e.g.
 // 1111111111111111); installRemote returns the manifest version (0.85.1-<hex>).
 import test from 'node:test';
+// REMOTE-RUNTIME.md: remote hosts are Linux x64 only. Windows supports the
+// desktop artifact/Job path, but cannot atomically replace POSIX directory links.
+const remoteUpdate = { skip: process.platform === 'win32' && 'Linux remote-host update/rollback uses POSIX directory symlink replacement' };
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,7 +27,7 @@ test('control module is imported only from the publisher-owned verified copy', a
   assert.ok(!error.message.includes('/c/app/dist/'), 'never imported from the caller-supplied candidate path');
 });
 
-test('lost begin ACK is reconciled by GET of its exact id and never replayed', async t => {
+test('lost begin ACK is reconciled by GET of its exact id and never replayed', remoteUpdate, async t => {
   const s = setup(t);
   assert.deepEqual(await installRemote(s.v1), { version: `0.85.1-${V1}`, changed: true });
   s.daemon.loseBeginAck = true;
@@ -51,7 +54,7 @@ test('first-install crash after the fenced candidate created data is recoverable
   assert.equal(s.daemon.held, null); assert.equal(hasJournal(s), false);
 });
 
-test('committed runtime that died before its fence was released is started and released', async t => {
+test('committed runtime that died before its fence was released is started and released', remoteUpdate, async t => {
   const s = setup(t); await installRemote(s.v1); s.daemon.failEnd = true;
   await assert.rejects(installRemote(s.v2), /not fully confirmed/);
   assert.equal(journal(s).phase, 'committed'); assert.equal(s.daemon.running, null);
@@ -60,7 +63,7 @@ test('committed runtime that died before its fence was released is started and r
   assert.equal(s.daemon.log.filter(([kind, v]) => kind === 'launch' && v === V2).length, 2);
 });
 
-test('paired backup receipts are compared exactly by typed fields, not by serialization order', async t => {
+test('paired backup receipts are compared exactly by typed fields, not by serialization order', remoteUpdate, async t => {
   const s = setup(t); await installRemote(s.v1);
   s.daemon.receiptOnDisk = backup => Object.fromEntries(Object.entries(backup).reverse());
   assert.equal((await installRemote(s.v2)).changed, true, 'reordered keys are the same receipt');
