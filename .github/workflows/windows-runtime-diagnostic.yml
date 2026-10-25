@@ -22,38 +22,17 @@ jobs:
           node-version: 24.22.1
           cache: npm
           cache-dependency-path: src-tauri/resources/agent/package-lock.json
-      # This stdlib-only probe runs before installing/importing the SDK. Every
-      # failed syscall is recorded independently; an expected syscall failure
-      # is evidence, not a successful fsync or a reason to skip the other modes.
-      - name: Actual sub-millisecond timer resolution (no SDK)
-        run: node scripts/diagnostics/windows-faux-timer-probe.cjs
-      - name: Owned file/directory fsync modes (no SDK)
-        id: probe
-        run: node scripts/diagnostics/windows-fsync-probe.cjs
-      - name: Locked runtime dependencies (no lifecycle hooks)
-        id: deps
-        run: npm ci --prefix src-tauri/resources/agent --ignore-scripts
-      - name: Locked node-pty lifecycle (same command as desktop CI)
-        id: pty
-        run: npm rebuild --prefix src-tauri/resources/agent node-pty
-      - name: Runtime typecheck (same command as desktop CI)
-        id: types
-        run: npm --prefix src-tauri/resources/agent run typecheck
-      - name: One real SDK prompt and direct attachment error
-        id: actual
-        working-directory: src-tauri/resources/agent
-        run: node node_modules/vitest/vitest.mjs run test/integration/windows-diagnostic-owned.test.ts --reporter=verbose --maxWorkers=1
-      # Keep the original assertions, default 30s per-test bound, worker count
-      # and public SDK profile setup. Stop this finite original subset at its
-      # first failure; never repeat the full runtime suite on this branch.
-      - name: Original finite regression subset (first failure only)
-        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.pty.outcome == 'success' && steps.types.outcome == 'success' }}
-        working-directory: src-tauri/resources/agent
-        run: node node_modules/vitest/vitest.mjs run test/queue-unit.test.ts test/integration/turn-outcome.test.ts test/profile-env.test.ts test/project-tools.test.ts test/owned-sync.test.ts test/integration/owned-output.test.ts test/legacy-import.test.ts test/integration/model-context.test.ts test/integration/model-transition.test.ts --reporter=verbose --maxWorkers=1 --bail=1
+      - name: Locked frontend CLI metadata (no app launch)
+        run: npm ci
+      - name: Rust stable toolchain (same source bootstrap as production)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Every original packaging test with a freshly bootstrapped native Windows port
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: npm run test:runtime-artifact
 
-      - name: Original complete guarded public Node suites
-        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.pty.outcome == 'success' && steps.types.outcome == 'success' }}
-        run: npm --prefix src-tauri/resources/agent run test:node
-
-# Diagnostic scratch branch only: no production package/install/publication,
-# credentials, owner profiles, external model calls, Hub or real providers.
+# Scratch-only finite diagnosis: no app build/install/GUI, credentials,
+# owner profiles, Hub, model or real provider calls. Never merge back.

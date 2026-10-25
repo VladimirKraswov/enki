@@ -1,3 +1,4 @@
+import './artifact-test-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import os from 'node:os';
 import { MANIFEST, acquireArtifactLease, buildManifest, sha256File, verifyArtifact } from './artifact.mjs';
 import { inspectArtifact, installRemote, publishImmutable } from './install-remote.mjs';
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'remote-publish-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'remote-publish-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const candidate = path.join(root, 'candidate'), dist = path.join(root, 'dist');
   fs.mkdirSync(path.join(candidate, 'node/bin'), { recursive: true }); fs.mkdirSync(path.join(candidate, 'app/dist'), { recursive: true }); fs.mkdirSync(dist);
   // Deliberately not an executable. Authentication/publish must not run it.

@@ -10,7 +10,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { bootstrapJobs, bootstrapRunner, bounded } from './build-runner.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'build-runner-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
+const temporary = t => { const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'build-runner-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function eventually(file, limitMs = 10_000) {
   const until = Date.now() + limitMs;
@@ -32,7 +32,9 @@ const holderChild = holdMs => `const fs=require('fs'),parent=Number(process.env.
 function pipeHolder(marker, holdMs, gone) {
   const env = { ...baseEnv(marker), NODE: process.execPath, PROGRAM: holderChild(holdMs), ...(gone ? { GONE: gone } : {}) };
   if (process.platform !== 'win32') return ['/bin/sh', ['-c', 'PRIMARY=$$ "$NODE" -e "$PROGRAM" & exit 0'], env];
-  const primary = "require('child_process').spawn(process.execPath,['-e',process.env.PROGRAM],{stdio:['ignore','inherit','inherit'],env:{...process.env,PRIMARY:String(process.pid)}});process.exit(0)";
+  // Windows libuv kills non-detached children when their primary exits.
+  // This finite self-ending fixture must outlive that primary to hold pipes.
+  const primary = "require('child_process').spawn(process.execPath,['-e',process.env.PROGRAM],{stdio:['ignore','inherit','inherit'],detached:true,windowsHide:true,env:{...process.env,PRIMARY:String(process.pid)}});process.exit(0)";
   return [process.execPath, ['-e', primary], env];
 }
 
@@ -71,7 +73,7 @@ test('cancellation after primary exit settles instead of hanging on held pipes',
 test('trailing output inside the drain bound still succeeds normally', async t => {
   const marker = path.join(temporary(t), 'marker');
   // Natural exits (no process.exit) so asynchronous macOS pipe writes are flushed.
-  const program = `require('child_process').spawn(process.execPath,['-e',"setTimeout(()=>{process.stdout.write('TRAILING');require('fs').writeFileSync(process.env.MARKER,'done')},200)"],{stdio:['ignore','inherit','inherit']}).unref();process.stdout.write('PRIMARY;')`;
+  const program = `require('child_process').spawn(process.execPath,['-e',"setTimeout(()=>{process.stdout.write('TRAILING');require('fs').writeFileSync(process.env.MARKER,'done')},200)"],{stdio:['ignore','inherit','inherit'],detached:process.platform==='win32',windowsHide:true}).unref();process.stdout.write('PRIMARY;')`;
   assert.equal(await bounded(process.execPath, ['-e', program], { cwd: REPO, env: baseEnv(marker), timeoutMs: 30_000, drainMs: 5_000 }), 'PRIMARY;TRAILING');
   assert.ok(fs.existsSync(marker));
 });

@@ -6,14 +6,14 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { buildEnvironment, download, materializeBinLinks, normalizePtyHelpers, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, windowsWrapper } from './prepare.mjs';
 import { buildManifest, MANIFEST, verifyArtifact } from './artifact.mjs';
-const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'prepare-case-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
+const temporary = t => { const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'prepare-case-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
 test('build environment selects pinned Node first and cannot inherit npm credentials or owner configs', t => {
   const work = temporary(t), node = path.join(work, 'node');
   const env = buildEnvironment(node, work, 'darwin', { PATH: '/malicious/node', HOME: '/owner', NODE_OPTIONS: '--require /owner/hook',
     npm_config_registry: 'https://untrusted/', NPM_TOKEN: 'secret', GOOGLE_APPLICATION_CREDENTIALS: '/owner/adc', LANG: 'C' });
-  assert.equal(env.PATH.split(':')[0], path.join(node, 'bin'));
+  assert.equal(env.PATH.split(path.delimiter)[0], path.join(node, 'bin'));
   assert.equal(env.HOME, '/owner', 'HOME must never be repurposed'); assert.notEqual(env.npm_config_userconfig, env.npm_config_globalconfig);
   for (const key of ['NODE_OPTIONS', 'NPM_TOKEN', 'GOOGLE_APPLICATION_CREDENTIALS']) assert.equal(env[key], undefined);
   for (const key of ['npm_config_userconfig', 'npm_config_globalconfig']) assert.equal(fs.readFileSync(env[key], 'utf8'), '');

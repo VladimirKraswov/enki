@@ -1,3 +1,4 @@
+import './artifact-test-port.mjs';
 // Shared fixture for installer tests (not a test file itself). The daemon
 // LIFECYCLE is an explicit in-memory port (globalThis.__enkiFakeDaemon; no Node
 // runtime, SDK or candidate entry runs), but every DATA path is the actual
@@ -79,7 +80,7 @@ export function artifact(root, hex, { sdk = '0.85.1', dataSchema = CURRENT_SCHEM
 }
 
 export function setup(t) {
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'remote-recovery-')); t.after(() => { fs.rmSync(root, { recursive: true, force: true }); delete globalThis.__enkiFakeDaemon; });
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'remote-recovery-'))); t.after(() => { fs.rmSync(root, { recursive: true, force: true }); delete globalThis.__enkiFakeDaemon; });
   const daemon = globalThis.__enkiFakeDaemon = { running: null, held: null, receipts: {}, log: [] };
   const base = { dist: path.join(root, 'dist'), data: path.join(root, 'data') };
   return { root, daemon, base, v1: { ...base, ...artifact(root, '1111111111111111') }, v2: { ...base, ...artifact(root, '2222222222222222') } };

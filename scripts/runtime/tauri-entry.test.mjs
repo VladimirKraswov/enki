@@ -14,7 +14,7 @@ import { RUNTIME_CONFIG, hostNodeProblem, main, normalizedBin, planTauriInvocati
 import { preparationDigest, preparedRuntimeProblems } from './prepare.mjs';
 import { MANIFEST, buildManifest, sha256File } from './artifact.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tauri-entry-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
+const temporary = t => { const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'tauri-entry-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const SIGNING = '{"bundle":{"macOS":{"signingIdentity":"-"}}}';
 // Saved from old canonical 0.2.115 hub_updates/build.rs platform_args + suffix.
 const OLD_VECTORS = {
