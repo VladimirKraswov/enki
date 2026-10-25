@@ -1,4 +1,18 @@
 import {hash} from './packet.mjs';
+import {verifyEnvelope} from './device.mjs';
+// Before any POST: BOTH locally signed envelopes must verify against the pinned
+// client key (src-tauri/updater.pub) and carry exactly this kind, version and
+// native fingerprint. A packet signed with another key would be accepted by the
+// Hub and then refused by every client.
+export function assertSignedForClients(envelopes, expected, publicKey){
+  for(const kind of ['hot','source']){
+    const envelope=envelopes?.[kind];
+    if(typeof envelope?.payload!=='string'||typeof envelope.signature!=='string')throw Error(`Missing signed ${kind} packet`);
+    const packet=verifyEnvelope(envelope,hash(Buffer.from(envelope.payload,'base64')),expected.version,publicKey);
+    if(packet?.kind!==kind||packet.version!==expected.version||packet.nativeFingerprint!==expected.nativeFingerprint)
+      throw Error(`Signed ${kind} packet does not match this release`);
+  }
+}
 // A successful upload is not a successful rollout until the client-facing head
 // and BOTH downloadable signed packets match the reviewed local release.
 export async function verifyPublication(head, expected, envelopes, download){

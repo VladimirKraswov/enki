@@ -27,13 +27,44 @@ pub fn ensure_writable() -> Result<(), String> {
     }
 }
 struct ReleaseGate;
-pub(crate) struct Maintenance(ReleaseGate);
+pub(crate) struct Maintenance {
+    gate: Option<ReleaseGate>,
+    supervisor: crate::runtime::RuntimeSupervisor,
+}
 impl Maintenance {
-    pub(crate) fn acquire() -> Result<Self, String> {
+    pub(crate) async fn acquire(app: &tauri::AppHandle) -> Result<Self, String> {
         if MAINTENANCE.swap(true, Ordering::AcqRel) {
             return Err("Уже выполняется обслуживание".into());
         }
-        Ok(Self(ReleaseGate))
+        let gate = ReleaseGate;
+        let supervisor = app
+            .state::<crate::runtime::RuntimeSupervisor>()
+            .inner()
+            .clone();
+        let check = supervisor.clone();
+        tauri::async_runtime::spawn_blocking(move || check.begin_maintenance())
+            .await
+            .map_err(|_| "Проверка обслуживания прервана")??;
+        Ok(Self {
+            gate: Some(gate),
+            supervisor,
+        })
+    }
+}
+impl Drop for Maintenance {
+    fn drop(&mut self) {
+        let Some(gate) = self.gate.take() else {
+            return;
+        };
+        let supervisor = self.supervisor.clone();
+        // Keep both gates held until the same owned runtime acknowledges end,
+        // or until that exact runtime is stopped and reaped (its fence ends
+        // with it). If neither is proven, the native gate is never reopened
+        // over a possibly held fence. Never runs on the native UI thread.
+        std::thread::spawn(move || match supervisor.release_maintenance() {
+            Ok(()) => drop(gate),
+            Err(_) => std::mem::forget(gate),
+        });
     }
 }
 
@@ -106,37 +137,21 @@ pub(crate) fn backup(data: &str) -> Result<String, String> {
     fs::write(dir.join("version.txt"), env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
     Ok(id)
 }
+/// Authoritative idle: the runtime itself reports no running turn, no pending
+/// user answer and no queue item in flight. An unknown state is not idle.
 pub(crate) async fn idle(app: &tauri::AppHandle) -> Result<(), String> {
-    let resumed = crate::pi::pi_resume_sessions(app.state()).await?;
-    if resumed
-        .iter()
-        .any(|p| p["dialogs"].as_array().is_some_and(|a| !a.is_empty()))
-    {
-        return Err("Pi ожидает вашего ответа".into());
-    }
-    let keys = crate::pi::pi_live_sessions(app.state()).await?;
-    if keys.len() > 64 {
-        return Err("Слишком много запущенных процессов Pi".into());
-    }
-    for key in keys {
-        let response =
-            crate::pi::pi_request(app.state(), key, json!({"type":"get_state"}), Some(3000))
-                .await?;
-        if response["success"] != true
-            || response["data"]["isStreaming"] != false
-            || response["data"]["isCompacting"] == true
-            || response["data"]["pendingMessageCount"]
-                .as_u64()
-                .unwrap_or(0)
-                > 0
-        {
-            return Err("Pi ещё работает. Установка отложена.".into());
-        }
-    }
-    let work = app.state::<crate::lifecycle::Lifecycle>().owned()?;
-    tauri::async_runtime::spawn_blocking(move || crate::lifecycle::check_idle(&work))
+    let supervisor = app
+        .state::<crate::runtime::RuntimeSupervisor>()
+        .inner()
+        .clone();
+    let idle = tauri::async_runtime::spawn_blocking(move || supervisor.idle())
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    if idle {
+        Ok(())
+    } else {
+        Err("Агент Enki ещё работает или ждёт вашего ответа. Установка отложена.".into())
+    }
 }
 fn saved_path(id: &str) -> Result<PathBuf, String> {
     if !id.starts_with("backup-")
@@ -242,10 +257,7 @@ async fn perform(
             Ok(json!(items))
         }
         "backup" | "restore" | "install" => {
-            if MAINTENANCE.swap(true, Ordering::AcqRel) {
-                return Err("Уже выполняется обслуживание".into());
-            }
-            let _gate = ReleaseGate;
+            let _maintenance = Maintenance::acquire(app).await?;
             idle(app).await?;
             let data = data.ok_or("Нет текущей резервной копии")?;
             let id = tauri::async_runtime::spawn_blocking(move || backup(&data))
@@ -286,21 +298,44 @@ async fn perform(
                 let bundle = exe
                     .ancestors()
                     .find(|p| p.extension().is_some_and(|x| x == "app"))
-                    .ok_or("Установка доступна из пакета приложения")?;
-                let status = std::process::Command::new("/usr/bin/ditto")
-                    .arg(bundle)
-                    .arg(saved_path(&id)?.join("Enki.app"))
-                    .status()
-                    .map_err(|e| e.to_string())?;
+                    .ok_or("Установка доступна из пакета приложения")?
+                    .to_path_buf();
+                let target = saved_path(&id)?.join("Enki.app");
+                // A bundle copy takes seconds: never on an async worker thread.
+                let status = tauri::async_runtime::spawn_blocking(move || {
+                    std::process::Command::new("/usr/bin/ditto")
+                        .arg(bundle)
+                        .arg(target)
+                        .stdin(std::process::Stdio::null())
+                        .status()
+                })
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
                 if !status.success() {
                     return Err("Не удалось сохранить предыдущую версию приложения".into());
                 }
             }
+            let supervisor = app
+                .state::<crate::runtime::RuntimeSupervisor>()
+                .inner()
+                .clone();
+            let stopping = supervisor.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                stopping.shutdown_checked(Duration::from_secs(20))
+            })
+            .await
+            .map_err(|_| "Остановка ядра прервана")??;
+            // On an install error Drop of `_maintenance` ends the fences and
+            // permits reconnecting; bundle integrity after a failed Tauri
+            // install is the updater plugin's contract, not verified here.
             tauri::async_runtime::spawn_blocking(move || {
                 update.install(bytes).map_err(|e| e.to_string())
             })
             .await
             .map_err(|e| e.to_string())??;
+            supervisor.retire();
+            std::mem::forget(_maintenance);
             app.restart();
         }
         _ => Err("Unknown update action".into()),

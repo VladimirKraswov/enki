@@ -1,5 +1,20 @@
 # Enki roadmap
 
+## Enki 2.0 — sole bundled Pi SDK runtime
+
+Sections below are the 0.2.x history (external OpenCode/Pi engines). 2.0 status:
+
+- [x] Source: one bundled Enki Runtime (pinned Node + Pi SDK, `scripts/runtime/sdk-contract.mjs`); OpenCode execution removed; OpenCode/Pi CLI histories read-only with explicit continuation; paired backups and journaled remote installer; first 0.2→2.0 source update prepares the runtime through `npm run tauri`.
+- [x] Source: reviewed SDK upgrade workflow (`docs/SDK-UPGRADE.md`), canonical release gates before credentials (`docs/VERIFICATION.md`), remote host procedure (`docs/REMOTE-RUNTIME.md`), evaluation adapter on the pinned SDK (`docs/EVALUATIONS.md`).
+- [x] Final source review and full local code qualification on Mac: whole runtime/frontend TypeScript, 347 runtime Vitest, 161 public Node and 1070 frontend cases. Native compilers and guarded tests, public artifact/release/Hub/catalog/ASR checks passed with their explicit sandbox/platform limits. Old engine/client/installer copies retired only after replacement checks; original failures and evidence preserved.
+- [x] Synchronized application version 2.0.0; SDK and helper versions stay independently pinned.
+
+Full release gates and platform builds follow [VERIFICATION](docs/VERIFICATION.md).
+A version in source does not establish publication or installation: verify the
+canonical signed Hub receipt, served source/UI packets and the installed build
+separately. Focused regression counts are not a full-suite or live-model claim.
+- [ ] Separate live acceptance: Windows Job/NTFS first update and rollback, remote Linux host install/update/rollback, ordinary-user upgrade from 0.2.x.
+
 ## Reference image editing and bounded revisions (0.2.115)
 
 - [x] Actual authenticated bounded PNG/JPEG/WebP references; qualified FLUX.2 Klein4B instruction edits with private immutable source/provenance. Blue-hair request succeeded at512px/131s; source/config/weight reproduction verified. SDXL remains new-image renderer and explicit legacy redraw.

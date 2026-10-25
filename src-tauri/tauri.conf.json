@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Enki",
   "mainBinaryName": "enki",
-  "version": "0.2.115",
+  "version": "2.0.0",
   "identifier": "dev.local.opencodedesktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -42,8 +42,8 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Desktop workspace for OpenCode and Pi",
-    "longDescription": "Native desktop workspace for independently installed OpenCode and Pi agents: projects, sessions, streaming tool output, permissions, PTY and model selection. The engine is installed and updated independently of this application.",
+    "shortDescription": "Desktop workspace with a bundled coding agent",
+    "longDescription": "Native desktop workspace with a bundled, version-pinned coding agent runtime (Pi SDK on a pinned Node.js): projects, sessions, durable queues and schedules, streaming tool output, permissions, PTY and model selection. The agent runtime ships with and is updated together with this application.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

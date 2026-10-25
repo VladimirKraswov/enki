@@ -110,6 +110,29 @@ export function sessionContext(chat?: SessionChatState): ContextSnapshot {
   return { sources: sources.reverse(), results: [...results.values()].reverse() };
 }
 
+/**
+ * Only `sessionContext(chat).sources` (files the user attached), visiting user
+ * messages only: assistant parts (tool output, long answers) are not scanned,
+ * so an open attachment viewer stays cheap while chats stream.
+ */
+export function sessionSources(chat?: SessionChatState): ContextFile[] {
+  const sources: ContextFile[] = [];
+  if (!chat) return sources;
+  for (const id of chat.messageOrder) {
+    const message = chat.messages[id];
+    if (message?.role !== "user") continue;
+    for (const pid of chat.partsByMessage[id] || []) {
+      const p = chat.parts[pid];
+      if (!p || p.ignored) continue;
+      const f = partFacts(p), at = message.time?.created;
+      if (f.file) sources.push({ key: p.id, name: f.file.name, mime: f.file.mime, url: p.url, messageID: p.messageID, at });
+      const archive = archiveReference(p.metadata?.arvelaAttachment);
+      if (archive) sources.push({ key: p.id, name: safeLabel(archive.name), mime: 'application/zip', url: archive.url, messageID: p.messageID, at });
+    }
+  }
+  return sources.reverse();
+}
+
 /** Child sessions this chat's `task` calls reported. Other children (forks, …) are not subagents. */
 export function subagentRuns(chat?: SessionChatState): Map<string, SubagentRun> {
   const runs = new Map<string, SubagentRun>();

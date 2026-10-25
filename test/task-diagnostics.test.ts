@@ -34,14 +34,26 @@ it('distinguishes error/abort and refuses ambiguous observation identities',()=>
  const root=emptyChatRoot();applyHistory(root,'s',[{info:u,parts:[]},{info:{...a,error:{name:'MessageAbortedError'}},parts:[]}]);expect(taskDiagnostics(root.sessions.s)?.state).toBe('aborted');
  applyHistory(root,'s',[{info:{...u,timingKey:'collision'},parts:[]},{info:{...u,id:'u2',timingKey:'collision'},parts:[]},{info:{...a,parentID:'u2',error:{message:'fail'}},parts:[]}]);root.sessions.s.taskObservations={collision:{dispatchAt:0,preparationMs:100,queueMs:100,startedAt:0,firstAt:10,retries:0,tools:{}}};expect(taskDiagnostics(root.sessions.s)?.firstResponseMs).toBeNull();expect(taskDiagnostics(root.sessions.s)?.state).toBe('error');
 });
-it('links actual Pi translator events to actual durable entries without retaining user content',async()=>{
- const {PiStreamTranslator,entriesToHistory}=await import('../src/agent/pi/translate');vi.useFakeTimers();
- const root=emptyChatRoot();applyHistory(root,'s',[]);root.sessions.s.pendingTiming={dispatchAt:1000,preparationMs:100,queueMs:0};const tr=new PiStreamTranslator('s');
- const receive=(event:any,now:number)=>{vi.setSystemTime(now);for(const e of tr.translate(event).events)reduceEvent(root,e);};
- receive({type:'message_start',message:{role:'user',timestamp:1100,content:'synthetic request'}},1100);
- receive({type:'message_start',message:{role:'assistant',timestamp:1200,content:[]}},1200);
- receive({type:'message_update',assistantMessageEvent:{type:'text_delta',contentIndex:0,delta:'synthetic answer'}},1500);
- receive({type:'agent_settled'},2000);
- applyHistory(root,'s',entriesToHistory('s',[{id:'durable-user',type:'message',timestamp:new Date(1100).toISOString(),message:{role:'user',timestamp:1100,content:'synthetic request'}},{id:'durable-assistant',type:'message',timestamp:new Date(2000).toISOString(),message:{role:'assistant',timestamp:1200,content:[{type:'text',text:'synthetic answer'}],stopReason:'stop'}}]));
- expect(taskDiagnostics(root.sessions.s,'durable-user')).toMatchObject({source:'observed',firstResponseMs:500,wallMs:1100,state:'ended'});
+// The runtime's SDK translator (src-tauri/resources/agent/src/sdk) replaced the
+// frontend Pi CLI translator; the reducer/diagnostics consume its DTO events.
+it('links actual runtime translator events to actual durable entries without retaining user content',async()=>{
+ const {StreamTranslator}=await import('../src-tauri/resources/agent/src/sdk/translate');
+ const {entriesToMessages}=await import('../src-tauri/resources/agent/src/sdk/history');vi.useFakeTimers();
+ const root=emptyChatRoot();applyHistory(root,'s',[]);root.sessions.s.pendingTiming={dispatchAt:1000,preparationMs:100,queueMs:0};const tr=new StreamTranslator('s');
+ const deliver=(events:unknown[],now:number)=>{vi.setSystemTime(now);for(const e of events)reduceEvent(root,e as any);};
+ const userEntry={id:'durable-user',type:'message',timestamp:new Date(1100).toISOString(),message:{role:'user',timestamp:1100,content:'synthetic request'}};
+ const assistantEntry={id:'durable-assistant',type:'message',timestamp:new Date(1950).toISOString(),message:{role:'assistant',timestamp:1200,content:[{type:'text',text:'synthetic answer'}],stopReason:'stop',provider:'p',model:'m'}};
+ deliver(tr.translate({type:'message_start',message:userEntry.message} as any),1100);
+ // The worker publishes the persisted user entry: the live echo is replaced under the same timing key.
+ deliver(tr.appended(userEntry as any),1150);
+ deliver(tr.translate({type:'message_start',message:{role:'assistant',timestamp:1200,content:[]}} as any),1200);
+ deliver(tr.translate({type:'message_update',assistantMessageEvent:{type:'text_delta',contentIndex:0,delta:'synthetic answer'}} as any),1500);
+ deliver(tr.translate({type:'message_end',message:assistantEntry.message} as any),1900);
+ deliver(tr.appended(assistantEntry as any),1950);
+ deliver(tr.translate({type:'agent_settled'} as any),2000);
+ expect(root.sessions.s.messageOrder).toEqual(['durable-user','durable-assistant']);
+ applyHistory(root,'s',entriesToMessages('s',[userEntry,assistantEntry] as any) as any);
+ const d=taskDiagnostics(root.sessions.s,'durable-user');
+ expect(d).toMatchObject({source:'observed',firstResponseMs:500,wallMs:1100,state:'ended'});
+ expect(JSON.stringify(d)).not.toContain('synthetic');
 });

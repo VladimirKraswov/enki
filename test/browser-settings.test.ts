@@ -11,7 +11,7 @@ const fake = vi.hoisted(() => ({
 vi.mock("../src/state/store", () => ({ useAppState: () => fake.state, store: {
   currentHost: () => fake.host, configureBrowser: fake.configureBrowser,
   ensureChatWorkspace: fake.ensureChatWorkspace, createSessionNow: fake.createSessionNow,
-  get state() { return fake.state; }, engineIdFor: () => "opencode",
+  get state() { return fake.state; }, engineIdFor: () => "pi",
   setBrowserSettings: fake.setBrowserSettings, setUi: fake.setUi,
 } }));
 vi.mock("../src/browser/integration", async importOriginal => { const actual=await importOriginal<typeof import("../src/browser/integration")>(); return {
@@ -32,11 +32,12 @@ beforeEach(() => {
   status = { supported: true, installed: true, running: true, browserOpen: false,
     command: "/Applications/OpenCode Desktop.app/Contents/MacOS/app", nodeProgram: "/opt/homebrew/bin/node",
     skillPath: "/tmp/browser/skill", runtimePath: "/tmp/browser/current", profilePath: "/tmp/browser/profile", version: "0.0.83" };
-  fake.setup = { phase: "ready", openCode: "Подключён", pi: "Готово", status };
+  // The actual BrowserSetup DTO of the single runtime (no per-engine fields).
+  fake.setup = { phase: "ready", agent: "Подключается к новым сессиям агента", status };
   fake.invoke.mockImplementation(async (command: string) => {
     if (command === "browser_status") return status;
     if (command === "browser_start") return status;
-    if (command === "browser_session") return {result:{scopeKey:"fixture-key",scope:{engine:"opencode",sessionID:fake.state.activeSessionId ?? "ses_test"}}};
+    if (command === "browser_session") return {result:{scopeKey:"fixture-key",scope:{engine:"pi",sessionID:fake.state.activeSessionId ?? "ses_test"}}};
     if (command === "browser_open") return { ...status, browserOpen: true };
     if (command === "browser_stop") return { ...status, running: false, browserOpen: false };
     throw new Error(`Unexpected command: ${command}`);
@@ -92,7 +93,8 @@ it("opens the entered URL locally with the explicit browser Node path", async ()
 
 it("ignores a second Enter while the first browser open is pending", async () => {
   const pending = deferred<BrowserStatus>();
-  fake.invoke.mockImplementation((command: string) => command === "browser_open" ? pending.promise : Promise.resolve(command === "browser_session" ? {result:{scopeKey:"fixture-key",scope:{engine:"opencode",sessionID:"ses_test"}}} : status));
+  // The native scope echoes the runtime's engine tag; the strict scope guard is unchanged.
+  fake.invoke.mockImplementation((command: string) => command === "browser_open" ? pending.promise : Promise.resolve(command === "browser_session" ? {result:{scopeKey:"fixture-key",scope:{engine:"pi",sessionID:"ses_test"}}} : status));
   await mount(); await enter(); await enter();
   expect(opens()).toHaveLength(1);
   expect(button("Открыть браузер").disabled).toBe(true);
@@ -103,7 +105,7 @@ it("ignores a second Enter while the first browser open is pending", async () =>
 it("shows a failed open honestly and clears its alert after a successful refresh", async () => {
   fake.invoke.mockImplementation(async (command: string) => {
     if (command === "browser_open") throw new Error("Chromium could not start");
-    if (command === "browser_session") return {result:{scopeKey:"fixture-key",scope:{engine:"opencode",sessionID:"ses_test"}}};
+    if (command === "browser_session") return {result:{scopeKey:"fixture-key",scope:{engine:"pi",sessionID:"ses_test"}}};
     return status;
   });
   await mount(); await enter();
@@ -111,6 +113,15 @@ it("shows a failed open honestly and clears its alert after a successful refresh
   expect(document.body.textContent).not.toContain("Браузер открыт внутри Desktop");
   await act(async () => button("Обновить состояние").click());
   expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("refuses to open a browser whose native scope belongs to another chat or engine tag", async () => {
+  for (const scope of [{ engine: "opencode", sessionID: "ses_test" }, { engine: "pi", sessionID: "ses_other" }]) {
+    fake.invoke.mockImplementation(async (command: string) => command === "browser_session" ? { result: { scopeKey: "foreign", scope } } : status);
+    await mount(); await enter();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("другого чата");
+  }
+  expect(opens()).toHaveLength(0);
 });
 
 it("saves an optional Node path without changing agent permissions or opening a browser", async () => {
@@ -151,8 +162,21 @@ it("waits for toolbar configuration, prevents duplicate clicks, and opens a blan
   expect(fake.setUi).toHaveBeenCalledWith({browserOpen:true});
   await act(async () => control.click()); expect(fake.configureBrowser).toHaveBeenCalledOnce();
   await act(async () => pending.resolve());
-  expect(opens()).toEqual([["browser_open", { url: null, nodeProgram: "/opt/homebrew/bin/node",scopeKey:"fixture-key" }]]);
+  // The legacy Pi CLI Node path in prefs is ignored: null lets native discovery choose.
+  expect(opens()).toEqual([["browser_open", { url: null, nodeProgram: null,scopeKey:"fixture-key" }]]);
   expect(control.disabled).toBe(false); expect(fake.setUi).toHaveBeenCalledWith({ browserOpen: true });
+});
+
+// BrowserSettings renders the single runtime's `agent` state (the removed
+// setup.openCode/setup.pi fields crashed the initial idle render).
+it("renders the initial setup state of the single runtime without per-engine rows", async () => {
+  fake.setup = { phase: "idle", agent: "Не проверено" };
+  await mount();
+  expect(document.body.textContent).toContain("Настройка при запуске приложения");
+  expect(document.body.textContent).not.toContain("OpenCode");
+  fake.setup = { phase: "ready", agent: "Подключается к новым сессиям агента", status };
+  await mount();
+  expect(document.body.textContent).toContain("Подключается к новым сессиям агента");
 });
 
 it("creates an empty scoped chat and opens the browser before any model turn", async () => {

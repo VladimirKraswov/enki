@@ -59,15 +59,33 @@ export function observeTask(chat: SessionChatState, event: ServerEvent, now: num
     if (chat.messageOrder.slice(chat.messageOrder.indexOf(user.id)+1).some(id=>{const m=chat.messages[id];return m?.role==='assistant' && (!m.parentID || m.parentID===user.id);} )) o.endedAt ??= now;
   }
 }
+/** Position of a user request in its transcript: its index, the next user message
+ * (-1: none) and whether its timing key is unique among user messages. */
+export interface TaskPosition { index: number; next: number; unique: boolean }
+/** One pass over a transcript for every user request. Diagnostics for ALL requests
+ * then cost O(messages) instead of three whole-transcript scans per request. */
+export function taskPositions(chat: SessionChatState): Map<string, TaskPosition> {
+  const users: number[] = [], keys = new Map<string, number>();
+  chat.messageOrder.forEach((id, i) => {
+    const m = chat.messages[id];
+    if (m?.role === 'user') { users.push(i); keys.set(timingKey(m), (keys.get(timingKey(m)) ?? 0) + 1); }
+  });
+  const positions = new Map<string, TaskPosition>();
+  users.forEach((index, n) => {
+    const id = chat.messageOrder[index];
+    if (!positions.has(id)) positions.set(id, { index, next: users[n + 1] ?? -1, unique: keys.get(timingKey(chat.messages[id]!)) === 1 });
+  });
+  return positions;
+}
 /** Bounded to one already-loaded request, ending before the next user message. */
-export function taskDiagnostics(chat: SessionChatState | undefined, messageID?: string): TaskDiagnostics | null {
+export function taskDiagnostics(chat: SessionChatState | undefined, messageID?: string, position?: TaskPosition): TaskDiagnostics | null {
   if (!chat) return null;
-  const index = messageID ? chat.messageOrder.indexOf(messageID) : chat.messageOrder.map(id=>chat.messages[id]?.role).lastIndexOf('user');
+  const index = position?.index ?? (messageID ? chat.messageOrder.indexOf(messageID) : chat.messageOrder.map(id=>chat.messages[id]?.role).lastIndexOf('user'));
   const user = chat.messages[chat.messageOrder[index]];
   if (index < 0 || user?.role !== 'user') return null;
-  const next = chat.messageOrder.findIndex((id,i)=>i>index && chat.messages[id]?.role==='user');
+  const next = position?.next ?? chat.messageOrder.findIndex((id,i)=>i>index && chat.messages[id]?.role==='user');
   const assistants = chat.messageOrder.slice(index+1,next<0?undefined:next).map(id=>chat.messages[id]).filter((m): m is AssistantMessage=>m?.role==='assistant' && !m.summary && (!m.parentID || m.parentID===user.id));
-  const unique = chat.messageOrder.filter(id=>chat.messages[id]?.role==='user' && timingKey(chat.messages[id])===timingKey(user)).length === 1;
+  const unique = position?.unique ?? chat.messageOrder.filter(id=>chat.messages[id]?.role==='user' && timingKey(chat.messages[id])===timingKey(user)).length === 1;
   const o = unique ? chat.taskObservations?.[timingKey(user)] : undefined;
   const terminal = assistants[assistants.length-1], aborted = terminal?.error && (terminal.error as {name?: string}).name === 'MessageAbortedError' || terminal?.finish === 'aborted';
   const errored = assistants.some(m=>!!m.error || m.finish==='error');

@@ -1,14 +1,10 @@
-import { useEffect, useState } from "react";
 import { store, useAppState } from "../state/store";
-import { detectLocalOpenCode } from "../native/localServer";
-
-const OPEN_CODE_INSTALL_URL = "https://opencode.ai/docs/";
 
 export function DeleteConfirm() {
   const s = useAppState();
   const sess = s.ui.confirmDelete;
   if (!sess) return null;
-  const engine = store.isPiSession(sess.id) ? "Pi" : "OpenCode";
+  const archive = store.isLegacySession(sess.id);
   return (
     <div
       className="modal-overlay"
@@ -16,8 +12,8 @@ export function DeleteConfirm() {
         e.target === e.currentTarget && store.setUi({ confirmDelete: null })
       }
     >
-      <div className="modal" role="alertdialog" aria-label="Delete session">
-        <h3>Delete session permanently?</h3>
+      <div className="modal" role="alertdialog" aria-label="Удалить сессию">
+        <h3>Удалить сессию безвозвратно?</h3>
         <p
           style={{
             margin: 0,
@@ -26,22 +22,22 @@ export function DeleteConfirm() {
             lineHeight: 1.6,
           }}
         >
-          “{sess.title}” and its full history will be removed from {engine}.
-          This cannot be undone. If you only want to hide it, use <b>Archive</b>{" "}
-          instead.
+          «{sess.title}» и вся её история будут удалены из {archive ? "архива OpenCode в Enki" : "Enki"}.
+          {!archive && <> Вместе с чатом удаляются его запросы в очереди и запомненные ответы на разрешения; таймеры этого чата останутся в списке приостановленными. Работающий чат сначала остановите.</>}
+          {" "}Отменить это нельзя. Чтобы только скрыть чат, используйте <b>Архив</b>.
         </p>
         <div className="btn-row" style={{ justifyContent: "flex-end" }}>
           <button
             className="btn"
             onClick={() => store.setUi({ confirmDelete: null })}
           >
-            Cancel
+            Отмена
           </button>
           <button
             className="btn danger"
             onClick={() => void store.deleteSession(sess)}
           >
-            Delete permanently
+            Удалить безвозвратно
           </button>
         </div>
       </div>
@@ -63,70 +59,49 @@ export function Toast() {
   );
 }
 
+/**
+ * The bundled Enki Runtime of this computer, or the runtime of the selected SSH
+ * host. There is no address to type and no external agent to install: a remote
+ * failure is never replaced by local execution.
+ */
 export function ConnectionGate() {
   const s = useAppState();
   const remote = store.currentHost();
-  const [endpoint, setEndpoint] = useState(
-    s.prefs.localEndpoint ?? s.prefs.endpoint,
-  );
-  const [cliInstalled, setCliInstalled] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (remote) return;
-    let active = true;
-    void detectLocalOpenCode(s.prefs.localOpenCodeProgram).then(found => { if (active) setCliInstalled(found); }).catch(() => {});
-    return () => { active = false; };
-  }, [remote, s.prefs.localOpenCodeProgram]);
   if (s.connection.phase === "connected") return null;
   return (
     <div className="gate" role="alert" aria-live="polite">
       <h2>
         {s.connection.phase === "connecting"
-          ? "Подключение к OpenCode…"
+          ? "Подключение к среде выполнения Enki…"
           : `Нет подключения · ${store.hostLabel()}`}
       </h2>
       <p>
         {remote ? (
           <>
-            Проверьте SSH-доступ и сервер OpenCode на {remote.target}. Задачи не
-            будут запускаться на этом компьютере вместо удалённой машины.
+            Проверьте SSH-доступ к {remote.target} и установленную там среду
+            выполнения Enki. Задачи не будут запускаться на этом компьютере вместо
+            удалённой машины.
           </>
         ) : (
           <>
-            Приложение запускает установленный OpenCode автоматически, если
-            локальный сервер не работает. Проверьте адрес и установку OpenCode,
-            затем повторите подключение. Движок обновляется отдельно от
-            приложения.
+            Встроенная среда выполнения запускается вместе с приложением. Если она
+            не ответила, повторите подключение; черновики и история сохранены.
           </>
         )}
       </p>
       {s.connection.error && (
         <p className="composer-error">{s.connection.error}</p>
       )}
-      {!remote && cliInstalled === false && <button className="btn" onClick={() => void import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(OPEN_CODE_INSTALL_URL))}>Установить OpenCode…</button>}
-      {remote ? (
-        <button
-          className="btn"
-          onClick={() => store.setUi({ hostDialogOpen: true })}
-        >
-          Настроить подключение / ввести пароль
-        </button>
-      ) : (
-        <label>
-          Адрес локального сервера
-          <input
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-            spellCheck={false}
-          />
-        </label>
-      )}
       <div className="btn-row" style={{ justifyContent: "flex-end" }}>
+        {remote && (
+          <button className="btn" onClick={() => store.setUi({ hostDialogOpen: true })}>
+            Настроить подключение / ввести пароль
+          </button>
+        )}
         <button
           className="btn"
           disabled={s.connection.phase === "connecting"}
-          onClick={() =>
-            void (remote ? store.retryConnection() : store.connect(endpoint))
-          }
+          onClick={() => void store.retryConnection()}
         >
           Повторить подключение
         </button>

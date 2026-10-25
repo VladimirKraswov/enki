@@ -7,8 +7,7 @@ import { ContextMeter } from "./ContextMeter";
 import { VoiceInput } from "./VoiceInput";
 import { accessOptions, type AccessMode } from "../state/access";
 import { Icon } from "./Icon";
-import { engineOptions } from "../state/engines";
-import { PI_BACKEND_ID } from "../agent/pi/backend";
+import { activePluginUi } from "../agent/runtime/pluginUi/active";
 import { SelectMenu } from "./SelectMenu";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { store, useAppState } from "../state/store";
@@ -39,6 +38,15 @@ function AttachmentChip({ file, onRemove, disabled }: { file: DraftAttachment; o
   </div>;
 }
 
+/** A file the runtime already stores for the edited queue item: metadata only, never fetched. */
+function KeptAttachmentChip({ file, onRemove, disabled }: { file: { name: string; size: number }; onRemove: () => void; disabled: boolean }) {
+  return <div className="attachment-chip attachment-chip-kept" title="Уже сохранён в очереди">
+    <Icon name="file" size={18}/>
+    <span title={file.name}>{file.name}</span><small>{file.size < 1024 * 1024 ? `${Math.max(1, Math.ceil(file.size / 1024))} КБ` : `${(file.size / 1024 / 1024).toFixed(1)} МБ`}</small>
+    <button type="button" disabled={disabled} aria-label={`Убрать ${file.name}`} onClick={onRemove}><Icon name="close" size={14}/></button>
+  </div>;
+}
+
 export function Composer() {
   const s = useAppState();
   const switches = useSyncExternalStore(modelServices.subscribe, modelServices.snapshot);
@@ -59,6 +67,8 @@ export function Composer() {
   const attachments = useSyncExternalStore(attachmentDrafts.subscribe, () => attachmentDrafts.snapshot(scope));
   const draft = store.getDraft();
   const queueEdit = store.getQueueEdit();
+  // Original files of the edited queue item that are still kept (removal is applied atomically).
+  const kept = queueEdit ? store.editKeptFiles() : [];
   const choice = store.getModelChoice();
   const switchContext = s.activeSessionId ?? `@draft:${s.directory}`;
   const switchState = choice ? modelServices.statusFor(choice.providerID, choice.modelID, switchContext, store.engineIdFor()) : undefined;
@@ -141,9 +151,8 @@ export function Composer() {
     return () => { window.removeEventListener("dragover", over); window.removeEventListener("drop", drop); window.removeEventListener("dragleave", leave); };
   }, []);
 
+  // One executing agent (bundled runtime); the id only scopes model-service state.
   const engineId = store.engineIdFor();
-  const engines = engineOptions(s.prefs, store.piInstalled);
-  const isPi = engineId === PI_BACKEND_ID;
   const selectionScope = `${scope}/${engineId}`;
   const selectionScopeRef = useRef(selectionScope);
   selectionScopeRef.current = selectionScope;
@@ -162,37 +171,25 @@ export function Composer() {
       label: string;
       detail?: string;
     }[] = [];
-    if (isPi) {
-      // Pi keeps its own catalog; OpenCode providers must not leak into it.
-      for (const m of store.piModelOptions().filter(m => modelServices.visible(m.providerID, m.modelID, engineId)))
-        out.push({
-          providerID: m.providerID,
-          modelID: m.modelID,
-          label: compactModelName(m.label),
-          detail: `${m.label} · ${m.providerID}${m.verified ? " · проверена ранее" : " · требует проверки"}`,
-        });
-    } else for (const p of providers) {
-      for (const m of Object.values(p.models)) {
-        if (m.status === "deprecated" || !modelServices.visible(p.id, m.id, engineId)) continue;
-        out.push({
-          providerID: p.id,
-          modelID: m.id,
-          label: compactModelName(m.name ?? m.id),
-          detail: `${m.name ?? m.id} · ${p.id}`,
-        });
-      }
-    }
+    // The runtime's own catalogue (built-in + configured providers); access evidence is a badge.
+    const options = store.piModelOptions();
+    for (const m of options.filter(m => modelServices.visible(m.providerID, m.modelID, engineId)))
+      out.push({
+        providerID: m.providerID,
+        modelID: m.modelID,
+        label: compactModelName(m.label),
+        detail: `${m.label} · ${m.providerID}${m.verified ? " · проверена ранее" : " · требует проверки"}`,
+      });
     for (const m of modelServices.configuredModels(engineId)) {
-      // A service binding supplements an agent's own provider catalog; it must
-      // not import providers belonging only to the other agent.
-      if (!(isPi ? store.piModelOptions().some(o => o.providerID === m.providerID) : providers.some(p => p.id === m.providerID))) continue;
+      // A service binding supplements the runtime catalogue; it never adds unknown providers.
+      if (!options.some(o => o.providerID === m.providerID)) continue;
       const existing = out.find(o => o.providerID === m.providerID && o.modelID === m.modelID);
       const detail = `${m.label} · ${m.providerID} · ${modelServices.errorFor(m.providerID, m.modelID) ? "сервис недоступен" : "проверка при выборе"}`;
       if (existing) existing.detail = detail;
       else out.push({ ...m, label: compactModelName(m.label), detail });
     }
     return out;
-  }, [providers, isPi, s.piHealth, s.prefs.pi?.verifiedModels, s.prefs.pi?.verifiedModel, switches.revision]);
+  }, [providers, s.prefs.pi?.verifiedModels, s.prefs.pi?.verifiedModel, switches.revision]);
 
   const refreshModels = async () => {
     if (refreshing) return;
@@ -234,7 +231,7 @@ export function Composer() {
     const text = store.getDraft();
     // s.ui.sending also blocks a second Enter while the first request awaits acknowledgement.
     if (queueEdit) {
-      if ((!text.trim() && !attachments.length) || s.ui.sending) return;
+      if ((!text.trim() && !attachments.length && !kept.length) || s.ui.sending) return;
       void store.applyQueueEdit(text, attachments);
       return;
     }
@@ -261,21 +258,19 @@ export function Composer() {
         onClose={() => { selectionAbort.current?.abort(); selectionTicket.current++; setSelection(null); }} onRetry={() => void selectModel(selection.providerID, selection.modelID)}/>}
       {!connected && (
         <div className="offline-banner" role="alert">
-          <span>{isPi
-            ? "Pi не найден. Проверьте путь к Pi в настройках; черновики и история сохранены."
-            : "Нет связи с OpenCode. Черновики и история сохранены."}</span>
-          <button onClick={() => void (isPi ? store.refreshPiInstall() : store.retryConnection())}>
+          <span>Нет связи со средой выполнения Enki. Черновики и история сохранены.</span>
+          <button onClick={() => void store.retryConnection()}>
             Проверить снова
           </button>
         </div>
       )}
-      {connected && !isPi && s.connection.streamState === "reconnecting" && (
+      {connected && s.connection.streamState === "reconnecting" && (
         <div
           className="offline-banner"
           style={{ borderColor: "var(--warn)", color: "var(--warn)" }}
           role="status"
         >
-          Reconnecting to live updates…
+          Восстанавливаю поток событий среды выполнения…
         </div>
       )}
       {s.ui.sendError && (
@@ -303,7 +298,9 @@ export function Composer() {
       </div>}
       <div className={`composer ${dragging ? "composer-drop-target" : ""} ${voiceActive ? "composer-voice-active" : ""}`}>
         {dragging && <div className="composer-drop-label">Перетащите файлы сюда</div>}
-        {attachments.length > 0 && <div className="attachment-list" aria-label="Вложения">{attachments.map(file => <AttachmentChip key={file.id} file={file} disabled={s.ui.sending} onRemove={() => removeFile(file.id)}/>)}</div>}
+        {(attachments.length > 0 || kept.length > 0) && <div className="attachment-list" aria-label="Вложения">
+          {queueEdit && kept.map(file => <KeptAttachmentChip key={`kept:${file.id}`} file={file} disabled={s.ui.sending} onRemove={() => void store.removeQueuedAttachment(queueEdit.id, file.id)}/>)}
+          {attachments.map(file => <AttachmentChip key={file.id} file={file} disabled={s.ui.sending} onRemove={() => removeFile(file.id)}/>)}</div>}
         <textarea
           ref={textareaRef}
           aria-label="Message"
@@ -311,6 +308,10 @@ export function Composer() {
           value={draft}
           disabled={s.ui.workspacePreparing}
           onChange={(e) => store.setDraft(e.target.value)}
+          // An IME composition is never sent to (or overwritten by) the shared plugin draft.
+          onCompositionStart={() => activePluginUi.setComposing(true)}
+          onCompositionEnd={() => activePluginUi.setComposing(false)}
+          onBlur={() => activePluginUi.setComposing(false)}
           onPaste={event => {
             const files = Array.from(event.clipboardData.files);
             if (!files.length) files.push(...Array.from(event.clipboardData.items).filter(item => item.kind === "file").map(item => item.getAsFile()).filter((file): file is File => !!file));
@@ -343,7 +344,8 @@ export function Composer() {
               label="Режим доступа"
               className={store.getAccessMode() === "full" ? "composer-access-full" : "composer-access"}
               icon={store.getAccessMode() === "full" ? "shield" : undefined}
-              disabled={running || s.ui.sending || !connected}
+              // Also while a tool waits for permission: the runtime re-decides that call by the new mode.
+              disabled={!store.accessChangeAllowed() || !connected}
               value={store.getAccessMode()}
               options={[
                 ...accessOptions,
@@ -354,24 +356,11 @@ export function Composer() {
           </div>
           <div className="composer-controls-right">
           <SelectMenu
-            label="Агент"
-            className="composer-engine-picker"
-            disabled={!connected || running || switching || s.ui.sending}
-            value={engineId}
-            options={engines.map((e) => ({
-              value: e.id,
-              label: e.label,
-              detail: e.available ? undefined : e.reason,
-              disabled: !e.available,
-            }))}
-            onChange={(id) => store.setSessionEngine(s.activeSessionId, id)}
-          />
-          <SelectMenu
             label="Модель"
             className="composer-model-picker"
             disabled={running || s.ui.sending || switching || !!selection?.pending}
-            value={isPi && modelList.length === 0
-              ? "Выберите модель в настройках Pi"
+            value={modelList.length === 0
+              ? "Настройте модель в разделе «Модели»"
               : choice ? `${choice.providerID}/${choice.modelID}` : ""}
             options={modelList.map((m) => {
               const peak = m.providerID === "deepseek" ? deepseekPeakStatus(priceNow) : null;
@@ -413,17 +402,6 @@ export function Composer() {
               }
             />
           )}
-          {!isPi && <SelectMenu
-            label="Профиль OpenCode"
-            className="composer-agent-picker"
-            value={store.getAgentChoice() ?? ""}
-            options={store
-              .primaryAgentNames()
-              .map((name) => ({ value: name, label: name }))}
-            onChange={(name) =>
-              store.setAgentOverride(s.directory ?? "*", name)
-            }
-          />}
           </div>
           <div className="composer-actions">
           <VoiceInput disabled={!connected || s.ui.workspacePreparing} onActiveChange={setVoiceActive} />
@@ -443,7 +421,7 @@ export function Composer() {
             title={queueEdit ? "Применить изменения к запросу в очереди" : undefined}
             disabled={
               (!queueEdit && !connected) ||
-              (!draft.trim() && !attachments.length) ||
+              (!draft.trim() && !attachments.length && !kept.length) ||
               s.ui.sending ||
               s.ui.workspacePreparing ||
               s.ui.runtimeLoading

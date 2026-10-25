@@ -11,17 +11,16 @@ const fixture = vi.hoisted(() => ({
   close: vi.fn(),
   skills: vi.fn(),
 }));
+// The runtime is reached through store.maybeBackend(): only the live-worker
+// report (GET /extensions) is used here; MCP state comes from worker reports.
 vi.mock("../src/state/store", () => ({
   useAppState: () => fixture.state,
   store: {
     currentHost: () => null,
     engineIdFor: () => "pi",
-    client: { request: fixture.request },
+    maybeBackend: () => ({ client: { extensions: fixture.request } }),
+    mcpServerStatuses: () => [],
     configureSharedTools: fixture.configure,
-    pi: () => ({
-      closeSession: fixture.close,
-      loadedSkillCommands: fixture.skills,
-    }),
   },
 }));
 vi.mock("../src/capabilities/integration", () => ({
@@ -71,9 +70,7 @@ beforeEach(() => {
     if (n === "shared_save") return catalog;
     return true;
   });
-  fixture.request.mockImplementation(async (_m, p) =>
-    p === "/skill" ? [] : {},
-  );
+  fixture.request.mockImplementation(async () => ({ sessions: [], mcp: null }));
   fixture.skills.mockResolvedValue([]);
   fixture.configure.mockResolvedValue(undefined);
   const el = document.createElement("div");
@@ -108,13 +105,16 @@ function input(label: string, text: string) {
     e.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
-it("does not infer Pi/OpenCode readiness from files existing", async () => {
+it("does not infer agent readiness from files existing", async () => {
   await mount();
-  expect(document.body.textContent).toContain("Не подтверждено");
+  // The runtime publishes no loaded-skill report: a skill on disk is "not checked", never "found by the agent".
+  expect(document.body.textContent).toContain("Агент: Не проверено");
+  expect(document.body.textContent).not.toContain("Обнаружен агентом");
   expect(document.body.textContent).toContain("Не установлен");
   expect(fixture.invoke.mock.calls.some((c) => c[0] === "shared_probe")).toBe(
     false,
   );
+  expect(fixture.request).toHaveBeenCalledWith("/own-project");
 });
 it("preserves source scope and refuses changes during another busy agent", async () => {
   fixture.state.activityStatuses = { other: { type: "busy" } };
@@ -146,11 +146,15 @@ it("registers the source without rewriting its files and saves only its own regi
     }),
   );
 });
-it("closing a current Pi process is explicit and never deletes history", async () => {
+// Retired: "closing a current Pi process is explicit and never deletes history".
+// No agent process exists to close; SDK reload/newSession preserving the
+// transcript is covered by resources/agent/test/sdk-worker-ui.node.ts.
+it("offers no action that closes, restarts or clears the running agent session", async () => {
+  fixture.request.mockImplementation(async () => ({ sessions: [{ sessionID: "own" }], mcp: null }));
   await mount();
-  await click("Переоткрыть текущую Pi");
-  expect(fixture.close).toHaveBeenCalledWith("own");
-  expect(document.body.textContent).toContain("История сохранена");
+  for (const text of ["Переоткрыть текущую Pi", "Закрыть", "Перезапустить"])
+    expect([...document.querySelectorAll("button")].some((b) => b.textContent === text)).toBe(false);
+  expect(fixture.close).not.toHaveBeenCalled();
 });
 
 it("a bearer change saves a public revision but never the credential in the registry", async () => {
@@ -181,15 +185,16 @@ it("a bearer change saves a public revision but never the credential in the regi
   );
 });
 
-it("actual engine discovery outranks a standard-directory compatibility estimate", async () => {
-  catalog.skills[0].engines = ["pi"];
-  fixture.request.mockImplementation(async (_m, p) =>
-    p === "/skill"
-      ? [{ name: "check-ui", location: "/common/check-ui/SKILL.md" }]
-      : p === "/experimental/tool/ids"
-        ? []
-        : {},
-  );
+// Retired with OpenCode: its /skill discovery endpoint. The runtime loads skills
+// through capabilities.prepare (skillPaths) and reports no per-skill evidence,
+// so a skill for another agent and a disabled source stay explicit, never "found".
+it("never claims live discovery: unsupported agents and disabled sources are explicit", async () => {
+  catalog.skills = [
+    { ...catalog.skills[0], engines: ["opencode"] },
+    { ...catalog.skills[0], path: "/common/off/SKILL.md", name: "off", enabled: false },
+  ];
   await mount();
-  expect(document.body.textContent).toContain("OpenCode: Обнаружен агентом");
+  expect(document.body.textContent).toContain("Агент: Другой агент");
+  expect(document.body.textContent).toContain("Агент: Выключен источник; проверьте сессию");
+  expect(document.body.textContent).not.toContain("Обнаружен агентом");
 });

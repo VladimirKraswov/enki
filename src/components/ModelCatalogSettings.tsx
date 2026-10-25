@@ -1,7 +1,7 @@
 // Настройки «Модели (Hub)»: общий каталог моделей хранится на Hub (там же, где
 // обновления), а это устройство решает, применять ли каталог, какие модели
-// исключить и когда перезапустить движок. Локальные провайдеры пользователя
-// remain untouched by the merge.
+// исключить и когда перечитать модели среды выполнения. Локальные провайдеры
+// пользователя при объединении не меняются.
 
 import { useEffect, useState } from "react";
 import { SettingHelp } from "./SettingHelp";
@@ -15,13 +15,28 @@ import {
   applyCatalog,
   fetchCatalog,
   publishCatalog,
+  type CatalogRefreshError,
 } from "../hub/modelCatalog";
-import { restartLocalServerIfNative } from "../native/localServer";
 
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const pretty = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
+
+/** The sole Enki 2.0 runtime applies only the Pi entry; OpenCode is optional 0.2.x compatibility. */
+export const PI_REQUIRED = "Нужна запись Pi (providerId и provider): только её применяет среда выполнения Enki 2.0. Блок OpenCode необязателен и нужен лишь ещё не обновлённым клиентам Enki 0.2.x.";
+
+/** A new catalog entry: Pi only (no OpenCode executable or provider is required). */
+export function newCatalogModel(index: number): HubModel {
+  return {
+    id: `model-${index}`,
+    label: "Новая модель",
+    pi: {
+      providerId: `local-model-${index}`,
+      provider: { baseUrl: "http://127.0.0.1:8000/v1", api: "openai-completions", apiKey: "local", models: [] },
+    },
+  };
+}
 
 const parseJson = (text: string, title: string): Record<string, unknown> => {
   let parsed: unknown;
@@ -73,7 +88,7 @@ function ModelDraft({
       };
       if (draft.opencodeId.trim() || draft.opencodeProvider.trim()) {
         if (!PROVIDER_ID.test(draft.opencodeId.trim()))
-          throw new Error("providerId OpenCode: без пробелов, до 64 символов");
+          throw new Error("providerId OpenCode (совместимость 0.2.x): без пробелов, до 64 символов");
         next.opencode = {
           providerId: draft.opencodeId.trim(),
           provider: parseJson(draft.opencodeProvider, "provider OpenCode"),
@@ -87,8 +102,7 @@ function ModelDraft({
           provider: parseJson(draft.piProvider, "provider Pi"),
         };
       }
-      if (!next.opencode && !next.pi)
-        throw new Error("Нужен хотя бы один движок (OpenCode или Pi)");
+      if (!next.pi) throw new Error(PI_REQUIRED);
       if (draft.controlService.trim() || draft.controlBindings.trim()) {
         if (!MODEL_ID.test(draft.controlService.trim())) throw new Error("Некорректный id сервиса Hub");
         const bindings = parseJson(draft.controlBindings, "Привязки сервиса Hub");
@@ -111,12 +125,10 @@ function ModelDraft({
           <div className="setting-label">
             <span>{model.id}</span>
             <small>
-              {[
-                model.opencode ? `OpenCode: ${model.opencode.providerId}` : null,
-                model.pi ? `Pi: ${model.pi.providerId}` : null,
-              ]
-                .filter(Boolean)
-                .join(" · ") || "нет настроенных движков"}
+              {model.pi
+                ? [`Pi: ${model.pi.providerId}`, model.opencode ? `совместимость 0.2.x (OpenCode): ${model.opencode.providerId}` : null]
+                  .filter(Boolean).join(" · ")
+                : "Нет записи Pi — Enki 2.0 эту модель не применяет"}
             </small>
             {model.note ? <small>{model.note}</small> : null}
           </div>
@@ -156,18 +168,18 @@ function ModelDraft({
             ))}
             {(
               [
-                ["providerId OpenCode", "opencodeId", "local-artemis"],
-                ["provider OpenCode (JSON)", "opencodeProvider", pretty({ npm: "@ai-sdk/openai-compatible", options: { baseURL: "http://127.0.0.1:18021/v1", apiKey: "local" }, models: {} })],
-                ["providerId Pi", "piId", "local-artemis"],
-                ["provider Pi (JSON)", "piProvider", pretty({ baseUrl: "http://127.0.0.1:18008/v1", api: "openai-completions", apiKey: "local", models: [] })],
-                ["Привязки сервиса Hub (JSON)", "controlBindings", pretty({"artemis31-v100": "artemis31-v100"})],
+                ["providerId Pi", "piId", "local-artemis", "Обязательно: эту запись применяет среда выполнения Enki."],
+                ["provider Pi (JSON)", "piProvider", pretty({ baseUrl: "http://127.0.0.1:18008/v1", api: "openai-completions", apiKey: "local", models: [] }), "Обязательно: адрес и модели для среды выполнения Enki."],
+                ["Привязки сервиса Hub (JSON)", "controlBindings", pretty({"artemis31-v100": "artemis31-v100"}), "Пусто — модель без управления через Hub."],
+                ["providerId OpenCode (совместимость 0.2.x)", "opencodeId", "local-artemis", "Необязательно: только для ещё не обновлённых клиентов Enki 0.2.x; Enki 2.0 не запускает OpenCode и эту запись не применяет."],
+                ["provider OpenCode (JSON, совместимость 0.2.x)", "opencodeProvider", pretty({ npm: "@ai-sdk/openai-compatible", options: { baseURL: "http://127.0.0.1:18021/v1", apiKey: "local" }, models: {} }), "Необязательно: пусто — клиенты 0.2.x эту модель не получат."],
               ] as const
-            ).map(([title, key, placeholder]) => (
+            ).map(([title, key, placeholder, hint]) => (
               <div className="setting-row" key={key}>
                 <div className="setting-label">
                   <label htmlFor={`catalog-${index}-${key}`}>{title}</label>
-                  {key === "controlBindings" && <SettingHelp topic={title} description="JSON-объект: идентификатор модели в OpenCode или Pi → точный идентификатор в реестре сервиса. Каждая настроенная модель должна иметь привязку. Hub проверяет её перед загрузкой; названия моделей для маршрутизации не используются."/>}
-                  <small>Пусто — движок не настраивается</small>
+                  {key === "controlBindings" && <SettingHelp topic={title} description="JSON-объект: идентификатор модели в каталоге Pi → точный идентификатор в реестре сервиса. Каждая настроенная модель должна иметь привязку. Hub проверяет её перед загрузкой; названия моделей для маршрутизации не используются."/>}
+                  <small>{hint}</small>
                 </div>
                 <div className="setting-control">
                   <textarea
@@ -237,16 +249,14 @@ export function ModelCatalogSettings() {
       return;
     }
     if (!state.enabled) {
-      setError("Включите «Применять на этом устройстве», чтобы каталог писался в настройки движков.");
+      setError("Включите «Применять на этом устройстве», чтобы каталог писался в настройки моделей среды выполнения.");
       return;
     }
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const { report, appliedOpencode, appliedPi } = await applyCatalog(catalog, state, (ids) =>
-        store.setHubModels({ ...state, appliedOpencode: ids }),
-      );
+      const { report, appliedOpencode, appliedPi } = await applyCatalog(catalog, state, { client: store.client, remote: !!store.currentHost() });
       store.setHubModels({
         ...state,
         appliedVersion: catalog.version,
@@ -259,10 +269,14 @@ export function ModelCatalogSettings() {
       if (report.removed.length) parts.push(`удалены: ${report.removed.join(", ")}`);
       setNotice(
         parts.length
-          ? `Каталог v${catalog.version} применён — ${parts.join("; ")}. Перезапустите движок OpenCode; Pi подхватит настройки при следующем запуске чата.`
+          ? `Каталог v${catalog.version} применён — ${parts.join("; ")}. Среда выполнения перечитала список моделей.`
           : `Каталог v${catalog.version} уже соответствует локальным настройкам.`,
       );
     } catch (failure) {
+      // CatalogRefreshError: the file was committed. Record ownership (not the
+      // version, so Apply stays offered) so a later removal can still remove them.
+      const owned = (failure as Partial<CatalogRefreshError> | null)?.appliedPi;
+      if (Array.isArray(owned)) store.setHubModels({ ...state, appliedOpencode: [], appliedPi: owned });
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setBusy(false);
@@ -286,20 +300,13 @@ export function ModelCatalogSettings() {
       setBusy(false);
     }
   };
+  /** The runtime re-reads its model configuration; running turns are not interrupted. */
   const restart = async () => {
-    if (busySession) {
-      setError("Дождитесь завершения работающего агента: перезапуск движка прервёт его ход.");
-      return;
-    }
     setBusy(true);
     setError("");
     try {
-      const restarted = await restartLocalServerIfNative(
-        prefs.localEndpoint ?? prefs.endpoint,
-        prefs.localOpenCodeProgram,
-      );
-      if (!restarted) throw new Error("Перезапуск доступен в установленном приложении.");
-      setNotice("Движок OpenCode перезапущен с новыми моделями.");
+      await store.refreshModelCatalog();
+      setNotice("Каталог моделей среды выполнения обновлён. Новые запросы используют обновлённые модели.");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -369,7 +376,7 @@ export function ModelCatalogSettings() {
                 Применить на этом устройстве
               </button>
               <button className="btn" disabled={busy} onClick={() => void restart()}>
-                Перезапустить движок OpenCode
+                Обновить модели
               </button>
             </div>
           </div>
@@ -436,23 +443,8 @@ export function ModelCatalogSettings() {
               <button
                 className="btn"
                 disabled={busy}
-                onClick={() =>
-                  setModels([
-                    ...models,
-                    {
-                      id: `model-${models.length + 1}`,
-                      label: "Новая модель",
-                      opencode: {
-                        providerId: `local-model-${models.length + 1}`,
-                        provider: {
-                          npm: "@ai-sdk/openai-compatible",
-                          options: { baseURL: "http://127.0.0.1:8000/v1", apiKey: "local" },
-                          models: {},
-                        },
-                      },
-                    },
-                  ])
-                }
+                // Pi only: an OpenCode block for 0.2.x clients may be added by hand.
+                onClick={() => setModels([...models, newCatalogModel(models.length + 1)])}
               >
                 Добавить модель
               </button>

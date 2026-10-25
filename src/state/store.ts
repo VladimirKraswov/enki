@@ -1,28 +1,22 @@
-import {inputBudget, transferSource, waitForSummary} from './contextTransfer';
+import { recoveryText, requestModelTransition, transitionText, type ContextTransitionProgress } from "./modelTransition";
 import {McpNotices} from '../capabilities/notices';
-import {applyGlobalPlugins} from '../api/configReload';
-import {refreshGlobalPolicy} from '../capabilities/globalPolicy';
-import { agentParts, steeringParts, scheduleWakeReminder } from "../agent/promptPolicy";
+import type { RuntimeServerStatus } from '../capabilities/registry';
 import { prepareWorkshop, resolveWorkshop, isWorkshopSession, type WorkshopRecord } from "../workshop/workspace";
-import { ownWork } from "../operations/ownership";
 import { StreamNotifications, selectedSnapshot, shallowEqual } from "./notifications";
-import { DEFAULT_BASE_URL } from "../api/client";
-import { NotDispatched, operationJournal, type Operation } from "../operations/journal";
-import { PromptQueueController, isQueuePausingError } from "./promptQueue";
+import { ledgerAuthority, NotDispatched, operationJournal, type Operation } from "../operations/journal";
+import { PromptQueueController } from "./promptQueue";
+import { acknowledged, blobToDataUrl, installationId, pruneQueues, queueCutoverItems, unaddressableQueueItems } from "./cutover";
 import { errText } from "./errors";
-import { describeMessageError } from "../chat/errors";
 import { SubmissionLifecycle, type Submission } from "./submission";
 import { projectErrorText } from "../api/projectError";
 import type { MessagePart } from '../api/types';
 import { initialState } from './initial';
 import type { AppState, UiState } from './types';
 export type { AppState, UiState, ConnectionState, ConnectionPhase } from './types';
-import { chooseOpenCodeModel, choosePiModel, parseModelId, piModelInfo, type ModelChoice } from './modelChoice';
-import {configureShared,capabilityNative,invalidateCapabilities} from "../capabilities/integration";
+import { chooseModel, legacyModelChoice, parseModelId, type ModelChoice } from './modelChoice';
+import {invalidateCapabilities} from "../capabilities/integration";
 import { modelServices, type ModelService } from "../models/services";
 import type { HubModelServices } from "../models/hub";
-import { ScheduleBlocked, type ScheduledTask, type DispatchResult } from "../schedules/tasks";
-import { chatBlocker, liveModelProblem, modelProblem } from "../schedules/preflight";
 import { untilAborted } from "../util/abort";
 import { configureLocalBrowser, invalidateBrowserSetup, browserSetupSnapshot, openSessionBrowser } from "../browser/integration";
 import { browserTaskKey, browserEfforts, browserDefaultEffort } from "../browser/task";
@@ -31,14 +25,7 @@ import { isLocalComputer } from "./computer";
 import { isNative } from "../native/platform";
 import { attachmentParts, stageArchive, type ArchiveStager } from '../attachments/archive';
 import { applyAppearance, normalizeAppearance, type Appearance } from "./appearance";
-import {
-  connectSsh,
-  prepareChat,
-  remoteKey,
-  hostHeaders,
-  validRemote,
-  type RemoteHost,
-} from "../native/hosts";
+import { validRemote, type RemoteHost } from "../native/hosts";
 import { contextUsage } from "./context";
 import { accessRules, accessMode, type AccessMode } from "./access";
 import { newMessageId, type QueuedPrompt } from "./queue";
@@ -53,36 +40,30 @@ import { DEFAULT_HELPER_ENDPOINT } from "../attachments/helper";
 // Designed to be testable: Tauri is only touched through theme/window niceties.
 
 import { useMemo, useSyncExternalStore } from "react";
-import { ApiError, ConnectionError, type OpenCodeClient } from "../api/client";
+import { ApiError, ConnectionError } from "../api/http";
 import type { AgentBackend } from "../agent/backend";
-import { asOpenCodeClient } from "../agent/opencode";
-import {
-  createBackend,
-  DEFAULT_BACKEND_ID,
-  findBackendDescriptor,
-  registerBackendDescriptor,
-} from "../agent/registry";
-import {
-  PiBackend,
-  piDescriptor,
-  PI_BACKEND_ID,
-} from "../agent/pi/backend";
-import { piBridge } from "../agent/pi/native";
-import { buildHandoffTranscript } from "./handoffTranscript";
+import { connectRuntime, workspaceKey as runtimeWorkspaceKey, type RuntimeTarget } from "../agent/registry";
+import type { RuntimeBackend } from "../agent/runtime/backend";
+import type { CutoverReceiptDTO, RuntimeClient, RuntimeSettingsDTO } from "../agent/runtime/client";
+import type { PromptPart } from "../../src-tauri/resources/agent/src/protocol";
+import { onTokenRotated, relayBroker } from "../agent/runtime/connection";
+import { activePluginUi } from "../agent/runtime/pluginUi/active";
+import { taskScheduler } from "../schedules/tasks";
+import { AgentDialogs, applySnapshot, routeRuntimeEvent, type RuntimeSyncHost } from "./runtimeSync";
+import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
 import {
   DEFAULT_ENGINE,
   engineForDirectory,
   engineForSession,
   modelScope,
-  piAvailability,
   type EngineId,
 } from "./engines";
 import { completionChime } from "../native/sound";
-import { startLocalServerIfNative } from "../native/localServer";
 import { emptySidebarList, emptyRecentList, mergeSidebarSessions } from "./sidebar";
 import type {
   ModelInfo,
   PermissionRequest,
+  PromptRequest,
   ProviderInfo,
   QuestionRequest,
   ServerEvent,
@@ -99,134 +80,68 @@ import {
   reconcileHistoryEvents,
   type ChatRootState,
 } from "./chatReducer";
+import { HistoryJournal } from "./historyJournal";
 import {
   DEFAULT_PREFS,
+  adoptSnapshot,
   flushPrefs,
   draftKey,
+  legacyLocalSnapshotKey,
   loadPrefs,
   savePrefs,
   switchEndpointPrefs,
   type Prefs,
 } from "./prefs";
 
+/** Loaded inactive chat transcripts kept in WebView memory (see evictInactiveTranscripts). */
+export const RETAINED_TRANSCRIPTS = 12;
+/** Idle slots of other chats that were only streamed (never history-loaded). */
+export const RETAINED_STREAM_SLOTS = 12;
+/** Chats whose last shared-MCP status is kept (the open chat reports again on use). */
+export const MCP_STATUS_LIMIT = 64;
+
+/** Runtime compaction settings → the context meter's thresholds. */
+function compactionOf(settings: RuntimeSettingsDTO): AppState["compaction"] {
+  const c = settings.compaction;
+  return { auto: c.enabled, ...(c.reserveTokens !== undefined ? { reserved: c.reserveTokens } : {}),
+    ...(c.keepRecentTokens !== undefined ? { preserve_recent_tokens: c.keepRecentTokens } : {}) };
+}
+
 class Store {
   state: AppState = initialState(typeof localStorage !== "undefined" ? loadPrefs() : { ...DEFAULT_PREFS });
   /**
-   * The OpenCode workspace backend. Pi conversations use a lazily created
-   * backend through the same neutral `AgentBackend` contract.
+   * The Enki Runtime of the active workspace (this computer or one SSH host).
+   * Replaced only when the workspace changes, so `backend === this.backend`
+   * keeps working as a staleness guard. A disconnected runtime keeps its
+   * instance: its requests then fail with a real connection error.
    */
-  backend: AgentBackend = createBackend(
-    DEFAULT_BACKEND_ID,
-    this.state.prefs.endpoint,
-  );
+  private runtime: RuntimeBackend | null = null;
 
-  /**
-   * OpenCode-only transport for the surfaces outside the neutral contract: the PTY
-   * terminal, the `/mcp` inventory and the JSONC config editor. Callers that can be
-   * reached with another backend must gate on `backend.capabilities` first.
-   */
-  get client(): OpenCodeClient {
-    const client = asOpenCodeClient(this.backend);
-    if (!client)
-      throw new Error(
-        "Эта возможность доступна только при подключении к OpenCode.",
-      );
-    return client;
+  /** The single agent backend. Before the first connection this is an error, not a stand-in. */
+  get backend(): RuntimeBackend {
+    if (!this.runtime) throw new ConnectionError("Среда выполнения Enki ещё не подключена.");
+    return this.runtime;
   }
 
-  /**
-   * Second engine. Created lazily so a user who never selects Pi never pays for
-   * detection, and so the browser preview stays functional without a native host.
-   */
-  private piEngine: PiBackend | null = null;
-  piInstalled = false;
+  /** Typed runtime transport for files, git, PTY, settings, models and migrations. */
+  get client(): RuntimeClient {
+    return this.backend.client;
+  }
 
-  // ---------- engines ----------
+  /** For render paths that may run before the first connection: null instead of throwing. */
+  maybeBackend(): RuntimeBackend | null {
+    return this.runtime;
+  }
+
+  /** Every chat — new, imported or continued — runs on the bundled runtime. */
+  readonly piInstalled = true;
+
+  // ---------- engine compatibility ----------
   //
-  // `backend` above is the *workspace* backend: connection, projects, folders and
-  // the sidebar always come from OpenCode. A conversation, however, runs on the
-  // engine chosen for its chat, which may be Pi.
+  // One executing agent remains. These helpers keep their names for existing
+  // callers and all resolve to the runtime; none of them starts a process.
 
-  /** The Pi engine, created on first use and wired to this store. */
-  pi(): PiBackend {
-    if (!this.piEngine) {
-      this.piEngine = new PiBackend({
-        choice: (directory) => {
-          const settings = this.state.prefs.pi ?? {};
-          const model = this.getModelChoice(PI_BACKEND_ID, directory);
-          return {
-            program: settings.program,
-            nodeProgram: settings.nodeProgram,
-            browserEnabled: browserEnabled(this.state.prefs),
-            provider: model?.providerID ?? settings.provider,
-            model: model ? `${model.providerID}/${model.modelID}` : settings.model,
-            thinking: model?.variant ?? settings.thinking,
-            extensions: settings.lspEnabled === false ? [] : settings.extensions,
-            // Absent means "ask": a missing preference must never read as
-            // blanket approval for Pi's file and shell tools.
-            toolPolicy: settings.toolPolicy === "full" ? "full" : "ask",
-          };
-        },
-        meta: {
-          all: () => this.state.prefs.piSessions ?? {},
-          save: (meta) => {
-            this.mutate((x) => ({
-              prefs: {
-                ...x.prefs,
-                piSessions: { ...x.prefs.piSessions, [meta.id]: meta },
-              },
-            }));
-            this.persistPrefs();
-          },
-          remove: (id) => {
-            this.mutate((x) => {
-              const piSessions = { ...x.prefs.piSessions };
-              delete piSessions[id];
-              return { prefs: { ...x.prefs, piSessions } };
-            });
-            this.persistPrefs();
-          },
-        },
-        onActivity: (directory, sessionId, status) => {
-          if (isLocalComputer(this.state.prefs.endpoint, !!this.currentHost()) && directory !== this.state.directory)
-            this.observeSessionStatus(sessionId, status, directory);
-        },
-        onQueueCleared: (directory, sessionId, messages) => {
-          if (!messages.length) return;
-          const key = draftKey(sessionId, directory);
-          this.mutate(s => {
-            const workspace = s.prefs.localEndpoint ?? DEFAULT_BASE_URL;
-            const current = (s.prefs.workspaceKey ?? s.prefs.endpoint) === workspace;
-            const target = current ? s.prefs : s.prefs.endpointState?.[workspace] ?? {};
-            const drafts = { ...target.drafts, [key]: [target.drafts?.[key], ...messages].filter(Boolean).join("\n\n") };
-            return { prefs: current ? { ...s.prefs, drafts } : { ...s.prefs, endpointState: {
-              ...s.prefs.endpointState, [workspace]: { ...target, drafts },
-            } } };
-          });
-          savePrefs(this.state.prefs);
-          if (!flushPrefs()) throw Error("Не удалось сохранить остановленные уточнения.");
-        },
-        onNotice: (_directory, _session, notice) =>
-          this.patchUi({ toast: notice.text }),
-        onDialog: (request) => {
-          if (!this.piDialogs.some(d => d.key === request.key && d.request.id === request.request.id)) this.piDialogs.push(request);
-          this.patchUi({ piDialog: this.piDialogs[0] ?? null });
-        },
-        onDialogExpired: (key, id) => {
-          this.piDialogs = this.piDialogs.filter(d => d.key !== key || d.request.id !== id);
-          this.patchUi({ piDialog: this.piDialogs[0] ?? null, toast: "Запрос Pi истёк. Действие не выполнено." });
-        },
-        onHistoryStale: (directory, sessionId) => {
-          // Streaming used provisional ids; re-read Pi's durable transcript.
-          if (this.state.activeSessionId === sessionId && this.state.directory === directory)
-            void this.loadHistory(sessionId, directory);
-        },
-      });
-    }
-    return this.piEngine;
-  }
-
-  /** Engine id for a chat, honouring the per-chat override then the folder. */
+  /** Engine id for a chat: always the runtime. */
   engineIdFor(
     sessionId: string | null = this.state.activeSessionId,
     directory: string | null = this.state.directory,
@@ -238,199 +153,71 @@ class Store {
     return engineForDirectory(this.state.prefs, directory);
   }
 
-  /** Backend for an engine id. Unknown ids fall back to the workspace backend. */
-  engine(id: EngineId = this.engineIdFor()): AgentBackend {
-    return id === PI_BACKEND_ID ? this.pi() : this.backend;
+  /** The runtime backend; the id is accepted for existing callers. */
+  engine(_id: EngineId = this.engineIdFor()): RuntimeBackend {
+    return this.backend;
   }
 
-  /** Engine driving the chat that is open right now. */
-  conversation(): AgentBackend {
-    return this.engine(this.engineIdFor());
+  /** Backend driving the chat that is open right now. */
+  conversation(): RuntimeBackend {
+    return this.backend;
   }
 
-  /** A Pi chat is identified by app-owned metadata, not by the OpenCode server. */
-  isPiSession(sessionId: string): boolean {
-    return Boolean(this.state.prefs.piSessions?.[sessionId]) || this.state.prefs.sessionEngine?.[sessionId] === PI_BACKEND_ID;
+  /** Every chat is a runtime (Pi SDK) chat now; imported archives included. */
+  isPiSession(_sessionId: string): boolean {
+    return true;
   }
 
-  setProjectEngine(directory: string, engine: EngineId): void {
-    if (!this.state.activeSessionId && directory === this.state.directory && this.engineIdFor() !== engine)
-      this.invalidateSelection();
-    this.mutate((x) => ({
-      prefs: {
-        ...x.prefs,
-        projectEngine: { ...x.prefs.projectEngine, [directory]: engine },
-      },
-    }));
-    this.persistPrefs();
+  /** A read-only chat imported from an OpenCode database archive. */
+  isLegacySession(sessionId: string | null): boolean {
+    if (!sessionId) return false;
+    const session = this.state.sessions.find(x => x.id === sessionId) ??
+      this.state.archivedSessions.find(x => x.id === sessionId);
+    return session?.origin?.kind === "opencode";
   }
 
   /**
-   * Choose the engine for the chat being composed. An existing chat keeps the
-   * engine that produced its transcript: switching would silently hand another
-   * agent a conversation it never had.
+   * Engine selection no longer exists: one agent executes everything. A request
+   * for another engine (old control bridge, stale UI) is refused visibly.
    */
-  setSessionEngine(sessionId: string | null, engine: EngineId): void {
-    if (sessionId) {
-      const current = this.engineIdFor(sessionId, this.state.directory);
-      if (current !== engine) {
-        // A finished transcript cannot move between engines: they do not share
-        // a format or a store. Offer the handoff rather than dead-ending.
-        const session =
-          this.state.sessions.find((x) => x.id === sessionId) ??
-          this.state.archivedSessions.find((x) => x.id === sessionId) ??
-          null;
-        if (!session) {
-          this.patchUi({ toast: "Чат недоступен для переноса." });
-          return;
-        }
-        this.patchUi({ engineSwitch: { session, from: current, to: engine } });
-        return;
-      }
-      this.mutate((x) => ({
-        prefs: {
-          ...x.prefs,
-          sessionEngine: { ...x.prefs.sessionEngine, [sessionId]: engine },
-        },
-      }));
-    } else if (this.state.directory) {
-      this.setProjectEngine(this.state.directory, engine);
-      return;
-    } else {
-      if (this.engineIdFor() !== engine) this.invalidateSelection();
-      this.mutate((x) => ({ prefs: { ...x.prefs, newChatEngine: engine } }));
-    }
-    this.persistPrefs();
+  setSessionEngine(_sessionId: string | null, engine: EngineId): void {
+    if (engine !== RUNTIME_AGENT_ID)
+      this.patchUi({ toast: "Выбор движка больше не поддерживается: все чаты выполняет Enki." });
   }
 
-  /**
-   * Whether an engine can accept work right now. Pi is a local process and does
-   * not depend on the OpenCode server being reachable — gating it behind
-   * another engine's health would be plainly wrong.
-   */
-  engineReady(id: EngineId = this.engineIdFor()): boolean {
-    return id === PI_BACKEND_ID
-      ? this.piInstalled && piAvailability(this.state.prefs).available
-      : this.state.connection.phase === "connected";
+  /** The runtime of the active workspace accepts work only while connected. */
+  engineReady(_id: EngineId = this.engineIdFor()): boolean {
+    return this.state.connection.phase === "connected";
   }
 
-  /** Engine for a brand-new chat in the current folder. */
+  /** Engine for a brand-new chat: always the runtime. */
   newChatEngine(): EngineId {
-    return this.state.directory
-      ? this.engineIdForDirectory(this.state.directory)
-      : (this.state.prefs.newChatEngine ?? DEFAULT_ENGINE);
+    return DEFAULT_ENGINE;
   }
 
-  /**
-   * A request is still valid when the engine it used is the one still in charge.
-   * The Pi engine instance is stable for the process; OpenCode's is replaced on
-   * every reconnect, which is exactly the staleness this guards.
-   */
+  /** A request is still valid while its runtime is the active workspace's runtime. */
   private engineStillActive(backend: AgentBackend): boolean {
-    return backend === this.backend || backend === this.piEngine;
-  }
-
-  /** Pi chats for a folder; empty when Pi is not installed or not selected. */
-  private async piListFor(directory: string): Promise<Session[]> {
-    if (!piAvailability(this.state.prefs).available) return [];
-    const anyPiHere =
-      this.engineIdForDirectory(directory) === PI_BACKEND_ID ||
-      Object.values(this.state.prefs.piSessions ?? {}).some(
-        (m) => m.directory === directory,
-      );
-    if (!anyPiHere) return [];
-    try {
-      return await this.pi().listSessions(directory);
-    } catch {
-      // Pi being unavailable must never break the OpenCode session list.
-      return [];
-    }
+    return backend === this.runtime;
   }
 
   /**
-   * Continue an existing chat on the other engine, honestly.
-   *
-   * The source conversation is never moved or rewritten: a new chat is created
-   * on the target engine, seeded with a labelled transcript, and its metadata
-   * records where it came from so the UI can show the provenance. Nothing is
-   * sent until the user presses Send — the transcript lands in the draft.
+   * Explicit continuation of a read-only imported chat. The runtime creates a
+   * new Pi SDK session seeded with the mapped archive entries; the archive is
+   * never rewritten and no old prompt is replayed. Nothing is sent here.
    */
-  async continueOnEngine(session: Session, engine: EngineId): Promise<boolean> {
-    const directory = session.directory;
-    const from = this.engineIdFor(session.id, directory);
-    if (from === engine) return false;
-    if (engine === PI_BACKEND_ID && !this.engineReady(PI_BACKEND_ID)) {
-      this.patchUi({ toast: "Pi недоступен: проверьте «Настройки → Движок Pi»." });
-      return false;
-    }
-    if (engine !== PI_BACKEND_ID && this.state.connection.phase !== "connected") {
-      this.patchUi({ toast: "OpenCode недоступен: подключитесь и повторите." });
-      return false;
-    }
-    if (!this.state.chat.sessions[session.id]) {
-      await this.loadHistory(session.id, directory);
-      if (this.state.ui.historyError) {
-        this.patchUi({ toast: "Не удалось прочитать историю для переноса." });
-        return false;
-      }
-    }
-    const label = (id: EngineId) => (id === PI_BACKEND_ID ? "Pi" : "OpenCode");
-    const transcript = buildHandoffTranscript(this.state.chat, session.id, {
-      sourceLabel: label(from),
-      sourceTitle: session.title,
-    });
-    if (!transcript.included) {
-      this.patchUi({ toast: "В этом чате нечего переносить." });
-      return false;
-    }
+  async continueLegacySession(session: Session): Promise<boolean> {
+    if (session.origin?.kind !== "opencode") return false;
+    const backend = this.backend, gen = this.connectionGeneration;
     try {
-      // The target engine creates its own chat; the source is never moved,
-      // rewritten or archived.
-      const created = await this.engine(engine).createSession({
-        directory,
-        title: `${session.title} · ${label(engine)}`,
-        permission: accessRules(this.state.prefs.newAccess ?? "inherit"),
-        ...(engine === PI_BACKEND_ID
-          ? {}
-          : {
-              agent: this.getAgentChoice() ?? undefined,
-            }),
-      });
+      const created = await backend.continueLegacy(session.id, session.directory);
+      if (backend !== this.runtime || gen !== this.connectionGeneration) return false;
       this.mutate((x) => ({
         prefs: {
           ...x.prefs,
-          sessionEngine: { ...x.prefs.sessionEngine, [created.id]: engine },
-          // Provenance is engine-neutral, so the banner works both ways.
           handoffOrigins: {
             ...x.prefs.handoffOrigins,
-            [created.id]: {
-              from: session.id,
-              fromEngine: from,
-              title: session.title,
-              directory,
-              omitted: transcript.omitted,
-            },
+            [created.id]: { from: session.id, fromEngine: "opencode", title: session.title, directory: session.directory, omitted: 0 },
           },
-          ...(engine === PI_BACKEND_ID
-            ? {
-                piSessions: {
-                  ...x.prefs.piSessions,
-                  [created.id]: {
-                    ...(x.prefs.piSessions?.[created.id] ?? {
-                      id: created.id,
-                      directory,
-                      title: created.title,
-                      created: Date.now(),
-                      updated: Date.now(),
-                    }),
-                    handoffFrom: session.id,
-                  },
-                },
-              }
-            : {}),
-          // The transcript lands in the draft: the user reviews and edits it,
-          // and nothing is sent until they press Send.
-          drafts: { ...x.prefs.drafts, [created.id]: transcript.text },
         },
         sessions: [created, ...x.sessions.filter((y) => y.id !== created.id)],
       }));
@@ -438,17 +225,19 @@ class Store {
       this.rememberActivitySession(created);
       this.updateSidebarSession(created);
       await this.selectSession(created.id);
-      this.patchUi({
-        engineSwitch: null,
-        toast: transcript.omitted
-          ? `Контекст перенесён в новый чат ${label(engine)}; ранние ${transcript.omitted} реплик(и) опущены. Проверьте черновик и отправьте.`
-          : `Контекст перенесён в новый чат ${label(engine)}. Проверьте черновик и отправьте.`,
-      });
+      this.patchUi({ toast: "Создан новый чат с историей из архива. Исходный чат не изменён." });
       return true;
     } catch (e) {
-      this.patchUi({ toast: `Не удалось создать чат ${label(engine)}: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось продолжить чат из архива: ${errText(e)}` });
       return false;
     }
+  }
+
+  /** Former engine handoff: the only remaining continuation is from an archive. */
+  continueOnEngine(session: Session, _engine: EngineId): Promise<boolean> {
+    if (session.origin?.kind === "opencode") return this.continueLegacySession(session);
+    this.patchUi({ toast: "Этот чат уже выполняется в Enki." });
+    return Promise.resolve(false);
   }
 
   /** Where this chat's context came from, for either engine. */
@@ -462,6 +251,7 @@ class Store {
   } | null {
     if (!sessionId) return null;
     const record = this.state.prefs.handoffOrigins?.[sessionId];
+    // Former Pi CLI chats recorded their handoff source in app metadata (read-only now).
     const legacy = this.state.prefs.piSessions?.[sessionId]?.handoffFrom;
     const from = record?.from ?? legacy;
     if (!from) return null;
@@ -480,64 +270,77 @@ class Store {
   }
 
   /**
-   * Materialize the app's own Pi LSP extension and its server list, then record
-   * the extension path so new Pi sessions load it. The user's own `~/.pi`
-   * configuration is never touched.
+   * Write the app-owned language-server list the runtime's LSP extension reads.
+   * Native command on this computer only; a remote host keeps its own setup.
    */
   async setupPiLsp(): Promise<{ servers: string[]; missing: string[] }> {
-    const setup = await piBridge().setupLsp(this.state.prefs.pi?.lspServerPaths ?? []);
-    this.setPiSettings({
-      extensions: [setup.extensionPath],
-      lspEnabled: true,
-    });
-    return {
-      servers: setup.servers.map((s) => `${s.id} · ${s.command}`),
-      missing: setup.missing,
-    };
+    if (this.currentHost() || !isNative()) throw new Error("Языковые серверы настраиваются в Enki на этом компьютере.");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const paths = this.state.prefs.agent?.lspServerPaths ?? this.state.prefs.pi?.lspServerPaths ?? [];
+    const setup = await invoke<{ configPath: string; servers: { id: string; command: string }[]; missing: string[] }>("runtime_setup_lsp", { extraPaths: paths });
+    // The runtime switch gates the extension; awaited so the caller reads the real state.
+    if (this.runtime) await this.runtime.client.saveSettings({ lspEnabled: true });
+    this.mutate((x) => ({ prefs: { ...x.prefs, pi: { ...x.prefs.pi, lspEnabled: true } } }));
+    this.persistPrefs();
+    return { servers: setup.servers.map((s) => `${s.id} · ${s.command}`), missing: setup.missing };
   }
 
   /**
-   * Background browser setup for the local engines. `force` restarts setup;
-   * `keepAttachments` is for engine-path/Pi changes that cannot affect an
-   * already confirmed OpenCode MCP connection, which must not be restarted
-   * under a running browser call. `backgroundDirectory` attaches a directory other
-   * than the open one; `null` prepares the runtime only (Pi loads it itself).
+   * Managed browser on this computer. The runtime attaches its browser tools to
+   * sessions opened after `browserEnabled` changes; open sessions keep theirs.
    */
-  configureBrowser(force = false, keepAttachments = false, backgroundDirectory?: string | null): Promise<unknown> {
+  configureBrowser(force = false, keepAttachments = false, _backgroundDirectory?: string | null): Promise<unknown> {
     if (force) invalidateBrowserSetup({ keepAttachments });
-    const endpoint = this.state.prefs.endpoint;
-    const client = this.client, generation = this.connectionGeneration;
+    const runtime = this.runtime, generation = this.connectionGeneration;
     const enabled = this.state.prefs.browser?.enabled;
     const node = this.state.prefs.browser?.nodeProgram;
-    const background = backgroundDirectory !== undefined;
     return configureLocalBrowser({
-      endpoint, directory: background ? backgroundDirectory : this.state.directory, remote: !!this.currentHost(),
+      local: !this.currentHost() && !!runtime,
       preferences: this.state.prefs.browser,
-      openCodeProgram: this.state.prefs.localOpenCodeProgram,
-      piProgram: this.state.prefs.pi?.program, piNodeProgram: this.state.prefs.pi?.nodeProgram,
-      current: () => generation === this.connectionGeneration && !this.currentHost() && this.state.prefs.endpoint === endpoint
+      current: () => generation === this.connectionGeneration && runtime === this.runtime && !this.currentHost()
         && this.state.prefs.browser?.enabled === enabled && this.state.prefs.browser?.nodeProgram === node,
-      activeDirectory: background ? undefined : () => this.state.directory,
-      request: (method, path, options) => client.request(method, path, options),
+      syncRuntime: async (on) => { if (runtime) await runtime.client.saveSettings({ browserEnabled: on }); },
     });
   }
 
   private mcpNotices=new McpNotices();
+  private readonly mcpStatuses = new Map<string, RuntimeServerStatus[]>();
+  /** Last shared-MCP status reported by this chat's worker (empty until it reports). */
+  mcpServerStatuses(sessionId: string | null): RuntimeServerStatus[] {
+    return sessionId ? this.mcpStatuses.get(sessionId) ?? [] : [];
+  }
+  /**
+   * Shared skills/MCP live in the native registry and are read by the runtime
+   * for each new session. After a registry change this re-reads the runtime's
+   * pool and announces servers that are not connected.
+   */
   async configureSharedTools(directory = this.state.directory, signal?:AbortSignal): Promise<void> {
-    if (!directory || !isNative() || !isLocalComputer(this.state.prefs.endpoint, !!this.currentHost())) return;
-    const endpoint=this.state.prefs.endpoint, client=this.client, generation=this.connectionGeneration;
-    const current=()=>!signal?.aborted&&generation===this.connectionGeneration&&this.state.prefs.endpoint===endpoint&&!this.currentHost();
-    const report = await configureShared({endpoint,directory,current,
-      request:(method,path,options)=>client.request(method,path,options),
-      refreshGlobal:paths=>refreshGlobalPolicy({endpoint,directory,paths,current,
-        request:(method,path,options)=>client.request(method,path,options),invoke:capabilityNative,
-        apply:plugins=>applyGlobalPlugins(client,plugins,current)}),
-    });
-    if(report.reloaded){invalidateBrowserSetup();if(browserEnabled(this.state.prefs))await this.configureBrowser(false,false,directory);}
-    if (current()) {
-      const toast=this.mcpNotices.update(JSON.stringify([endpoint,directory]),report.unavailable,this.state.ui.toast);
-      if(toast!==undefined)this.patchUi({toast});
-    }
+    invalidateCapabilities();
+    if (!directory || !this.runtime) return;
+    const runtime = this.runtime, generation = this.connectionGeneration;
+    const report = await runtime.client.extensions(directory);
+    if (signal?.aborted || generation !== this.connectionGeneration || runtime !== this.runtime) return;
+    const pool = (Array.isArray(report.mcp) ? report.mcp : []) as { key: string; server: string; state: string }[];
+    const issues = pool.filter(entry => entry.state === "closed").map(entry => ({ id: entry.key, name: entry.server }));
+    const toast = this.mcpNotices.update(JSON.stringify([runtime.workspace, directory]), issues, this.state.ui.toast);
+    if (toast !== undefined) this.patchUi({ toast });
+  }
+  /**
+   * After a CONFIRMED shared-registry/skill/capability commit on THIS computer:
+   * the local runtime re-reads the scope for new workers, reopens idle ones and
+   * marks busy ones pending (no abort, no replay). `directory` null = every
+   * folder (a global registry change). Null when not applicable: no runtime,
+   * a remote host (it never reads this computer's registry) or a stale answer.
+   */
+  async capabilitiesCommitted(directory: string | null): Promise<{ reopened: number; pending: number } | null> {
+    invalidateCapabilities();
+    if (!this.runtime || this.currentHost()) return null;
+    const runtime = this.runtime, generation = this.connectionGeneration;
+    const result = await runtime.client.refreshCapabilities(directory);
+    if (generation !== this.connectionGeneration || runtime !== this.runtime) return null;
+    const current = this.state.directory;
+    if (current && (directory === null || directory === current)) await this.configureSharedTools(current).catch(() => {});
+    return result;
   }
   browserTaskActive(): boolean {
     const id = this.state.activeSessionId;
@@ -545,13 +348,7 @@ class Store {
   }
   effortOptions(): string[] {
     const choice = this.getModelChoice(); if (!choice) return [];
-    const engine = this.engineIdFor();
-    const info = engine === PI_BACKEND_ID ? piModelInfo(this.state.piHealth, choice) : this.modelInfo(choice.providerID, choice.modelID);
-    const reasoning = engine === PI_BACKEND_ID
-      ? !!this.state.piHealth?.models.find(m => m.provider === choice.providerID && m.id === choice.modelID)?.reasoning
-      : !!info?.capabilities?.reasoning;
-    return browserEfforts(engine, info?.variants ?? undefined, reasoning, engine === PI_BACKEND_ID
-      ? this.state.piHealth?.models.find(m => m.provider === choice.providerID && m.id === choice.modelID)?.thinkingLevelMap : undefined);
+    return browserEfforts(this.modelInfo(choice.providerID, choice.modelID)?.variants);
   }
   setBrowserTask(enabled: boolean): void {
     const id = this.state.activeSessionId, choice = this.getModelChoice();
@@ -597,86 +394,129 @@ class Store {
   }
 
   setPiSettings(patch: Partial<NonNullable<Prefs["pi"]>>): void {
+    // Only LSP paths/toggle and the tool-policy hint remain meaningful; nothing is launched.
     this.mutate((x) => ({ prefs: { ...x.prefs, pi: { ...x.prefs.pi, ...patch } } }));
     this.persistPrefs();
-    void this.configureBrowser(true, true);
+    if (patch.toolPolicy && this.runtime)
+      void this.runtime.client.saveSettings({ defaultPolicy: patch.toolPolicy === "full" ? "full" : "ask" })
+        .catch(error => this.patchUi({ toast: `Не удалось сохранить политику инструментов: ${errText(error)}` }));
+    // The LSP switch is a runtime setting: it gates the language servers new workers load.
+    if (typeof patch.lspEnabled === "boolean" && this.runtime)
+      void this.runtime.client.saveSettings({ lspEnabled: patch.lspEnabled })
+        .then(() => this.patchUi({ toast: patch.lspEnabled ? "Языковые серверы включены для новых и переоткрытых чатов." : "Языковые серверы выключены для новых и переоткрытых чатов." }))
+        .catch(error => this.patchUi({ toast: `Не удалось сохранить переключатель LSP: ${errText(error)}` }));
   }
 
-  setLocalOpenCodeProgram(program?: string): void {
-    this.mutate((x) => ({ prefs: { ...x.prefs, localOpenCodeProgram: program } }));
-    this.persistPrefs();
-    void this.configureBrowser(true, true);
-  }
-
-  /**
-   * Ask the installed Pi what it can actually do. This starts a short-lived Pi
-   * process, so it is only ever triggered by an explicit user action or by
-   * opening the Pi settings section — never on a timer.
-   */
+  /** Re-read the runtime's model catalogue and health (explicit user action). */
   async refreshPiHealth(): Promise<void> {
-    // Global metadata never depends on project access or project extensions.
-    const directory = await piBridge().probeDirectory().catch(() => "");
-    const health = await this.pi().describe(directory);
-    this.piInstalled = health.install.installed;
-    this.mutate({ piHealth: health });
-    // Pi may have just been installed: rerun setup, keep OpenCode attachments.
-    void this.configureBrowser(true, true);
+    await this.loadRuntimeMetadata();
+  }
+  async refreshPiInstall(): Promise<void> {
+    await this.loadRuntimeMetadata();
   }
 
-  async refreshPiInstall(): Promise<void> {
-    try {
-      const install = await piBridge().detect(this.state.prefs.pi?.program, this.state.prefs.pi?.nodeProgram);
-      if (this.piInstalled !== install.installed) {
-        this.piInstalled = install.installed;
-        this.mutate({});
-      }
-      // A restored Pi chat or projectless Pi composer needs its model catalog
-      // immediately. A version-only probe leaves the picker empty until the
-      // user happens to visit Settings. This is a no-session metadata read,
-      // not a model request or an inference job.
-      if (install.installed) await this.refreshPiHealth();
-    } catch {
-      this.piInstalled = false;
+  // ---------- runtime-owned interaction state ----------
+  private agentDialogs = new AgentDialogs();
+  private dialogAnswering = new Set<string>();
+  private brokerRelays = new Set<string>();
+  private runtimeSync: RuntimeSyncHost = {
+    queue: queue => this.promptQueue.apply(queue),
+    replaceQueues: (queues, scope) => this.promptQueue.replaceAll(queues, scope),
+    dialog: current => { if (this.state.ui.agentDialog?.id !== current?.id) this.patchUi({ agentDialog: current }); },
+    schedule: (sessionID, task, id) => {
+      taskScheduler().observe(task ? { type: "schedule.updated", properties: { sessionID, task } } : { type: "schedule.removed", properties: { sessionID, id } });
       this.mutate({});
+    },
+    mcp: (sessionID, servers) => {
+      // Most recently reporting chats last; bounded like the other per-chat caches.
+      this.mcpStatuses.delete(sessionID); this.mcpStatuses.set(sessionID, servers);
+      if (this.mcpStatuses.size > MCP_STATUS_LIMIT) this.mcpStatuses.delete(this.mcpStatuses.keys().next().value!);
+      this.mutate({});
+    },
+    notice: (sessionID, text) => { if (!sessionID || sessionID === this.state.activeSessionId) this.patchUi({ toast: text }); },
+    broker: request => void this.relayBroker(request),
+    contextTransition: progress => {
+      if (progress.operation) {
+        this.transitionProgress.set(progress.operation, progress);
+        if (this.transitionProgress.size > 64) this.transitionProgress.delete(this.transitionProgress.keys().next().value!);
+      }
+      for (const listener of this.transitionListeners) listener(progress);
+    },
+    // Delivered only from the current runtime's streams (both are generation-fenced).
+    settings: settings => {
+      this.mutate({ compaction: compactionOf(settings) });
+      for (const listener of this.settingsListeners) listener(settings);
+    },
+  };
+  private readonly settingsListeners = new Set<(settings: RuntimeSettingsDTO) => void>();
+  /** Settings the runtime saved, from any client. Nothing is re-sent on receipt. */
+  onRuntimeSettings(listener: (settings: RuntimeSettingsDTO) => void): () => void {
+    this.settingsListeners.add(listener);
+    return () => { this.settingsListeners.delete(listener); };
+  }
+  /** Latest `session.context_transition` per runtime operation (command id). */
+  private readonly transitionProgress = new Map<string, ContextTransitionProgress>();
+  private readonly transitionListeners = new Set<(progress: ContextTransitionProgress) => void>();
+
+  /** Remote runtimes ask the attached desktop for Hub operations; answered once per id. */
+  private async relayBroker(request: { id: string; method: string; params: Record<string, unknown> }): Promise<void> {
+    const runtime = this.runtime;
+    if (!runtime || this.brokerRelays.has(request.id)) return;
+    this.brokerRelays.add(request.id);
+    try {
+      const value = await relayBroker(request.method, request.params);
+      await runtime.client.replyBroker(request.id, { ok: true, value });
+    } catch (error) {
+      await runtime.client.replyBroker(request.id, { ok: false, error: errText(error) }).catch(() => {});
+    } finally {
+      if (this.brokerRelays.size > 200) this.brokerRelays.clear();
     }
   }
 
-  private piDialogs: import("../agent/pi/backend").PiDialogRequest[] = [];
-  private piAnswering = new Set<string>();
-  async restorePiRuntime(): Promise<void> {
-    if (!isLocalComputer(this.state.prefs.endpoint, !!this.currentHost())) return;
-    await this.pi().restoreRunning();
+  /** Runtime snapshot: queues and dialogs that may have changed while the stream was away. */
+  async restorePiRuntime(directory: string | null = this.state.directory): Promise<void> {
+    const runtime = this.runtime, generation = this.connectionGeneration;
+    if (!runtime || this.state.connection.phase !== "connected") return;
+    const snapshot = await runtime.client.snapshot(directory);
+    if (runtime !== this.runtime || generation !== this.connectionGeneration) return;
+    const owns = (id: string) => directory !== null && Object.values(this.state.queues[id]?.items ?? []).some(item => item.directory === directory);
+    applySnapshot(snapshot, directory, owns, this.runtimeSync, this.agentDialogs);
+    // Questions asked/answered while the stream was away: the snapshot is authoritative.
+    const questions = snapshot.questions;
+    if (questions && directory !== null && directory === this.state.directory)
+      this.mutate(s => ({ chat: { ...s.chat, questions: Object.fromEntries(questions.map(q => [q.id, q])) } }));
   }
-  async refreshPiActivity(): Promise<void> { await this.piEngine?.refreshRunning(); }
+  /** Fallback refresh used only while the runtime-wide stream is not open. */
+  async refreshPiActivity(): Promise<void> {
+    if ((this.state.connection.globalStreamState ?? "idle") === "open") return;
+    await this.restorePiRuntime().catch(() => {});
+  }
   restartInterface(): void {
     savePrefs(this.state.prefs);
     if (!flushPrefs()) { this.patchUi({toast: "Не удалось сохранить состояние. Перезапуск отменён."}); return; }
     window.location.reload();
   }
-  async answerPiDialog(
-    answer: { value?: string; confirmed?: boolean; cancelled?: boolean },
-    expected?: { key: string; id: string },
-  ): Promise<void> {
-    const dialog = this.state.ui.piDialog;
-    if (!dialog || (expected && (dialog.key !== expected.key || dialog.request.id !== expected.id))) return;
-    const token = `${dialog.key}:${dialog.request.id}`;
-    if (this.piAnswering.has(token)) return;
-    this.piAnswering.add(token);
+  /** Answer the extension dialog that is on screen. Never answered automatically. */
+  async answerAgentDialog(answer: { value?: string; confirmed?: boolean; cancelled?: boolean }, expectedId?: string): Promise<void> {
+    const dialog = this.state.ui.agentDialog;
+    if (!dialog || (expectedId && dialog.id !== expectedId) || this.dialogAnswering.has(dialog.id)) return;
+    this.dialogAnswering.add(dialog.id);
     try {
-      await this.pi().answerDialog(dialog.key, dialog.request.id, answer);
-      this.piDialogs = this.piDialogs.filter(d => d.key !== dialog.key || d.request.id !== dialog.request.id);
-      if (this.state.ui.piDialog?.request.id === dialog.request.id && this.state.ui.piDialog?.key === dialog.key)
-        this.patchUi({ piDialog: this.piDialogs[0] ?? null });
+      await this.backend.replyDialog(dialog.id, answer);
+      if (this.agentDialogs.remove(dialog.id)) this.runtimeSync.dialog(this.agentDialogs.current());
     } catch (error) {
-      this.patchUi({ toast: `Ответ Pi не доставлен: ${error instanceof Error ? error.message : String(error)}` });
+      this.patchUi({ toast: `Ответ расширению не доставлен: ${errText(error)}` });
       throw error;
-    } finally { this.piAnswering.delete(token); }
+    } finally { this.dialogAnswering.delete(dialog.id); }
+  }
+  /** Former name kept for existing callers; `expected.id` is the runtime dialog id. */
+  answerPiDialog(answer: { value?: string; confirmed?: boolean; cancelled?: boolean }, expected?: { key?: string; id: string }): Promise<void> {
+    return this.answerAgentDialog(answer, expected?.id);
   }
 
   private listeners = new Set<() => void>();
   private notifications = new StreamNotifications(() => {for(const listener of this.listeners)listener();});
   private streamAbort: AbortController | null = null;
-  private piStreamAbort: AbortController | null = null;
   private globalAbort: AbortController | null = null;
   private activityDirectories = new Map<string, string>();
   private activitySessions = new Map<string, Session>();
@@ -700,28 +540,35 @@ class Store {
     generation: () => this.selectionGeneration,
     mutate: patch => this.mutate(patch),
     patchUi: patch => this.patchUi(patch),
-    persistPrefs: () => this.persistPrefs(),
     getModelChoice: () => this.getModelChoice(),
-    getAgentChoice: () => this.getAgentChoice(),
     getDraft: () => this.getDraft(),
     setDraft: text => this.setDraft(text),
-    conversation: () => this.conversation(),
-    engineReady: () => this.engineReady(),
-    engineIdFor: () => this.engineIdFor(),
-    isRunning: id => this.isRunning(id),
-    externalLock: id => this.scheduledLocks.has(id) || this.compactLocks.has(id) || this.modelTransitionLocks.has(id),
-    pendingInteraction: id => this.pendingInteraction(id),
-    dispatchQueued: (item, steer) => this.dispatchQueued(item, steer),
+    // The runtime owns dispatch: no local loop, no timers, no replay here.
+    backend: () => this.runtime,
+    prepareParts: async (files, model, signal) => {
+      const info = this.modelInfo(model.providerID, model.modelID);
+      if (!info) throw new Error("Выбранная модель больше не доступна.");
+      const refs = isNative() && !this.currentHost(), vision = !!info.capabilities?.input?.image;
+      const originals = await this.prepareRuntimeAttachments(files, info, this.backend, signal, undefined, refs);
+      return { parts: imagePromptParts(originals, vision, refs) as unknown as PromptPart[], originals: originals as unknown as PromptPart[] };
+    },
+    // Original images of a queued item are staged under its stable id, which the
+    // runtime reuses as the command id when it dispatches the item.
+    queued: item => {
+      const info = this.modelInfo(item.model.providerID, item.model.modelID);
+      void stageImagePromptContext({ engine: RUNTIME_AGENT_ID, sessionId: item.sessionID, directory: item.directory, messageId: item.id,
+        parts: item.originals as unknown as PromptRequest["parts"], supportsVision: !!info?.capabilities?.input?.image, local: isNative() && !this.currentHost() })
+        .catch(error => this.patchUi({ toast: `Изображения запроса в очереди не подготовлены: ${errText(error)}` }));
+    },
     beginSending: () => this.beginSending(),
     finishSending: operation => this.finishSending(operation),
   });
-  private get queueArmed() { return this.promptQueue.queueArmed; }
-  private get queueLocks() { return this.promptQueue.queueLocks; }
-  private get queueStops() { return this.promptQueue.queueStops; }
   private accessChanging = false;
   private compactLocks = new Set<string>();
   private modelTransitionLocks = new Set<string>();
-  private historyJournals = new Set<ServerEvent[]>();
+  private historyJournals = new Set<HistoryJournal>();
+  /** Sessions whose authoritative history page was applied (not merely a live slot). */
+  private historyLoaded = new Set<string>();
   private sidebarJournals = new Set<Map<string, Session | null>>();
   private sidebarRequests = new Map<string, number>();
   private recentRequest = 0;
@@ -752,9 +599,9 @@ class Store {
     this.connectionGeneration++;
     this.directoryGeneration++;
     this.streamAbort?.abort();
-    this.piStreamAbort?.abort();
     this.globalAbort?.abort();
-    this.queueArmed.clear();
+    this.tokenWatch?.();
+    this.tokenWatch = null;
   }
 
   subscribe = (fn: () => void): (() => void) => {
@@ -769,11 +616,10 @@ class Store {
   ): void {
     const p = typeof patch === "function" ? patch(this.state) : patch;
     this.state = { ...this.state, ...p, rev: this.state.rev + 1 };
-    if (p.providers) modelServices.setSources("opencode", (isLocalComputer(this.state.prefs.endpoint, !!this.currentHost()) ? p.providers : []).flatMap(provider =>
+    // Local model services proxy only for the runtime on this computer.
+    if (p.providers) modelServices.setSources(RUNTIME_AGENT_ID, (!this.currentHost() ? p.providers : []).flatMap(provider =>
       Object.values(provider.models).map(model => ({ providerID: provider.id, modelID: model.id,
         remoteID: model.api?.id, baseURL: model.api?.url || provider.options?.baseURL }))));
-    if ("piHealth" in p) modelServices.setSources(PI_BACKEND_ID, (p.piHealth?.models ?? []).map(model =>
-      ({ providerID: model.provider, modelID: model.id, baseURL: model.baseUrl })));
     if (p.sessions || p.archivedSessions) {
       const managed = new Set(this.state.prefs.projectlessDirectories ?? []);
       const index = new Map(
@@ -788,7 +634,6 @@ class Store {
       };
       this.persistPrefs();
     }
-    modelServices.observeActivity();
     this.notifications.notify();
   }
 
@@ -810,17 +655,19 @@ class Store {
   private connectPromise: Promise<boolean> | null = null;
 
   /** Idempotent: concurrent calls (e.g. React StrictMode double-mount) share one attempt. */
+  /**
+   * Connects the active workspace's runtime. The argument is the former manual
+   * OpenCode URL: it is no longer configurable, so passing one connects the
+   * runtime on this computer (never a URL the user typed).
+   */
   connect(endpoint?: string): Promise<boolean> {
-    if (!endpoint && this.connectPromise) return this.connectPromise;
-    const p = endpoint
-      ? this.connectLocal(endpoint)
-      : this.connectHost(this.state.prefs.activeHost ?? "local");
-    if (!endpoint) {
-      this.connectPromise = p;
-      void p.finally(() => {
-        if (this.connectPromise === p) this.connectPromise = null;
-      });
-    }
+    if (endpoint) return this.connectLocal();
+    if (this.connectPromise) return this.connectPromise;
+    const p = this.connectHost(this.state.prefs.activeHost ?? "local");
+    this.connectPromise = p;
+    void p.finally(() => {
+      if (this.connectPromise === p) this.connectPromise = null;
+    });
     return p;
   }
 
@@ -832,13 +679,15 @@ class Store {
   hostLabel(): string {
     return this.currentHost()?.name ?? "Этот компьютер";
   }
-  async connectLocal(endpoint: string): Promise<boolean> {
-    this.hostGeneration++;
-    this.mutate((s) => ({
-      prefs: { ...s.prefs, activeHost: "local", localEndpoint: endpoint },
-    }));
-    return this.doConnect(endpoint, endpoint);
+  /** The runtime bundled with this app, started (or reused) by the native supervisor. */
+  connectLocal(): Promise<boolean> {
+    return this.connectHost("local");
   }
+  /**
+   * Local: the supervised runtime. Remote: the runtime installed on the SSH host
+   * over a strict-key tunnel. A remote failure stays a remote failure; there is
+   * no fallback to this computer.
+   */
   async connectHost(id: string): Promise<boolean> {
     const request = ++this.hostGeneration;
     const host = this.state.prefs.remoteHosts?.find((h) => h.id === id);
@@ -850,19 +699,9 @@ class Store {
     this.connectionGeneration++;
     this.directoryGeneration++;
     this.streamAbort?.abort();
-    this.piStreamAbort?.abort();
     this.globalAbort?.abort();
-    this.queueArmed.clear();
     this.mutate((s) => ({
-      prefs: {
-        ...s.prefs,
-        activeHost: id,
-        localEndpoint:
-          s.prefs.localEndpoint ??
-          (s.prefs.workspaceKey?.startsWith("ssh:")
-            ? DEFAULT_PREFS.endpoint
-            : s.prefs.endpoint),
-      },
+      prefs: { ...s.prefs, activeHost: id },
       connection: {
         ...s.connection,
         phase: "connecting",
@@ -873,11 +712,10 @@ class Store {
     }));
     this.persistPrefs();
     try {
-      const endpoint = host
-        ? await connectSsh(host)
-        : (this.state.prefs.localEndpoint ?? DEFAULT_PREFS.endpoint);
+      const target: RuntimeTarget = host ? { kind: "remote", host } : { kind: "local" };
+      const runtime = await connectRuntime(target);
       if (request !== this.hostGeneration) return false;
-      return await this.doConnect(endpoint, host ? remoteKey(host) : endpoint);
+      return await this.doConnect(runtime, target);
     } catch (e) {
       if (request === this.hostGeneration)
         this.mutate((s) => ({
@@ -914,56 +752,45 @@ class Store {
     this.persistPrefs();
   }
 
-  private async doConnect(
-    endpoint?: string,
-    workspaceKey?: string,
-  ): Promise<boolean> {
-    const requested =
-      endpoint?.trim().replace(/\/+$/, "") ?? this.backend.endpoint;
-    // Strict lookup: re-creating the active backend from a *fallback* descriptor
-    // would quietly move the workspace onto a different agent runtime.
-    const descriptor = findBackendDescriptor(this.backend.id);
-    if (!descriptor) {
-      this.patchUi({
-        toast: `Агент «${this.backend.id}» не зарегистрирован в этой сборке.`,
-      });
-      return false;
-    }
-    if (!descriptor.isAllowedEndpoint(requested)) {
-      this.patchUi({
-        toast:
-          "Use a plain HTTP loopback origin, such as http://127.0.0.1:4096 (no path, credentials or query).",
-      });
-      return false;
-    }
-    this.queueArmed.clear();
+  private async doConnect(runtime: RuntimeBackend, target: RuntimeTarget): Promise<boolean> {
+    const requested = runtime.endpoint;
     this.invalidateSelection();
     const gen = ++this.connectionGeneration;
-    this.patchUi({ handoffSource: null });
+    this.patchUi({ handoffSource: null, agentDialog: null });
+    this.agentDialogs.clear();
     this.mutate({ projectSessionLists: {}, recentSessionList: emptyRecentList() });
     this.directoryGeneration++;
     this.streamAbort?.abort();
     this.streamAbort = null;
-    this.piStreamAbort?.abort();
-    this.piStreamAbort = null;
     this.globalAbort?.abort();
     this.globalAbort = null;
-    const key = workspaceKey ?? requested;
-    if (
-      requested !== this.backend.endpoint ||
-      key !== (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint)
-    ) {
+    const key = runtimeWorkspaceKey(target);
+    const currentKey = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
+    // Remote at upgrade time → the old local snapshot is still keyed by the old
+    // local origin: adopt it under the stable local key (backup kept), never a remote one.
+    const legacyLocal = target.kind === "local" && currentKey !== key ? legacyLocalSnapshotKey(this.state.prefs, key) : null;
+    if (legacyLocal) this.mutate(s => ({ prefs: adoptSnapshot(s.prefs, legacyLocal, key) }));
+    // The former local OpenCode workspace (keyed by its URL) becomes the local
+    // runtime workspace in place: folders, drafts and pins are kept.
+    const adopt = target.kind === "local" && currentKey !== key && !currentKey.startsWith("ssh:") && !this.state.prefs.endpointState?.[key];
+    // A reconnect to the same runtime keeps the loaded state; the new instance
+    // still invalidates every request made through the previous one.
+    const changed = key !== currentKey || requested !== this.state.connection.endpoint;
+    this.runtime = runtime;
+    if (changed) {
       const prefs =
-        key === (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint)
-          ? { ...this.state.prefs, endpoint: requested }
+        key === currentKey || adopt
+          ? { ...this.state.prefs, endpoint: requested, workspaceKey: key }
           : switchEndpointPrefs(this.state.prefs, requested, key);
-      if (key !== (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint))
+      if (key !== currentKey && !adopt)
         this.activityDirectories.clear();
-      // Revalidate persisted attention on every connection, including the same server.
+      // Revalidate persisted attention on every connection, including the same runtime.
       this.activitySessions.clear();
       this.activityRevisions.clear();
       this.activityLookups.clear();
-      this.backend = descriptor.create(requested);
+      // The transcript cache is emptied below; its LRU bookkeeping goes with it.
+      this.historyLoaded.clear();
+      this.mcpStatuses.clear();
       this.mutate({
         prefs,
         directory: prefs.selectedDirectory,
@@ -984,6 +811,8 @@ class Store {
         configModel: null,
         compaction: {},
         configDefaultAgent: null,
+        queues: {},
+        runtime: null,
       });
       this.patchUi({
         sending: false,
@@ -993,8 +822,7 @@ class Store {
       });
       this.persistPrefs();
     }
-    this.backend.setAuthHeaders(hostHeaders(key));
-    const backend = this.backend;
+    const backend = runtime;
     this.mutate((s) => ({
       connection: {
         ...s.connection,
@@ -1007,29 +835,12 @@ class Store {
       },
     }));
     try {
-      let health;
-      try {
-        health = await backend.health();
-      } catch (error) {
-        if (gen !== this.connectionGeneration) return false;
-        // A local network failure may mean that no engine is running. The
-        // native side double-checks health/port under an interprocess lock
-        // before launching the separately installed CLI. SSH forwards have a
-        // different workspace key and must never fall back to a local engine.
-        if (
-          !(error instanceof ConnectionError) ||
-          key !== requested ||
-          !(await startLocalServerIfNative(requested, this.state.prefs.localOpenCodeProgram))
-        ) throw error;
-        if (gen !== this.connectionGeneration) return false;
-        health = await backend.health();
-      }
+      // The supervisor (local) or `enki-runtime ensure` (SSH) already started the
+      // runtime; nothing else is launched here. The contract was checked when the
+      // connection was resolved, health confirms the instance actually answers.
+      const health = await backend.health();
       if (gen !== this.connectionGeneration) return false;
-      if (!health.healthy) throw new Error("Server reports unhealthy");
-      if (Number(health.version.split(".")[0]) !== 1)
-        throw new Error(
-          `OpenCode ${health.version}: this adapter is tested with 1.18.18.`,
-        );
+      if (!health.healthy) throw new Error("Среда выполнения Enki сообщает о неисправности.");
       this.mutate((s) => ({
         connection: {
           ...s.connection,
@@ -1037,7 +848,9 @@ class Store {
           version: health.version,
           error: null,
         },
+        runtime: { version: health.version, sdk: health.sdk, host: health.host, instance: health.instance, ...(health.hostId ? { hostId: health.hostId } : {}) },
       }));
+      this.watchTokenRotation(backend, gen);
       await Promise.all([this.refreshProjects(), this.loadRuntimeMetadata()]);
       if (gen !== this.connectionGeneration) return false;
       if (this.state.directory)
@@ -1048,6 +861,8 @@ class Store {
       void this.configureBrowser();
       this.startGlobalStream(backend, gen);
       void this.reconcileUnreadSessions();
+      void this.restorePiRuntime().catch(() => {});
+      void this.migrateLegacyQueueState(backend, gen);
       return true;
     } catch (e) {
       if (gen === this.connectionGeneration)
@@ -1063,26 +878,196 @@ class Store {
     }
   }
 
+  private tokenWatch: (() => void) | null = null;
+  /** A rotated bearer is picked up immediately instead of waiting for a 401. */
+  private watchTokenRotation(backend: RuntimeBackend, gen: number): void {
+    this.tokenWatch?.();
+    this.tokenWatch = null;
+    if (this.currentHost()) return; // the SSH tunnel's token is re-resolved on 401
+    void onTokenRotated(() => {
+      if (backend === this.runtime && gen === this.connectionGeneration) void backend.client.reconnect().catch(() => {});
+    }).then(stop => {
+      if (backend === this.runtime && gen === this.connectionGeneration) this.tokenWatch = stop; else stop();
+    });
+  }
+
+  /**
+   * Pre-2.0 queues (preferences) and timers (window storage) of THIS workspace
+   * → the runtime's durable cutover journal. Complete items (attachments,
+   * model/variant, agent, order, uncertain state) are submitted under stable
+   * ids; the runtime maps each source chat to a writable runtime chat (an
+   * archive only through its verified continuation) or quarantines it
+   * visibly. The old copy of an item leaves preferences only after ITS receipt
+   * is accepted/resolved. A failure changes nothing and is retried on the next
+   * connection with the same ids. Nothing is turned into draft text, sent
+   * under an old session id or dispatched here (queues arrive paused).
+   */
+  private async migrateLegacyQueueState(backend: RuntimeBackend, gen: number): Promise<void> {
+    const workspace = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
+    const current = () => backend === this.runtime && gen === this.connectionGeneration && workspace === (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint);
+    let installation: string;
+    try { installation = installationId(localStorage); } catch { return; }
+    await this.migrateInheritedPolicy(backend, workspace).catch(() => undefined); // retried next connection
+    if (!current()) return;
+    // Import/map the source history BEFORE queued/timed work is mapped to it.
+    await this.importLegacyHistory(backend).catch(error => {
+      if (current()) this.patchUi({ toast: `История прежней версии пока не импортирована (${errText(error)}). Исходные файлы не изменены; повтор при следующем подключении.` });
+    });
+    if (!current()) return;
+    const legacy = this.state.prefs.queues ?? {};
+    if (Object.values(legacy).some(items => items.length)) {
+      try {
+        const items = await queueCutoverItems(legacy, item => this.legacyAttachmentParts(item));
+        const receipts: CutoverReceiptDTO[] = [];
+        // Bounded batches (runtime: ≤500 items, 64 MiB body); same ids on every retry.
+        for (let start = 0; start < items.length; start += 50)
+          receipts.push(...(await backend.client.cutover({ installation, workspace, source: "ui-queue", items: items.slice(start, start + 50) })).receipts);
+        if (!current()) return;
+        const done = acknowledged(receipts);
+        if (done.size) {
+          this.mutate(s => ({ prefs: { ...s.prefs, queues: pruneQueues(s.prefs.queues ?? {}, done) } }));
+          this.persistPrefs();
+        }
+        if (unaddressableQueueItems(legacy))
+          this.patchUi({ toast: "Некоторые запросы старой очереди повреждены и не перенесены. Их копия сохранена в настройках Enki." });
+      } catch (error) {
+        if (current()) this.patchUi({ toast: `Старая очередь пока не перенесена (${errText(error)}). Запросы сохранены; перенос повторится при следующем подключении.` });
+      }
+    }
+    if (!current()) return;
+    try {
+      const servers = [workspace, this.state.prefs.endpoint, ...(this.currentHost() ? [] : [this.state.prefs.localWorkspace, this.state.prefs.localEndpoint])]
+        .filter((value): value is string => !!value);
+      await taskScheduler().migrateLegacy(localStorage, backend, { installation, workspace, servers });
+    } catch (error) {
+      if (current()) this.patchUi({ toast: `Старые таймеры пока не перенесены (${errText(error)}). Они сохранены и не запускались; перенос повторится при следующем подключении.` });
+    }
+    if (!current()) return;
+    await this.refreshCutoverIssues(backend, installation, workspace);
+    if (this.cutoverIssueList.length)
+      this.patchUi({ toast: `Не все запросы и таймеры из прежней версии удалось перенести (${this.cutoverIssueList.length}). Они сохранены и не отправлялись — см. «Восстановление».` });
+  }
+
+  /**
+   * Pre-2.0 "full access" was an inherited app-wide tool policy, not a rule on
+   * each chat. Carry it into this runtime's default once per workspace, so
+   * migrated chats keep full access instead of asking again. Per-chat explicit
+   * rules (including exact deny rules) were imported with each chat and still
+   * win; a runtime default the user already changed is never overwritten.
+   */
+  private async migrateInheritedPolicy(backend: RuntimeBackend, workspace: string): Promise<void> {
+    if (this.state.prefs.agent?.migrated?.policy?.[workspace]) return;
+    const inherited = this.state.prefs.pi?.toolPolicy, lspOff = this.state.prefs.pi?.lspEnabled === false;
+    if (inherited === "full" || lspOff) {
+      const settings = await backend.client.settings();
+      if (inherited === "full" && settings.defaultPolicy === "ask") await backend.client.saveSettings({ defaultPolicy: "full" });
+      // A pre-2.0 "LSP off" choice stays off (the runtime used to ignore it).
+      if (lspOff && settings.lspEnabled !== false) await backend.client.saveSettings({ lspEnabled: false });
+    }
+    this.mutate(s => ({ prefs: { ...s.prefs, agent: { ...s.prefs.agent, migrated: { ...s.prefs.agent?.migrated,
+      policy: { ...s.prefs.agent?.migrated?.policy, [workspace]: Date.now() } } } } }));
+    this.persistPrefs();
+  }
+
+  /**
+   * Read-only, idempotent import of this computer's former OpenCode database
+   * and Pi CLI chats (sources are fixed by the supervisor; originals are never
+   * modified). Done once per computer after success; a failure is retried on
+   * the next connection. Remote runtimes have no local legacy sources.
+   */
+  private async importLegacyHistory(backend: RuntimeBackend): Promise<void> {
+    if (this.currentHost()) return;
+    const migrated = this.state.prefs.agent?.migrated ?? {};
+    if (migrated.opencode && migrated.piCli) return;
+    const info = await backend.client.migrations();
+    const mark = (key: "opencode" | "piCli") => {
+      this.mutate(s => ({ prefs: { ...s.prefs, agent: { ...s.prefs.agent, migrated: { ...s.prefs.agent?.migrated, [key]: Date.now() } } } }));
+      this.persistPrefs();
+    };
+    if (!migrated.opencode) {
+      if (info.sources.opencode) await backend.client.importOpenCode();
+      mark("opencode");
+    }
+    if (!migrated.piCli) {
+      const metas = Object.values(this.state.prefs.piSessions ?? {});
+      if (info.sources.piCli && metas.length) {
+        const result = await backend.client.importPiCli(metas) as { results?: Array<{ code?: string; skipped?: string | null }> };
+        // Per-chat failures are reported with codes and stay importable; only a clean pass is marked.
+        const failed = (result.results ?? []).filter(r => r.code && r.code !== "source_missing").length;
+        if (failed) throw new Error(`не удалось импортировать чатов Pi: ${failed}`);
+      }
+      mark("piCli");
+    }
+  }
+
+  /** Quarantined/unpublished cutover items of this workspace: visible and actionable. */
+  private cutoverIssueList: CutoverReceiptDTO[] = [];
+  cutoverIssues(): readonly CutoverReceiptDTO[] { return this.cutoverIssueList; }
+  private async refreshCutoverIssues(backend: RuntimeBackend, installation: string, workspace: string): Promise<void> {
+    try {
+      const all = await backend.client.cutoverReceipts({ installation, workspace });
+      if (backend !== this.runtime) return;
+      this.cutoverIssueList = all.filter(r => r.state === "quarantined" || r.state === "received");
+      this.mutate({});
+    } catch { /* kept from the last answer; the runtime journal is authoritative */ }
+  }
+  /** Explicit retry with the same stable id (e.g. after importing history or restoring a chat). */
+  async retryCutover(id: string): Promise<void> {
+    const backend = this.runtime;
+    if (!backend) return;
+    try {
+      const receipt = await backend.client.retryCutover(id);
+      if (receipt.state === "accepted") {
+        const done = new Set([receipt.legacyId]);
+        if (receipt.kind === "queue") { this.mutate(s => ({ prefs: { ...s.prefs, queues: pruneQueues(s.prefs.queues ?? {}, done) } })); this.persistPrefs(); }
+        else await taskScheduler().refresh();
+      }
+      this.patchUi({ toast: receipt.state === "accepted" ? "Перенесено. Очередь приостановлена до вашей проверки." : receipt.reason ?? "Пока не удалось перенести." });
+    } catch (error) { this.patchUi({ toast: `Повтор переноса не удался: ${errText(error)}` }); }
+    await this.refreshCutoverIssues(backend, installationId(localStorage), this.state.prefs.workspaceKey ?? this.state.prefs.endpoint);
+  }
+  /** The user decided to drop a quarantined item; its journal row stays as an audit record. */
+  async resolveCutover(id: string): Promise<void> {
+    const backend = this.runtime;
+    if (!backend) return;
+    try {
+      const receipt = await backend.client.resolveCutover(id);
+      if (receipt.kind === "queue") { this.mutate(s => ({ prefs: { ...s.prefs, queues: pruneQueues(s.prefs.queues ?? {}, new Set([receipt.legacyId])) } })); this.persistPrefs(); }
+    } catch (error) { this.patchUi({ toast: `Не удалось отметить элемент: ${errText(error)}` }); }
+    await this.refreshCutoverIssues(backend, installationId(localStorage), this.state.prefs.workspaceKey ?? this.state.prefs.endpoint);
+  }
+
+  /** Original bytes of an old queued item's IndexedDB attachments; unreadable files are counted, not dropped. */
+  private async legacyAttachmentParts(item: QueuedPrompt): Promise<{ parts: PromptPart[]; missing: number }> {
+    const files = item.attachments?.files ?? [];
+    if (!files.length || !item.attachments) return { parts: [], missing: 0 };
+    const found = await attachmentDrafts.selected(item.attachments.scope, files.map(file => file.id));
+    if (found.reduce((sum, file) => sum + file.size, 0) > 40 * 1024 * 1024) return { parts: [], missing: files.length };
+    const parts: PromptPart[] = [];
+    for (const file of found) parts.push({ type: "file", mime: file.mime, filename: file.name, url: await blobToDataUrl(file.blob) });
+    return { parts, missing: files.length - found.length };
+  }
+
   private async loadRuntimeMetadata(): Promise<void> {
     const gen = this.directoryGeneration,
       backend = this.backend,
       directory = this.state.directory;
     this.patchUi({ runtimeLoading: true });
     try {
-      const [prov, agents, config] = await Promise.all([
-        backend.providers(undefined, directory),
-        backend.agents(undefined, directory),
-        backend.config(directory),
+      // One primary agent: there is no agent catalogue; compaction comes from runtime settings.
+      const [prov, settings] = await Promise.all([
+        backend.providers(undefined),
+        backend.client.settings(),
       ]);
       if (gen !== this.directoryGeneration || backend !== this.backend) return;
       this.mutate({
         providers: prov.all ?? [],
         connectedProviderIds: prov.connected ?? [],
         providerDefaults: prov.default ?? null,
-        configDefaultAgent: config.default_agent ?? null,
-        configModel: config.model ?? null,
-        compaction: config.compaction ?? {},
-        agents: (agents ?? []).filter((a) => !a.hidden),
+        configDefaultAgent: null,
+        configModel: null,
+        compaction: compactionOf(settings),
+        agents: [],
       });
     } catch (e) {
       if (gen === this.directoryGeneration && backend === this.backend) {
@@ -1108,12 +1093,7 @@ class Store {
   }
 
   private noteProjectFailure(error: unknown): void {
-    // A recovered read must not silently release work paused by a project failure.
-    for (const id of this.queueArmed) {
-      if (this.engineIdFor(id, this.state.directory ?? undefined) !== PI_BACKEND_ID &&
-          this.getQueue(id).some(item => item.directory === this.state.directory))
-        this.queueArmed.delete(id);
-    }
+    // The runtime classifies project failures and pauses its own queue; this only reports.
     this.mutate(s => ({ connection: { ...s.connection, statusError: projectErrorText(error) } }));
   }
 
@@ -1127,10 +1107,9 @@ class Store {
       await this.loadRuntimeMetadata();
   }
 
-  /** Stores the typed value; validation/normalization happens on connect. */
-  setEndpoint(endpoint: string): void {
-    this.mutate((s) => ({ prefs: { ...s.prefs, endpoint } }));
-    this.persistPrefs();
+  /** Former manual server URL. The runtime endpoint is resolved natively; nothing is stored. */
+  setEndpoint(_endpoint: string): void {
+    this.patchUi({ toast: "Адрес сервера больше не настраивается: Enki подключается к своей среде выполнения." });
   }
 
   // ---------- projects / directories ----------
@@ -1150,9 +1129,7 @@ class Store {
   }
 
   async loadProjectSessions(directory: string, opts: { force?: boolean; more?: boolean } = {}): Promise<void> {
-    const openCodeUp = this.state.connection.phase === "connected";
-    const localPi = this.piInstalled && piAvailability(this.state.prefs).available;
-    if (!openCodeUp && !localPi) return;
+    if (this.state.connection.phase !== "connected") return;
     const previous = this.state.projectSessionLists[directory] ?? emptySidebarList();
     if (!opts.force && (previous.loading || (previous.loaded && !opts.more))) return;
     const request = (this.sidebarRequests.get(directory) ?? 0) + 1;
@@ -1167,18 +1144,17 @@ class Store {
       [directory]: { ...previous, loading: true, error: null, limit },
     } }));
     try {
-      const [openCodeSessions, statuses, piSessions] = await Promise.all([
-        openCodeUp ? this.engine(DEFAULT_ENGINE).listSessions(directory, { limit }) : Promise.resolve([]),
-        openCodeUp ? this.engine(DEFAULT_ENGINE).sessionStatuses(directory) : Promise.resolve({} as Record<string, SessionStatus>),
-        this.piListFor(directory),
+      const backend = this.backend;
+      const [sessions, statuses] = await Promise.all([
+        backend.listSessions(directory, { limit }),
+        backend.sessionStatuses(directory),
       ]);
-      const sessions = [...openCodeSessions, ...piSessions];
       if (!current()) return;
       for (const session of sessions) {
         const latest = journal.has(session.id) ? journal.get(session.id) : session;
         if (latest) this.rememberActivitySession(latest);
       }
-      if (openCodeUp) await this.reconcileUnreadSessions(directory);
+      await this.reconcileUnreadSessions(directory);
       if (!current()) return;
       const attention = [...this.activitySessions.values()].filter(x => this.isUnread(x.id) && x.directory === directory);
       const scoped = mergeSidebarSessions([...attention, ...sessions], journal).filter((s) => s.directory === directory);
@@ -1186,7 +1162,7 @@ class Store {
         if (!this.activityStatus(id)) this.observeSessionStatus(id, status, directory);
       this.mutate((s) => ({ projectSessionLists: { ...s.projectSessionLists,
         [directory]: { sessions: scoped, loaded: true, loading: false, error: null, limit,
-          hasMore: openCodeSessions.length >= limit },
+          hasMore: sessions.length >= limit },
       } }));
     } catch (e) {
       if (current()) this.mutate((s) => ({ projectSessionLists: { ...s.projectSessionLists,
@@ -1196,9 +1172,7 @@ class Store {
   }
 
   async loadRecentSessions(archived = false, more = false): Promise<void> {
-    const openCodeUp = this.state.connection.phase === "connected";
-    const localPi = this.piInstalled && piAvailability(this.state.prefs).available;
-    if (!openCodeUp && !localPi) return;
+    if (this.state.connection.phase !== "connected") return;
     const previous = this.state.recentSessionList;
     if (more && (!previous.cursor || previous.loading || previous.archived !== archived)) return;
     const generation = this.connectionGeneration, request = ++this.recentRequest;
@@ -1209,17 +1183,11 @@ class Store {
       archived, loading: true, error: null },
     });
     try {
-      const [page, piPage] = await Promise.all([
-        openCodeUp
-          ? this.engine(DEFAULT_ENGINE).recentSessions(archived, more ? previous.cursor ?? undefined : undefined)
-          : Promise.resolve({ sessions: [] as Session[], cursor: null }),
-        localPi
-          ? this.pi().recentSessions(archived)
-          : Promise.resolve({ sessions: [] as Session[], cursor: null }),
-      ]);
+      // Runtime cursor pagination (ordered by update time); no assumption about id order.
+      const page = await this.backend.recentSessions(archived, more ? previous.cursor ?? undefined : undefined);
       if (!current()) return;
-      for (const session of [...page.sessions, ...piPage.sessions]) this.rememberActivitySession(session);
-      const sessions = mergeSidebarSessions([...(more ? previous.sessions : []), ...page.sessions, ...piPage.sessions], journal)
+      for (const session of page.sessions) this.rememberActivitySession(session);
+      const sessions = mergeSidebarSessions([...(more ? previous.sessions : []), ...page.sessions], journal)
         .filter((s) => Boolean(s.time.archived) === archived);
       this.mutate({ recentSessionList: { ...this.state.recentSessionList, sessions, loaded: true,
         loading: false, cursor: page.cursor, hasMore: page.cursor !== null },
@@ -1269,20 +1237,28 @@ class Store {
   async ensureWorkshop(): Promise<WorkshopRecord> {
     if (!isNative() || !isLocalComputer(this.state.prefs.endpoint, !!this.currentHost()))
       throw new Error("Выберите «Этот компьютер», чтобы открыть мастерскую.");
-    if (this.state.connection.phase !== "connected") throw new Error("Подключите OpenCode, чтобы открыть мастерскую.");
+    if (this.state.connection.phase !== "connected") throw new Error("Среда выполнения Enki не подключена: мастерская недоступна.");
     const key = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
     const pending = this.workshopFlights.get(key); if (pending) return pending;
     const backend = this.backend, previous = this.state.prefs.workshop, permission = accessRules(this.state.prefs.newAccess ?? "inherit");
     const work = (async () => {
       const paths = await backend.paths(null);
       const workspace = await prepareWorkshop(paths.home);
-      const record = await resolveWorkshop(backend, workspace, previous, permission);
+      const continued: { archive?: Session; continuation?: Session } = {};
+      const record = await resolveWorkshop(backend, workspace, previous, permission,
+        (archive, continuation) => { continued.archive = archive; continued.continuation = continuation; });
+      // One write after every runtime acknowledgement: the pointer and the
+      // visible provenance of a continued archive change together.
+      const { archive, continuation } = continued;
+      const origin = archive && continuation ? { [continuation.id]: { from: archive.id, fromEngine: "opencode",
+        title: archive.title, directory: archive.directory, omitted: 0 } } : undefined;
       this.mutate(s => {
         const current = (s.prefs.workspaceKey ?? s.prefs.endpoint) === key;
-        return {prefs:current ? {...s.prefs,workshop:record,
-          sessionEngine:{...s.prefs.sessionEngine,[record.session.id]:DEFAULT_BACKEND_ID}}
-          : {...s.prefs,endpointState:{...s.prefs.endpointState,[key]:{
-            ...s.prefs.endpointState?.[key],workshop:record,
+        // Provenance is app-wide (kept across workspace switches); the pointer is per workspace.
+        const prefs = origin ? {...s.prefs,handoffOrigins:{...s.prefs.handoffOrigins,...origin}} : s.prefs;
+        return {prefs:current ? {...prefs,workshop:record}
+          : {...prefs,endpointState:{...prefs.endpointState,[key]:{
+            ...prefs.endpointState?.[key],workshop:record,
           }}}};
       });
       this.persistPrefs();
@@ -1310,7 +1286,7 @@ class Store {
       if (backend === this.backend && gen === this.connectionGeneration)
         this.mutate({ projects });
     } catch (e) {
-      this.patchUi({ toast: `Could not load projects: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось загрузить проекты: ${errText(e)}` });
     }
   }
 
@@ -1365,8 +1341,6 @@ class Store {
     this.listGeneration++; // in-flight list requests belong to the previous project
     this.streamAbort?.abort();
     this.streamAbort = null;
-    this.piStreamAbort?.abort();
-    this.piStreamAbort = null;
     this.mutate((s) => ({
       directory,
       sessions: [],
@@ -1424,10 +1398,12 @@ class Store {
     void this.configureBrowser();
     void this.configureSharedTools().catch(error=>{if(gen===this.directoryGeneration)this.patchUi({toast:errText(error)});});
     this.startEventStream(directory, gen);
-    this.startPiStream(directory, gen);
+    // Queues and extension dialogs of this folder, in case events were missed.
+    void this.restorePiRuntime(directory).catch(() => {});
     if ((opts.restoreSession || opts.sessionId) && this.state.activeSessionId) {
       const restored = this.state.activeSessionId;
-      if (!this.state.chat.sessions[restored])
+      // Same rule as selectSession: a slot built only from live events is not history.
+      if (!this.state.chat.sessions[restored] || !this.historyLoaded.has(restored))
         await this.loadHistory(restored, directory);
       if (gen !== this.directoryGeneration) return;
       if (!this.state.ui.historyError) this.markReadIfViewing();
@@ -1443,34 +1419,26 @@ class Store {
   async refreshSessions(): Promise<void> {
     const directory = this.state.directory;
     const dirGen = this.directoryGeneration;
-    const openCodeUp = this.state.connection.phase === "connected";
-    if (!directory || (!openCodeUp && !this.piInstalled)) return;
+    if (!directory || this.state.connection.phase !== "connected") return;
     const myGen = ++this.listGeneration;
     const current = () =>
       myGen === this.listGeneration && dirGen === this.directoryGeneration;
     this.patchUi({ sessionListLoading: true, sessionListError: null });
-    const readOpenCode = <T,>(request: Promise<T>): Promise<T> => request.catch(error => {
+    const read = <T,>(request: Promise<T>): Promise<T> => request.catch(error => {
       if (current()) this.noteProjectFailure(error);
       throw error;
     });
     try {
-      const [sessions, statuses, piSessions, piStatuses] = await Promise.all([
-        openCodeUp ? readOpenCode(this.backend.listSessions(directory)) : Promise.resolve([]),
-        openCodeUp
-          ? readOpenCode(this.backend.sessionStatuses(directory))
-          : Promise.resolve({} as Record<string, SessionStatus>),
-        // A folder can hold chats from both engines; the sidebar shows both.
-        this.piListFor(directory),
-        this.piEngine
-          ? this.pi().sessionStatuses(directory)
-          : Promise.resolve({} as Record<string, SessionStatus>),
+      // Native runtime chats and read-only imported archives come from one list.
+      const backend = this.backend;
+      const [sessions, statuses] = await Promise.all([
+        read(backend.listSessions(directory)),
+        read(backend.sessionStatuses(directory)),
       ]);
       if (!current()) return;
-      for (const session of [...sessions, ...piSessions])
+      for (const session of sessions)
         this.rememberActivitySession(session);
-      const visible = [...sessions, ...piSessions].filter((s) => !s.parentID);
-      for (const [id, status] of Object.entries(piStatuses))
-        statuses[id] = status;
+      const visible = sessions.filter((s) => !s.parentID);
       for (const [id, status] of Object.entries(statuses))
         this.observeSessionStatus(id, status, directory);
       this.rememberChatListing(directory, visible);
@@ -1509,11 +1477,55 @@ class Store {
     }));
     this.persistPrefs();
     if (!sessionId || !directory) return;
-    if (!this.state.chat.sessions[sessionId]) {
+    // A slot created by live/background events or a status listing is NOT a
+    // history read: load the authoritative page (with its cursor) once.
+    if (!this.state.chat.sessions[sessionId] || !this.historyLoaded.has(sessionId)) {
       await this.loadHistory(sessionId, directory);
+    } else {
+      // Most recently viewed last: the LRU order of retained transcripts.
+      this.historyLoaded.delete(sessionId); this.historyLoaded.add(sessionId);
     }
     if (!this.state.ui.historyError) this.markReadIfViewing();
-    void this.drainQueue();
+  }
+
+  /**
+   * Loaded transcripts are a cache of the durable runtime history, not its only
+   * copy: beyond RETAINED_TRANSCRIPTS the least recently viewed IDLE chats are
+   * released (messages/parts/cursor) and reload authoritatively on activation.
+   * Never the active chat, a running/retrying chat, or one with a pending
+   * permission/question; drafts, queues and statuses live elsewhere.
+   */
+  private evictInactiveTranscripts(): void {
+    const { chat, statuses, activeSessionId } = this.state;
+    const excess = this.historyLoaded.size - RETAINED_TRANSCRIPTS;
+    // Slots of other chats built only from live events (background runs, timers)
+    // are bounded too; their history reloads authoritatively when opened.
+    const streamOnly = Object.keys(chat.sessions).filter((id) => !this.historyLoaded.has(id));
+    if (excess <= 0 && streamOnly.length <= RETAINED_STREAM_SLOTS) return;
+    const waiting = new Set([...Object.values(chat.permissions), ...Object.values(chat.questions)].map((item) => item.sessionID));
+    const held = (id: string) => {
+      const status = this.activityStatus(id)?.type ?? statuses[id]?.type;
+      return id === activeSessionId || status === "busy" || status === "retry" || status === "waiting" || waiting.has(id);
+    };
+    const victims: string[] = [];
+    for (const id of this.historyLoaded) {
+      if (victims.length >= excess) break;
+      if (held(id)) continue;
+      victims.push(id);
+    }
+    // Attention (error/failed outcome) and a pending dispatch measurement stay visible.
+    const releasable = streamOnly.filter((id) => {
+      const slot = chat.sessions[id];
+      return !held(id) && !slot.lastError && !slot.pendingTiming && slot.lastOutcome?.state !== "failed";
+    }).sort((a, b) => chat.sessions[a].lastEventAt - chat.sessions[b].lastEventAt);
+    victims.push(...releasable.slice(0, Math.max(0, releasable.length - RETAINED_STREAM_SLOTS)));
+    if (!victims.length) return;
+    for (const id of victims) this.historyLoaded.delete(id);
+    this.mutate((s) => {
+      const sessions = { ...s.chat.sessions }, cursors = { ...(s.historyCursors ?? {}) }, exhausted = { ...(s.olderExhausted ?? {}) };
+      for (const id of victims) { delete sessions[id]; delete cursors[id]; delete exhausted[id]; }
+      return { chat: { ...s.chat, sessions }, historyCursors: cursors, olderExhausted: exhausted };
+    });
   }
 
   async loadHistory(sessionId: string, directory: string): Promise<void> {
@@ -1522,7 +1534,7 @@ class Store {
     this.historyAbort = controller;
     const gen = this.directoryGeneration,
       request = ++this.historyGeneration;
-    const journal: ServerEvent[] = [];
+    const journal = new HistoryJournal();
     this.historyJournals.add(journal);
     this.patchUi({ historyLoading: true, historyError: null });
     try {
@@ -1536,10 +1548,15 @@ class Store {
       if (
         gen !== this.directoryGeneration ||
         this.state.activeSessionId !== sessionId ||
-        request !== this.historyGeneration ||
-        journal.length >= 20000
+        request !== this.historyGeneration
       )
         return;
+      // Too much changed while the page loaded: never merge a snapshot over an
+      // incomplete journal; say so (the history error offers a retry).
+      if (journal.overflowed) {
+        this.patchUi({ historyError: "История сильно изменилась во время загрузки. Повторите загрузку." });
+        return;
+      }
       this.mutate((s) => {
         const chat: ChatRootState = {
           ...s.chat,
@@ -1548,46 +1565,44 @@ class Store {
         const previous = chat.sessions[sessionId];
         // Retain previously paginated history; replay post-request events over the snapshot.
         applyHistory(chat, sessionId, messages);
-        if (previous && messages.length) {
-          const first = messages[0].info.id;
+        // Ids are random (Pi SDK entries), so "older" means "earlier in the
+        // previous window than this page's first message", never `id < first`.
+        // Without an overlap the old window is dropped and the new cursor wins.
+        const overlap = previous && messages.length ? previous.messageOrder.indexOf(messages[0].info.id) : -1;
+        const older = previous && overlap > 0 ? previous.messageOrder.slice(0, overlap) : [];
+        if (previous && older.length) {
           prependHistory(
             chat,
             sessionId,
-            previous.messageOrder
-              .filter((id) => id < first)
-              .map((id) => ({
-                info: previous.messages[id],
-                parts: (previous.partsByMessage[id] ?? []).map(
-                  (p) => previous.parts[p],
-                ),
-              })),
+            older.map((id) => ({
+              info: previous.messages[id],
+              parts: (previous.partsByMessage[id] ?? []).map(
+                (p) => previous.parts[p],
+              ),
+            })),
           );
         }
-        reconcileHistoryEvents(chat, sessionId, previous, journal);
+        reconcileHistoryEvents(chat, sessionId, previous, journal.events);
         return {
           chat,
           historyCursors: {
             ...s.historyCursors,
-            [sessionId]:
-              previous && previous.messageOrder.length > messages.length
-                ? s.historyCursors[sessionId]
-                : (before ?? null),
+            [sessionId]: older.length ? s.historyCursors[sessionId] : (before ?? null),
           },
           olderExhausted: {
             ...s.olderExhausted,
-            [sessionId]:
-              previous && previous.messageOrder.length > messages.length
-                ? s.olderExhausted[sessionId]
-                : !before,
+            [sessionId]: older.length ? s.olderExhausted[sessionId] : !before,
           },
         };
       });
+      this.historyLoaded.add(sessionId);
+      this.evictInactiveTranscripts();
     } catch (e) {
       if (
         gen === this.directoryGeneration &&
         request === this.historyGeneration
       ) {
-        if (!this.isPiSession(sessionId) && e instanceof ApiError && (e.filesystemDenied || e.status >= 500))
+        if (e instanceof ApiError && (e.filesystemDenied || e.status >= 500))
           this.noteProjectFailure(e);
         this.patchUi({ historyError: errText(e) });
       }
@@ -1687,31 +1702,20 @@ class Store {
   }
   async ensureChatWorkspace(): Promise<boolean> {
     if (this.state.directory) return true;
-    const desiredEngine = this.newChatEngine();
-    if (!this.engineReady(desiredEngine)) return false;
-    if (desiredEngine === PI_BACKEND_ID && this.currentHost()) {
-      this.patchUi({ sendError: "Pi работает только на этом компьютере. Выберите локальное выполнение." });
-      return false;
-    }
-    if (!this.engine(desiredEngine).capabilities.projectlessChat) {
+    if (!this.engineReady()) return false;
+    if (!this.backend.capabilities.projectlessChat) {
       this.patchUi({ sendError: "Этот агент требует выбранного проекта." });
       return false;
     }
     if (this.workspacePromise) return this.workspacePromise;
     const gen = this.directoryGeneration,
-      backend = this.backend,
-      host = this.currentHost();
+      backend = this.backend;
     this.patchUi({ workspacePreparing: true, sendError: null });
     const p = (async () => {
       try {
-        const workspace = desiredEngine === PI_BACKEND_ID
-          ? await piBridge().prepareChatWorkspace()
-          : await (async () => {
-              const paths = await backend.paths();
-              if (gen !== this.directoryGeneration || backend !== this.backend)
-                throw new Error("Выбор рабочего места изменился.");
-              return prepareChat(host, paths.home);
-            })();
+        // The runtime creates the managed chat folder where it runs (this
+        // computer or the SSH host), so the agent's tools see the same path.
+        const workspace = await backend.client.prepareChatWorkspace(crypto.randomUUID());
         if (gen !== this.directoryGeneration || backend !== this.backend)
           return false;
         const draft = this.getDraft();
@@ -1719,9 +1723,6 @@ class Store {
           prefs: {
             ...s.prefs,
             projectlessRoot: workspace.root,
-            projectEngine: desiredEngine === PI_BACKEND_ID
-              ? { ...s.prefs.projectEngine, [workspace.directory]: PI_BACKEND_ID }
-              : s.prefs.projectEngine,
             projectlessDirectories: [
               ...new Set([
                 ...(s.prefs.projectlessDirectories ?? []),
@@ -1769,16 +1770,15 @@ class Store {
     const directory = this.state.directory;
     if (!directory) return null;
     if (this.isWorkshopDirectory(directory)) { await this.openWorkshop(); return this.state.prefs.workshop?.session ?? null; }
+    if (!this.engineReady()) { this.patchUi({ toast: "Среда выполнения Enki не подключена." }); return null; }
     const gen = this.directoryGeneration;
     const endpoint = this.backend.endpoint;
     const choice = this.getModelChoice();
     try {
-      const engineId = this.engineIdForDirectory(directory);
-      const session = await this.engine(engineId).createSession({
+      const session = await this.backend.createSession({
         directory,
         title,
         permission: accessRules(this.state.prefs.newAccess ?? "inherit"),
-        agent: this.getAgentChoice() ?? undefined,
         model: choice
           ? {
               id: choice.modelID,
@@ -1805,13 +1805,13 @@ class Store {
       return session;
     } catch (e) {
       if (gen === this.directoryGeneration)
-        this.patchUi({ toast: `Could not create session: ${errText(e)}` });
+        this.patchUi({ toast: `Не удалось создать чат: ${errText(e)}` });
       return null;
     }
   }
 
   async renameSession(session: Session, title: string): Promise<void> {
-    if (this.isWorkshopSession(session)) { this.patchUi({toast:"Мастерская защищена от удаления и архивирования."}); return; }
+    if (this.isWorkshopSession(session)) { this.patchUi({toast:"Мастерскую нельзя переименовать, архивировать или удалить."}); return; }
     const gen = this.connectionGeneration;
     const backend = this.engine(this.engineIdFor(session.id, session.directory));
     try {
@@ -1835,7 +1835,7 @@ class Store {
     } catch (e) {
       if (gen !== this.connectionGeneration || !this.engineStillActive(backend))
         return;
-      this.patchUi({ toast: `Rename failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось переименовать чат: ${errText(e)}` });
     }
   }
 
@@ -1876,11 +1876,11 @@ class Store {
         },
       }));
       this.persistPrefs();
-      this.patchUi({ toast: "Session archived" });
+      this.patchUi({ toast: "Чат перемещён в архив" });
     } catch (e) {
       if (gen !== this.connectionGeneration || !this.engineStillActive(backend))
         return;
-      this.patchUi({ toast: `Archive failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось архивировать чат: ${errText(e)}` });
     }
   }
 
@@ -1915,11 +1915,11 @@ class Store {
                 ...s.sessions,
               ],
       }));
-      this.patchUi({ toast: "Session restored" });
+      this.patchUi({ toast: "Чат восстановлен из архива" });
     } catch (e) {
       if (gen !== this.connectionGeneration || !this.engineStillActive(backend))
         return;
-      this.patchUi({ toast: `Restore failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось восстановить чат: ${errText(e)}` });
     }
   }
 
@@ -1950,54 +1950,45 @@ class Store {
         },
       }));
       this.persistPrefs();
-      this.patchUi({ toast: "Session deleted permanently" });
+      this.patchUi({ toast: "Чат удалён безвозвратно" });
     } catch (e) {
       if (gen !== this.connectionGeneration || !this.engineStillActive(backend))
         return;
-      this.patchUi({ toast: `Delete failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось удалить чат: ${errText(e)}` });
     }
   }
 
   // ---------- model / agent selection ----------
 
   /**
-   * Model preferences are scoped per engine: Pi and OpenCode have different
-   * catalogs, so switching engines must never reuse the other one's model.
-   * OpenCode keeps the historic unprefixed keys, so existing preferences and
-   * per-session choices continue to resolve unchanged.
+   * One catalogue (the runtime's providers). Saved choices resolve from the
+   * unprefixed keys and from the former Pi chats' `pi::` keys alike.
    */
   getModelChoice(
-    engine: EngineId = this.engineIdFor(),
+    _engine: EngineId = this.engineIdFor(),
     directoryOverride?: string | null,
-  ): {
-    providerID: string;
-    modelID: string;
-    variant?: string | null;
-  } | null {
-    if (engine === PI_BACKEND_ID)
-      return this.piModelChoice(directoryOverride ?? this.state.directory);
-    return chooseOpenCodeModel(this.state, {
-      projectless: this.isProjectless(), activeModel: this.activeSession()?.model,
-      agentName: this.getAgentChoice(), defaultVariant: (p, m) => this.defaultVariant(p, m),
+  ): ModelChoice | null {
+    const state = directoryOverride !== undefined && directoryOverride !== this.state.directory
+      ? { ...this.state, directory: directoryOverride }
+      : this.state;
+    return chooseModel(state, {
+      projectless: !state.directory || this.isProjectlessDirectory(state.directory),
+      activeModel: this.activeSession()?.model,
+      defaultVariant: (p, m) => this.defaultVariant(p, m),
     });
   }
 
-  /** Pi's catalog comes from the engine itself, not from OpenCode providers. */
   /**
-   * Pi's model resolution.
-   *
-   * Pi's bundled catalog is *not* the list of models an account can use: it can
-   * both miss accessible custom models and list models the account cannot reach.
-   * A successful short request is access evidence for defaults. Configured
-   * picker rows remain visible offline; selecting one checks readiness:
-   *
-   *   per-chat / per-folder choice  →  explicit custom model  →  configured
-   *   default  →  first catalog entry
-   *
-   * `checkPiModelAccess` records that evidence per model.
+   * The saved model of an explicit (possibly background) chat, resolved with
+   * the same policy as the visible one but without selecting it or touching
+   * the visible chat's choice.
    */
-  private piModelChoice(directory: string | null): ModelChoice | null {
-    return choosePiModel(this.state, directory);
+  modelChoiceForSession(session: Pick<Session, "id" | "directory" | "model">): ModelChoice | null {
+    return chooseModel({ ...this.state, directory: session.directory, activeSessionId: session.id }, {
+      projectless: this.isProjectlessDirectory(session.directory),
+      activeModel: session.model,
+      defaultVariant: (p, m) => this.defaultVariant(p, m),
+    });
   }
 
   /** Configured models remain visible; access evidence is a badge, not a filter. */
@@ -2017,13 +2008,13 @@ class Store {
       source: "catalog" | "custom";
       verified: boolean;
     };
-    const out: Option[] = (this.state.piHealth?.models ?? []).map((m) => ({
-      providerID: m.provider,
+    const out: Option[] = this.state.providers.flatMap((provider) => Object.values(provider.models).map((m) => ({
+      providerID: provider.id,
       modelID: m.id,
       label: m.name ?? m.id,
-      source: "catalog",
-      verified: verified === `${m.provider}/${m.id}` || Boolean(verifiedModels[`${m.provider}/${m.id}`]),
-    }));
+      source: "catalog" as const,
+      verified: verified === `${provider.id}/${m.id}` || Boolean(verifiedModels[`${provider.id}/${m.id}`]),
+    })));
     const custom = parseModelId(this.state.prefs.pi?.customModel);
     if (custom && !out.some((m) => m.providerID === custom.providerID && m.modelID === custom.modelID))
       out.unshift({
@@ -2049,17 +2040,18 @@ class Store {
    * credentials, endpoint or entitlement.
    */
   async checkPiModelAccess(modelId?: string, signal?: AbortSignal): Promise<{ ok: boolean; detail: string }> {
-    const choice = modelId ? parseModelId(modelId) : this.getModelChoice(PI_BACKEND_ID);
+    const choice = modelId ? parseModelId(modelId) : this.getModelChoice();
     if (!choice)
-      return { ok: false, detail: "Модель для Pi не выбрана." };
+      return { ok: false, detail: "Модель не выбрана." };
     const id = `${choice.providerID}/${choice.modelID}`;
     try {
-      await modelServices.ensure(choice.providerID, choice.modelID, PI_BACKEND_ID, {signal});
+      // Hub-coordinated models are checked by the Hub (the runtime answers 409); no UI lease.
+      await modelServices.ensureLocal(choice.providerID, choice.modelID, RUNTIME_AGENT_ID, {signal});
       signal?.throwIfAborted();
-      const detail = await this.pi().checkAccess(
-        await piBridge().probeDirectory().catch(() => ""),
-        choice,
-      );
+      // A real minimal request through the runtime (no session, no tools).
+      const result = await this.backend.client.checkModel(choice.providerID, choice.modelID, signal);
+      if (!result.ok) throw new Error(result.detail || "Модель не ответила.");
+      const detail = result.detail;
       this.setPiSettings({
         verifiedModel: id,
         verifiedModels: { ...this.state.prefs.pi?.verifiedModels, [id]: Date.now() },
@@ -2094,122 +2086,123 @@ class Store {
       this.patchUi({ sendError: "Эта модель недоступна выбранному агенту. Проверьте сервис моделей." });
       return;
     }
-    const session = this.state.activeSessionId, directory = this.state.directory, backend = this.backend;
-    void modelServices.ensure(providerID, modelID, engine).catch(error => {
-      if (session === this.state.activeSessionId && directory === this.state.directory && backend === this.backend && engine === this.engineIdFor())
-        this.patchUi({ sendError: errText(error) });
-    });
+    // No residency control here: choosing a model never loads/unloads one. The
+    // runtime prepares the exact model (Hub lease included) at delivery.
     this.commitModelChoice(providerID, modelID, variant, automaticBrowser);
   }
 
-  private assertContextReady(session: string | null, providerID: string, modelID: string, engine: string): void {
-    if (engine !== PI_BACKEND_ID && session && this.transferNeeded(session, providerID, modelID))
-      throw new Error('История не помещается в выбранную модель. Выберите её повторно для переноса через предыдущую большую модель или нажмите «Сжать сейчас». Черновик и очередь сохранены.');
+  /** The runtime is delivering (or unsure about) an item of this chat's queue. */
+  private queueBusy(session: string): boolean {
+    return (this.state.queues[session]?.items ?? []).some(item => item.state !== "ready");
   }
 
-  private transferNeeded(session: string, providerID: string, modelID: string) {
-    const target = this.modelInfo(providerID, modelID), chat = this.state.chat.sessions[session];
-    return target && chat ? transferSource(chat.messageOrder.map(id => chat.messages[id]), target) : undefined;
-  }
-
-  /** One native compaction with the history's previous model, before unloading it.
-   * No prompt replay, source mutation, truncation or automatic continuation. */
-  private async transferContext(session: string, directory: string, targetProvider: string, targetModel: string,
-    current: () => boolean, progress?: (message: string) => void): Promise<void> {
-    const target = this.modelInfo(targetProvider, targetModel);
-    if (!target || !inputBudget(target)) return;
-    if (this.isRunning(session) || this.compactLocks.has(session) || this.state.ui.sending || this.scheduledLocks.has(session) || this.queueLocks.has(session))
-      throw new Error('Дождитесь завершения текущей работы перед переносом контекста в меньшую модель.');
-    this.compactLocks.add(session);
-    const backend = this.conversation();
-    try {
-      const before = await backend.messages(session, {directory, limit: 100});
-      if (!current()) throw new Error('Переход отменён: выбран другой чат или модель.');
-      const source = transferSource(before.messages.map(r => r.info), target);
-      if (!source) return;
-      if (!source.providerID || !source.modelID) throw new Error('Не удалось определить предыдущую модель для сжатия. История сохранена.');
-      const previous = this.modelInfo(source.providerID, source.modelID);
-      const used = source.tokens?.total || (source.tokens?.input ?? 0) + (source.tokens?.output ?? 0) + (source.tokens?.cache?.read ?? 0) + (source.tokens?.cache?.write ?? 0);
-      if (!previous || inputBudget(previous) <= used || source.providerID === targetProvider && source.modelID === targetModel)
-        throw new Error('История превышает контекст модели для сжатия. Выберите предыдущую модель с большим контекстом; история сохранена.');
-      if (!modelServices.manages(source.providerID, source.modelID) && !this.state.connectedProviderIds.includes(source.providerID))
-        throw new Error('Предыдущая модель недоступна. Подключите её для сжатия; новая модель пока не выбрана.');
-      const config = await backend.config(directory);
-      const agent = (await backend.agents(undefined, directory)).find(a => a.name === 'compaction');
-      if (agent?.model && (agent.model.providerID !== source.providerID || agent.model.modelID !== source.modelID))
-        throw new Error('В настройках роли compaction закреплена другая модель. Для переноса нужна предыдущая модель с большим контекстом.');
-      if (!current() || this.isRunning(session) || this.state.ui.sending) throw new Error('Состояние чата изменилось; перенос отменён.');
-      progress?.(`Сжимаем историю моделью ${previous.name || previous.id}. Затем загрузим выбранную модель. Полная история останется в чате.`);
-      await modelServices.ensure(source.providerID, source.modelID, this.engineIdFor(session, directory), {context: session});
-      if (!current() || this.isRunning(session) || this.state.ui.sending) throw new Error('Состояние чата изменилось; перенос отменён.');
-      const [statuses, permissions, questions] = await Promise.all([
-        backend.sessionStatuses(directory), backend.pendingPermissions(directory), backend.pendingQuestions(directory),
-      ]);
-      if (!current() || statuses[session]?.type === 'busy' || statuses[session]?.type === 'retry' || permissions.some(p => p.sessionID === session) || questions.some(q => q.sessionID === session))
-        throw new Error('Агент занят или ожидает разрешения. Перенос не начат; дождитесь завершения работы.');
-      const deadline = Date.now() + 900000;
-      await backend.summarize(session, directory, source.providerID, source.modelID);
-      const summary = await waitForSummary(async () => (await backend.messages(session, {directory, limit: 100})).messages,
-        new Set(before.messages.map(r => r.info.id)), target, config.compaction?.preserve_recent_tokens ?? 16000, deadline);
-      if (!current()) throw new Error('Сжатие завершено, но переход отменён: выбран другой чат или модель.');
-      // Merge only the authoritative completed summary. Do not replace paginated
-      // history or replay stale snapshots over unrelated live tool messages.
-      this.handleEvent({type: 'message.updated', properties: {info: summary.info}});
-      for (const part of summary.parts) this.handleEvent({type: 'message.part.updated', properties: {part}});
-      progress?.('Выжимка сохранена. Подготавливаем выбранную модель…');
-    } finally {
-      this.compactLocks.delete(session);
-    }
-  }
 
   private modelSelectionRevision = 0;
-  /** Do not write the choice until the selected target passes its readiness check. */
+  /**
+   * Explicit model choice. An existing idle chat gets ONE durable runtime
+   * `model.transition` (the worker fits the history, summarizes with the
+   * current model when needed and takes the Hub lease for the exact model it
+   * uses next); the choice is written only when it completed. A busy chat is
+   * never interrupted and its running model is never unloaded: the choice is
+   * deferred to the next prompt, which passes the same worker gate at
+   * delivery (manual, queued and timed alike). On failure, the previous
+   * choice, the draft and the queue stay exactly as they were.
+   */
   async selectModel(providerID: string, modelID: string, variant?: string | null, signal?: AbortSignal, progress?: (message: string) => void): Promise<boolean> {
     const revision = ++this.modelSelectionRevision;
-    const engine = this.engineIdFor(), directory = this.state.directory, session = this.state.activeSessionId;
+    const directory = this.state.directory, session = this.state.activeSessionId;
     const generation = this.directoryGeneration, backend = this.backend;
     const current = () => !signal?.aborted && revision === this.modelSelectionRevision && generation === this.directoryGeneration &&
-      engine === this.engineIdFor() && directory === this.state.directory && session === this.state.activeSessionId && backend === this.backend;
-    const locked = engine !== PI_BACKEND_ID && session && directory && inputBudget(this.modelInfo(providerID, modelID) ?? {id: modelID, providerID}) > 0 ? session : null;
-    if (locked && (this.modelTransitionLocks.has(locked) || this.compactLocks.has(locked)))
-      throw new Error('Дождитесь завершения перехода или сжатия контекста.');
-    if (locked) this.modelTransitionLocks.add(locked);
-    let committed = false;
-    try {
-      if (engine === PI_BACKEND_ID) {
-        const result = await this.checkPiModelAccess(`${providerID}/${modelID}`, signal);
-        if (!current()) return false;
-        if (!result.ok) throw new Error(result.detail);
-      } else {
-        if (!this.configuredProvidersWithModels().some(p => p.id === providerID && Boolean(p.models[modelID])))
-          throw new Error("Эта модель не настроена в OpenCode. Обновите список или проверьте настройки провайдера.");
-        const health = await backend.health();
-        if (!current()) return false;
-        if (!health.healthy) throw new Error("Нет связи с OpenCode.");
-        if (!modelServices.manages(providerID, modelID) && !this.state.connectedProviderIds.includes(providerID))
-          throw new Error("Провайдер сейчас недоступен. Проверьте его настройки подключения.");
-        if (session && directory) await this.transferContext(session, directory, providerID, modelID, current, progress);
-        if (!current()) return false;
-        await modelServices.ensure(providerID, modelID, engine, {signal});
-        if (!current()) return false;
-      }
+      directory === this.state.directory && session === this.state.activeSessionId && backend === this.backend;
+    if (session && this.modelTransitionLocks.has(session)) throw new Error("Дождитесь завершения текущей смены модели.");
+    if (!this.configuredProvidersWithModels().some(p => p.id === providerID && Boolean(p.models[modelID])))
+      throw new Error("Эта модель не настроена. Обновите список моделей или проверьте настройки провайдера.");
+    if (!modelServices.allowed(providerID, modelID, this.engineIdFor()))
+      throw new Error("Эта модель недоступна выбранному агенту. Проверьте сервис моделей.");
+    const health = await backend.health();
+    if (!current()) return false;
+    if (!health.healthy) throw new Error("Нет связи со средой выполнения Enki.");
+    if (!modelServices.manages(providerID, modelID) && !this.state.connectedProviderIds.includes(providerID))
+      throw new Error("Провайдер сейчас недоступен. Проверьте его настройки подключения.");
+    // New chat / draft or read-only archive: nothing to transition yet.
+    if (!session || !directory || this.isLegacySession(session)) { this.commitModelChoice(providerID, modelID, variant); return true; }
+    if (this.isRunning(session) || this.queueBusy(session) || this.state.ui.sending) {
       this.commitModelChoice(providerID, modelID, variant);
-      committed = true;
+      progress?.("Агент сейчас работает: текущая работа и её модель не прерываются. Выбранная модель будет подготовлена перед следующим запросом.");
       return true;
-    } finally {
-      if (locked) this.modelTransitionLocks.delete(locked);
-      if (committed) void this.drainQueue();
     }
+    const id = `model-transition-${crypto.randomUUID()}`;
+    const listener = (p: ContextTransitionProgress) => { if (p.operation === id && current()) progress?.(transitionText(p)); };
+    this.modelTransitionLocks.add(session);
+    this.transitionListeners.add(listener);
+    try {
+      const outcome = await requestModelTransition(backend.client, { id, sessionID: session, directory, model: { providerID, modelID, variant: variant ?? null },
+        signal, progress: () => this.transitionProgress.get(id) ?? null });
+      switch (outcome.kind) {
+        case "applied":
+          // The runtime session now uses the target: record it for THAT chat even if the user moved on.
+          this.commitSessionModelChoice(session, providerID, modelID, variant);
+          return current();
+        case "deferred":
+          if (!current()) return false;
+          this.commitModelChoice(providerID, modelID, variant);
+          progress?.("Агент начал работу: выбранная модель будет подготовлена перед следующим запросом.");
+          return true;
+        case "detached": return false;
+        case "cancelled": throw new Error(`${outcome.message} Прежняя модель, черновик и очередь сохранены.`);
+        case "unknown": throw new Error(outcome.message);
+        case "failed": throw new Error(`${outcome.message} Прежняя модель, черновик и очередь сохранены.${recoveryText(outcome.recovery)}`);
+      }
+    } finally {
+      this.transitionListeners.delete(listener);
+      this.modelTransitionLocks.delete(session);
+    }
+  }
+
+  private commitSessionModelChoice(session: string, providerID: string, modelID: string, variant?: string | null): void {
+    const key = modelScope(this.engineIdFor(), `session:${session}`);
+    this.mutate(s => ({ prefs: { ...s.prefs, modelChoice: { ...s.prefs.modelChoice, [key]: { providerID, modelID, variant: variant ?? null } } } }));
+    this.persistPrefs();
+  }
+
+  /** A scoped runtime acknowledgement, emitted only after its canonical SDK select. */
+  private projectMigratedModel(properties: unknown, directory: unknown): void {
+    const plain = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" &&
+      !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+    const id = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 1024 &&
+      value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
+    const model = (value: unknown): value is Pick<ModelChoice, "providerID" | "modelID"> => plain(value) &&
+      Object.keys(value).length === 2 && id(value.providerID) && id(value.modelID);
+    if (typeof directory !== "string" || !directory || !plain(properties) || Object.keys(properties).length !== 3 ||
+        !id(properties.sessionID) || !model(properties.from) || !model(properties.to)) return;
+    const { sessionID, from, to } = properties;
+    if (from.providerID === to.providerID && from.modelID === to.modelID) return;
+    const session = this.state.sessions.find(s => s.id === sessionID) ?? this.state.archivedSessions.find(s => s.id === sessionID) ??
+      this.activitySessions.get(sessionID) ?? this.state.recentSessionList.sessions.find(s => s.id === sessionID) ??
+      this.state.projectSessionLists[directory]?.sessions.find(s => s.id === sessionID) ??
+      this.state.prefs.projectlessSessions?.find(s => s.id === sessionID);
+    if (!session || session.directory !== directory || session.origin?.kind === "opencode") return;
+    const key = `session:${sessionID}`;
+    // Use the same plain-before-pi:: precedence as chooseModel. A newer explicit
+    // choice wins; a folder/global alias creates an override for THIS chat only.
+    const choice = legacyModelChoice(this.state, key) ??
+      legacyModelChoice(this.state, this.isProjectlessDirectory(directory) ? "@chats" : directory) ??
+      legacyModelChoice(this.state, "*");
+    if (!choice || choice.providerID !== from.providerID || choice.modelID !== from.modelID) return;
+    const next = { ...choice, providerID: to.providerID, modelID: to.modelID };
+    this.mutate(s => ({
+      prefs: { ...s.prefs, modelChoice: { ...s.prefs.modelChoice, [key]: next } },
+      ...(s.activeSessionId === sessionID && s.directory === directory
+        ? { ui: { ...s.ui, toast: `Модель чата обновлена: ${this.modelInfo(to.providerID, to.modelID)?.name ?? to.modelID}.` } }
+        : {}),
+    }));
+    // No model-selection revision, submission or agent message is changed here.
+    this.persistPrefs();
   }
 
   private commitModelChoice(providerID: string, modelID: string, variant?: string | null, automaticBrowser = false): void {
     const engine = this.engineIdFor();
-    const dir =
-      engine === PI_BACKEND_ID
-        ? (this.state.directory ?? "@chats")
-        : this.isProjectless()
-          ? "@chats"
-          : (this.state.directory ?? "");
+    const dir = this.isProjectless() ? "@chats" : (this.state.directory ?? "");
     const key = modelScope(
       engine,
       this.state.activeSessionId
@@ -2273,16 +2266,21 @@ class Store {
   }
 
   async refreshModelCatalog(): Promise<void> {
-    const engine = this.engineIdFor(), gen = this.directoryGeneration, backend = this.backend, directory = this.state.directory;
-    const discovery = engine === PI_BACKEND_ID
-      ? this.pi().describe(await piBridge().probeDirectory().catch(() => "")).then(health => {
-        if (health.error) throw new Error(health.error);
-        if (gen === this.directoryGeneration && engine === this.engineIdFor()) { this.piInstalled = health.install.installed; this.mutate({ piHealth: health }); }
-      })
-      : backend.providers(undefined, directory).then(prov => {
-        if (gen === this.directoryGeneration && backend === this.backend && engine === this.engineIdFor())
-          this.mutate({ providers: prov.all ?? [], connectedProviderIds: prov.connected ?? [], providerDefaults: prov.default ?? null });
-      });
+    const gen = this.directoryGeneration, backend = this.backend;
+    // The runtime re-reads models.json and provider discovery, then reports per-provider errors.
+    const discovery = backend.client.refreshProviders().then(async ({ errors }) => {
+      const prov = await backend.providers(undefined);
+      if (gen === this.directoryGeneration && backend === this.backend) {
+        // A rescan with errors must not shrink the usable catalog: a provider
+        // that failed to re-read keeps its previous entry, so a saved chat model
+        // is never silently replaced by chooseModel's fallback on the next send.
+        const all = prov.all ?? [];
+        const kept = errors.length ? this.state.providers.filter(p => !all.some(n => n.id === p.id)) : [];
+        const connected = [...new Set([...(prov.connected ?? []), ...this.state.connectedProviderIds.filter(id => kept.some(p => p.id === id))])];
+        this.mutate({ providers: [...all, ...kept], connectedProviderIds: connected, providerDefaults: prov.default ?? null });
+      }
+      if (errors.length) throw new Error(errors.join("\n"));
+    });
     const results = await Promise.allSettled([discovery, modelServices.refreshAll()]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length) throw new Error(failures.map(r => errText(r.reason)).join("\n"));
@@ -2318,6 +2316,20 @@ class Store {
       prefs: { ...s.prefs, drafts: { ...s.prefs.drafts, [key]: text } },
     }));
     this.persistPrefs();
+    // Live plugin surface: this text is pending local state over the shared runtime draft CAS.
+    activePluginUi.localChanged();
+  }
+
+  /** Draft of a specific chat (the plugin draft CAS bridge targets one chat, not "whatever is selected"). */
+  draftFor(sessionId: string, directory: string): string {
+    return this.state.prefs.drafts[draftKey(sessionId, directory)] ?? "";
+  }
+  /** Canonical text adopted from the runtime draft; not echoed back as a local edit. */
+  setDraftFor(sessionId: string, directory: string, text: string): void {
+    const key = draftKey(sessionId, directory);
+    if ((this.state.prefs.drafts[key] ?? "") === text) return;
+    this.mutate((s) => ({ prefs: { ...s.prefs, drafts: { ...s.prefs.drafts, [key]: text } } }));
+    this.persistPrefs();
   }
 
   async removeDraftAttachment(id: string): Promise<void> {
@@ -2328,11 +2340,26 @@ class Store {
       this.patchUi({sendError: null});
   }
 
+  /** ZIPs are copied next to the runtime: locally, or over SSH to the runtime's host. */
   private archiveStager(backend: AgentBackend): ArchiveStager {
-    const host = backend.id === PI_BACKEND_ID ? undefined : this.currentHost(), endpoint = backend.endpoint;
+    const host = this.currentHost(), endpoint = backend.endpoint;
     let paths: ReturnType<AgentBackend['paths']> | undefined;
     return async file => stageArchive(file, {serverHome: (await (paths ??= backend.paths())).home,
       sshTarget: host?.target, endpoint});
+  }
+
+  /**
+   * Draft files → prompt parts for the runtime. The Pi SDK accepts text and
+   * images only, so PDF/audio/video are converted (text extraction, speech
+   * recognition) exactly as for a direct send; used by both send and queue.
+   */
+  private prepareRuntimeAttachments(
+    files: DraftAttachment[], modelInfo: ModelInfo, backend: AgentBackend, signal: AbortSignal,
+    onProgress: (label: string) => void = () => {}, referenceImages = isNative() && !this.currentHost(),
+  ): Promise<PromptRequest["parts"]> {
+    const info = { ...modelInfo, capabilities: { ...modelInfo.capabilities, input: { ...modelInfo.capabilities?.input, pdf: false, audio: false, video: false } } } as ModelInfo;
+    return prepareAttachments(files, info, this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT,
+      this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, signal, onProgress, this.archiveStager(backend), {imageReferences: referenceImages});
   }
 
   /** Editing preserves the original conversation and never starts inference implicitly. */
@@ -2363,7 +2390,7 @@ class Store {
       if ((statuses[id] && statuses[id].type !== "idle") || permissions.some(p => p.sessionID === id) || questions.some(q => q.sessionID === id))
         throw new Error("Дождитесь завершения задачи или ответьте на её вопрос.");
       const fork = await backend.forkSession(id, directory, messageID);
-      // OpenCode forks exclude the selected message, but do NOT inherit permission rules.
+      // The runtime fork ends before the selected message; permission rules are copied explicitly.
       const branch = await backend.updateSession(fork.id, {
         title: `${source.title} · правка`, permission: source.permission ?? [],
       }, directory);
@@ -2386,135 +2413,13 @@ class Store {
 
   // ---------- execution ----------
 
-  private scheduledLocks = new Set<string>();
-  /**
-   * One scheduled prompt under the same guards as a manual send. It never consumes
-   * the user's draft, files or queue, never answers a permission or question and
-   * never substitutes the saved server, chat, model or agent. Read-only checks stop
-   * when `signal` aborts; once the prompt is being sent it is neither aborted nor
-   * repeated. Throws `ScheduleBlocked` for definite "not sent, needs the user"
-   * outcomes; any other throw is uncertain delivery.
-   */
-  async runScheduledTask(task: ScheduledTask, signal: AbortSignal = new AbortController().signal): Promise<DispatchResult> {
-    const waiting = (detail: string): DispatchResult => ({ kind: "waiting", detail });
-    const server = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
-    const pi = task.engine === PI_BACKEND_ID;
-    if (task.server !== server) return waiting("Ожидает подключения к исходному серверу");
-    if (!pi && (this.state.connection.phase !== "connected" || this.state.connection.streamState !== "open"))
-      return waiting("Ожидает подключения к серверу OpenCode");
-    if (this.state.ui.sending || this.scheduledLocks.size || this.accessChanging || this.state.ui.workspacePreparing || this.state.ui.runtimeLoading)
-      return waiting("Ожидает завершения текущей отправки");
-    if (this.engineIdFor(task.sessionID, task.directory) !== task.engine)
-      throw new ScheduleBlocked("Агент этого чата изменился. Создайте задание заново для текущего агента.");
-    if (!this.engineReady(task.engine as EngineId)) return waiting(pi ? "Pi сейчас недоступен" : "Агент недоступен");
-    const backend = this.engine(task.engine as EngineId), gen = this.connectionGeneration;
-    const current = () => gen === this.connectionGeneration && this.engineStillActive(backend)
-      && server === (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint)
-      && this.engineIdFor(task.sessionID, task.directory) === task.engine;
-    const blocker = (status: SessionStatus | undefined, permissions: PermissionRequest[], questions: QuestionRequest[]) =>
-      chatBlocker(task.sessionID, {
-        status, permissions, questions,
-        queued: this.getQueue(task.sessionID).length,
-        running: this.isRunning(task.sessionID),
-        locked: this.queueLocks.has(task.sessionID) || this.compactLocks.has(task.sessionID) || this.modelTransitionLocks.has(task.sessionID),
-        dialog: this.state.ui.piDialog?.sessionId === task.sessionID,
-      });
-    const preparationStarted = Date.now();
-    const stopped = this.queueStops.get(task.sessionID) ?? 0;
-    let sending = false;
-    this.scheduledLocks.add(task.sessionID);
-    try {
-      const [session, statuses, permissions, questions, providers, agents] = await untilAborted(Promise.all([
-        backend.getSession(task.sessionID, task.directory, signal).catch((error: unknown) => {
-          // A missing chat is a fact, not a hiccup: OpenCode answers 404; Pi has no record of it.
-          if (pi || (error instanceof ApiError && error.status === 404))
-            throw new ScheduleBlocked("Чат удалён или больше недоступен. Задание приостановлено.");
-          throw error;
-        }),
-        backend.sessionStatuses(task.directory, signal),
-        backend.pendingPermissions(task.directory, signal),
-        backend.pendingQuestions(task.directory, signal),
-        pi ? null : backend.providers(signal, task.directory),
-        pi ? null : backend.agents(signal, task.directory),
-      ]), signal);
-      if (!current()) return waiting("Подключение изменилось");
-      if (session.directory !== task.directory || session.time.archived)
-        throw new ScheduleBlocked("Чат архивирован или перенесён в другую папку. Задание приостановлено.");
-      const busy = blocker(statuses[task.sessionID], permissions, questions);
-      if (busy) return waiting(busy);
-      const unavailable = modelProblem(task, providers, agents);
-      if (unavailable) throw new ScheduleBlocked(unavailable);
-      if (pi) {
-        const live = await untilAborted(this.pi().liveModel(task.sessionID), signal);
-        const mismatch = live.running ? liveModelProblem(task, live.model) : null;
-        if (mismatch) throw new ScheduleBlocked(mismatch);
-      }
-      if (isNative() && isLocalComputer(this.state.prefs.endpoint, !!this.currentHost()) && browserEnabled(this.state.prefs)) {
-        // OpenCode needs this directory's MCP attachment; Pi only the installed runtime it loads itself.
-        const status = await untilAborted(this.configureBrowser(false, false, pi ? null : task.directory), signal);
-
-        if (pi ? !status : browserSetupSnapshot().phase === "error")
-          throw new ScheduleBlocked("Браузерные инструменты не подключились; запрос не отправлен. Проверьте «Настройки → Браузер» и возобновите задание.");
-      }
-      // Browser setup can take time. Re-check authoritative interaction state before dispatch.
-      if (!pi) await untilAborted(this.configureSharedTools(task.directory, signal), signal);
-      this.assertContextReady(task.sessionID, task.model.providerID, task.model.modelID, task.engine);
-      await untilAborted(modelServices.ensure(task.model.providerID, task.model.modelID, task.engine, {signal, context: task.sessionID}), signal);
-      const [freshStatus, freshPermissions, freshQuestions] = await untilAborted(Promise.all([
-        backend.sessionStatuses(task.directory, signal), backend.pendingPermissions(task.directory, signal), backend.pendingQuestions(task.directory, signal),
-      ]), signal);
-      if (!current() || this.state.ui.sending) return waiting("Подключение или текущая отправка изменились");
-      const late = blocker(freshStatus[task.sessionID], freshPermissions, freshQuestions);
-      if (late) return waiting(late);
-      if (signal.aborted || (this.queueStops.get(task.sessionID) ?? 0) !== stopped) return { kind: "cancelled" };
-      // Use the model/agent the user explicitly saved with this task, including its reasoning variant.
-      // No signal: a prompt that may have been delivered is never abandoned as if it was not.
-      const seq = this.statusSequence;
-      try {
-        await untilAborted(modelServices.reserve(task.model.providerID, task.model.modelID, task.engine, task.sessionID, signal), signal);
-        if (!current() || signal.aborted || (this.queueStops.get(task.sessionID) ?? 0) !== stopped) return { kind: "cancelled" };
-        const messageID = newMessageId(), dispatchAt = Date.now();
-        (this.state.chat.sessions[task.sessionID] ??= emptySessionChat()).pendingTiming = {
-          ...(pi ? {} : {messageID}), dispatchAt, preparationMs: dispatchAt - preparationStarted, queueMs: null,
-        };
-        await operationJournal.dispatch({ id: messageID, workspace: server, engine: task.engine, sessionId: task.sessionID, directory: task.directory, source: "schedule", sourceId: task.id, text: task.prompt, model: `${task.model.providerID}/${task.model.modelID}`, attachments: null },
-          () => current() && !signal.aborted && (this.queueStops.get(task.sessionID) ?? 0) === stopped, async () => {
-        if (!pi) await ownWork(backend.endpoint, task.directory, task.sessionID, messageID, this.client.headers.Authorization);
-        if (!current() || signal.aborted || (this.queueStops.get(task.sessionID) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
-        await stageImagePromptContext({engine:task.engine,sessionId:task.sessionID,directory:task.directory,messageId:messageID,parts:[],automatic:true,
-          supportsVision:!!(pi ? piModelInfo(this.state.piHealth,task.model) : this.modelInfo(task.model.providerID,task.model.modelID))?.capabilities?.input?.image,
-          local:pi || isLocalComputer(this.state.prefs.endpoint,!!this.currentHost())});
-        if (!current() || signal.aborted || (this.queueStops.get(task.sessionID) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
-        sending = true;
-        await backend.prompt(task.sessionID, task.directory, {
-          messageID, model: { providerID: task.model.providerID, modelID: task.model.modelID },
-          variant: task.model.variant ?? undefined, agent: task.agent, parts: agentParts(this.state.prefs.workshop, task.sessionID, task.directory, [{ type: "text", text: task.prompt }, {type:"text",text:scheduleWakeReminder(task.sessionID,task.id),synthetic:true,metadata:{enkiScheduleWake:1}}]),
-        });
-        });
-      } catch (error) {
-        // The server answered with a refusal, so it accepted nothing. Its body is not kept.
-        if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408)
-          throw new ScheduleBlocked(`OpenCode отклонил запрос (HTTP ${error.status}). Проверьте чат, модель и агента; затем возобновите задание.`);
-        throw error;
-      }
-      if (current() && (this.statusVersions.get(task.sessionID) ?? 0) <= seq)
-        this.observeSessionStatus(task.sessionID, { type: "busy" }, task.directory);
-      return { kind: "sent" };
-    } catch (error) {
-      if (sending || error instanceof ScheduleBlocked) throw error;
-      // A read-only check failed or was withdrawn: nothing was sent, so trying later is safe.
-      return signal.aborted ? { kind: "cancelled" } : waiting("Не удалось проверить состояние чата; запрос не отправлен. Повторная проверка позже.");
-    } finally {
-      this.scheduledLocks.delete(task.sessionID);
-      // A user prompt queued meanwhile must not wait for the next status event.
-      if (task.sessionID === this.state.activeSessionId) void this.drainQueue();
-    }
-  }
+  // Scheduled prompts are dispatched by the runtime's scheduler (durable, with
+  // its own preflight); the UI only lists and edits them through `taskScheduler()`.
 
   async sendPrompt(text: string, attachments: DraftAttachment[] = [], onProgress: (label: string) => void = () => {}): Promise<boolean> {
     if (
       !this.engineReady() ||
-      (this.engineIdFor() !== PI_BACKEND_ID && !!this.state.connection.statusError) ||
+      !!this.state.connection.statusError ||
       (!text.trim() && !attachments.length) ||
       this.state.ui.sending ||
       this.state.ui.workspacePreparing ||
@@ -2525,9 +2430,9 @@ class Store {
       this.patchUi({ sendError: "Дождитесь завершения сжатия контекста. Черновик сохранён." });
       return false;
     }
-    if (this.scheduledLocks.has(this.state.activeSessionId ?? "")) {
-      // Never interleave with a scheduled prompt for the same chat; the draft stays as typed.
-      this.patchUi({ sendError: "Сейчас проверяется или отправляется запланированное задание этого чата. Черновик сохранён — отправьте его через несколько секунд." });
+    if (this.isLegacySession(this.state.activeSessionId)) {
+      // Imported archives are read-only; the old prompts are never replayed.
+      this.patchUi({ sendError: "Этот чат импортирован из архива OpenCode и доступен только для чтения. Продолжите его в новом чате Enki; черновик сохранён." });
       return false;
     }
     const initialScope = attachmentScope(this.state.prefs.workspaceKey ?? this.state.prefs.endpoint, this.state.directory, this.state.activeSessionId);
@@ -2550,7 +2455,8 @@ class Store {
     // mid-flight must not redirect an accepted prompt to a different agent.
     const engineId = this.engineIdFor();
     const backend = this.engine(engineId);
-    const referenceImages = isNative() && (engineId === PI_BACKEND_ID || isLocalComputer(this.state.prefs.endpoint, !!this.currentHost()));
+    // Original image files are staged on this computer, so references only work for the local runtime.
+    const referenceImages = isNative() && !this.currentHost();
     const selected = this.state.activeSessionId;
     const sentAtStatus = this.statusSequence;
     const status = selected ? this.activityStatus(selected) : null;
@@ -2558,20 +2464,12 @@ class Store {
     const slotKey = draftKey(this.state.activeSessionId, directory);
     const model = this.getModelChoice(engineId);
     if (!model) {
-      this.patchUi({
-        sendError:
-          engineId === PI_BACKEND_ID
-            ? "У Pi нет настроенной модели. Откройте «Настройки → Pi» и проверьте каталог моделей."
-            : "No connected model is available. Check provider configuration in OpenCode.",
-      });
+      this.patchUi({ sendError: "Нет доступной модели. Откройте «Настройки → Модели» и подключите провайдера." });
       return false;
     }
     const agent = this.getAgentChoice();
     const trimmed = text.trim() || "Проанализируй приложенные файлы.";
-    const modelInfo =
-      engineId === PI_BACKEND_ID
-        ? piModelInfo(this.state.piHealth, model)
-        : this.modelInfo(model.providerID, model.modelID);
+    const modelInfo = this.modelInfo(model.providerID, model.modelID);
     if (attachments.length && !this.conversation().capabilities.attachments) {
       this.patchUi({ sendError: "Этот агент не принимает вложения." });
       return false;
@@ -2589,8 +2487,9 @@ class Store {
     try {
       if (attachments.length) attachments = await attachmentDrafts.selected(initialScope, attachments.map(file => file.id));
       if (!text.trim() && !attachments.length) return false;
-      this.assertContextReady(selected, model.providerID, model.modelID, engineId);
-      await untilAborted(modelServices.ensure(model.providerID, model.modelID, engineId, {signal: operation.signal, context: selected ?? `@draft:${directory}`}), operation.signal);
+      // Context fit and Hub readiness are the runtime worker's gate at delivery;
+      // only a local (non-Hub) model service is switched right before this send.
+      await untilAborted(modelServices.ensureLocal(model.providerID, model.modelID, engineId, {signal: operation.signal}), operation.signal);
       if (!sameContext() || this.state.activeSessionId !== selected) return false;
       if (attachments.length && scope !== initialScope) await attachmentDrafts.move(initialScope, scope);
       // Do not submit the first prompt before its directory's MCP is attached.
@@ -2601,10 +2500,8 @@ class Store {
         if (browserSetupSnapshot().phase === "error") throw new Error(browserSetupSnapshot().error || "Браузер не подключён.");
         if (!sameContext() || this.state.activeSessionId !== selected) return false;
       }
-      if (engineId !== PI_BACKEND_ID) await this.configureSharedTools(directory);
-      if (!sameContext() || this.state.activeSessionId !== selected) return false;
       const parts = attachments.length && modelInfo
-        ? await prepareAttachments(attachments, engineId === PI_BACKEND_ID ? { ...modelInfo, capabilities: { ...modelInfo.capabilities, input: { ...modelInfo.capabilities?.input, pdf: false, audio: false, video: false } } } : modelInfo, this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT, this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, operation.signal, onProgress, this.archiveStager(backend), {imageReferences:referenceImages})
+        ? await this.prepareRuntimeAttachments(attachments, modelInfo, backend, operation.signal, onProgress, referenceImages)
         : [];
       if (!sameContext() || this.state.activeSessionId !== selected)
         throw new Error("Чат изменился во время подготовки вложений. Вложения остались в черновике.");
@@ -2613,16 +2510,7 @@ class Store {
           directory,
           title: trimmed.slice(0, 60),
           permission: accessRules(this.state.prefs.newAccess ?? "inherit"),
-          ...(engineId === PI_BACKEND_ID
-            ? {}
-            : {
-                agent: agent ?? undefined,
-                model: {
-                  id: model.modelID,
-                  providerID: model.providerID,
-                  variant: model.variant ?? undefined,
-                },
-              }),
+          model: { id: model.modelID, providerID: model.providerID, variant: model.variant ?? undefined },
         });
         if (!sameContext() || this.state.activeSessionId !== selected)
           return false; // selection changed during creation
@@ -2638,8 +2526,6 @@ class Store {
             prefs: {
               ...s.prefs,
               drafts,
-              // The chat's engine is pinned at creation and survives restarts.
-              sessionEngine: { ...s.prefs.sessionEngine, [created.id]: engineId },
               lastSessionByDir: {
                 ...s.prefs.lastSessionByDir,
                 [directory]: created.id,
@@ -2656,18 +2542,20 @@ class Store {
       }
       if (!sameContext() || this.state.activeSessionId !== sessionId) return false;
       const target = sessionId;
-      await untilAborted(modelServices.reserve(model.providerID, model.modelID, engineId, target, operation.signal), operation.signal);
+      // No UI execution lease: the runtime dispatcher discovers the Hub route
+      // and holds the whole-turn lease for the exact model it uses.
       if (!sameContext() || operation.signal.aborted || this.state.activeSessionId !== target) return false;
       const messageID = newMessageId();
       const dispatchAt = Date.now();
+      // The stable command id is also the timing key: the runtime ledger reuses it on a lost ACK.
       (this.state.chat.sessions[target] ??= emptySessionChat()).pendingTiming = {
-        ...(engineId === PI_BACKEND_ID ? {} : {messageID}), dispatchAt,
+        messageID, dispatchAt,
         preparationMs: dispatchAt - preparationStarted, queueMs: 0,
       };
-      await operationJournal.dispatch({ id: messageID, workspace: this.state.prefs.workspaceKey ?? endpoint, engine: engineId, sessionId: target, directory, source: "manual", sourceId: null, text: trimmed, model: `${model.providerID}/${model.modelID}`, attachments: attachments.length ? { scope, files: attachments.map(({id,name,mime,size}) => ({id,name,mime,size})) } : null },
+      const ledger = this.state.runtime?.hostId;
+      await operationJournal.dispatch({ id: messageID, workspace: this.state.prefs.workspaceKey ?? endpoint, engine: engineId, sessionId: target, directory, source: "manual", sourceId: null, text: trimmed, model: `${model.providerID}/${model.modelID}`, attachments: attachments.length ? { scope, files: attachments.map(({id,name,mime,size}) => ({id,name,mime,size})) } : null,
+        ...(ledger ? { authority: `runtime:${ledger}` } : {}) },
         () => sameContext() && this.state.activeSessionId === target && !operation.signal.aborted, async () => {
-      if (engineId !== PI_BACKEND_ID) await ownWork(backend.endpoint, directory, target, messageID, this.client.headers.Authorization);
-      if (!sameContext() || operation.signal.aborted) throw new NotDispatched("Отправка отменена.");
       await stageImagePromptContext({engine:engineId,sessionId:target,directory,messageId:messageID,parts,supportsVision:!!modelInfo?.capabilities?.input?.image,
         local:referenceImages});
       if (!sameContext() || operation.signal.aborted) throw new NotDispatched("Отправка отменена.");
@@ -2677,7 +2565,10 @@ class Store {
         model: { providerID: model.providerID, modelID: model.modelID },
         agent: agent ?? undefined,
         variant: model.variant ?? undefined,
-        parts: agentParts(this.state.prefs.workshop, target, directory, [{ type: "text", text: trimmed }, ...imagePromptParts(parts,!!modelInfo?.capabilities?.input?.image,referenceImages)]),
+        // Only the user's own parts: the runtime appends the app policy blocks
+        // (language, tool workflow, schedules, workshop) to every turn's system
+        // prompt, so repeating them in a fresh user message duplicated them.
+        parts: [{ type: "text", text: trimmed }, ...imagePromptParts(parts,!!modelInfo?.capabilities?.input?.image,referenceImages)],
       });
       });
       if (attachments.length) {
@@ -2713,16 +2604,15 @@ class Store {
         return { prefs: { ...s.prefs, drafts }, chat };
       });
       this.persistPrefs();
+      // The cleared composer text is a normal local edit over the shared runtime draft.
+      activePluginUi.localChanged();
       return true;
     } catch (e) {
       // Ambiguous outcome: never auto-resend. The draft was never cleared, so the user decides.
       if (sameContext() && this.state.activeSessionId === sessionId) this.patchUi({ sendError: errText(e) });
       return false;
     } finally {
-      if (this.finishSending(operation)) {
-        onProgress("");
-        void this.drainQueue();
-      }
+      if (this.finishSending(operation)) onProgress("");
     }
   }
 
@@ -2783,23 +2673,19 @@ class Store {
   }
 
   async stopSession(sessionId: string): Promise<void> {
+    // Local fence: a send still being prepared here never reaches the runtime.
     if (this.submissions.cancel(sessionId)) this.patchUi({ sending: false });
-    this.queueStops.set(sessionId, (this.queueStops.get(sessionId) ?? 0) + 1);
-    this.queueArmed.delete(sessionId);
     // Abort is directory-scoped: a session started in another project must be
     // stopped with *its* directory, not whichever project is open right now.
     const directory =
       this.activityDirectories.get(sessionId) ?? this.state.directory;
     if (!directory) return;
     try {
-      if (this.state.ui.piDialog?.sessionId === sessionId)
-        await this.answerPiDialog({ cancelled: true }).catch(() => {});
-      await this.engine(this.engineIdFor(sessionId, directory)).abort(
-        sessionId,
-        directory,
-      );
+      // Runtime Stop: disarms the queue, withdraws gated work and dialogs, aborts the turn.
+      await this.backend.abort(sessionId, directory);
+      void this.promptQueue.refresh(sessionId, directory).catch(() => {});
     } catch (e) {
-      this.patchUi({ toast: `Stop failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось остановить: ${errText(e)}` });
     }
   }
   cancelPreparation(): void {
@@ -2822,28 +2708,14 @@ class Store {
     this.compactLocks.add(sessionId);
     const generation = this.connectionGeneration;
     try {
-      const engine = this.engineIdFor(sessionId, directory), backend = this.conversation();
-      if (engine !== PI_BACKEND_ID && this.transferNeeded(sessionId, model.providerID, model.modelID)) {
-        // Release the outer guard: transferContext owns the same session lock.
-        this.compactLocks.delete(sessionId);
-        await this.transferContext(sessionId, directory, model.providerID, model.modelID,
-          () => generation === this.connectionGeneration && directory === this.state.directory && sessionId === this.state.activeSessionId,
-          message => this.patchUi({toast: message}));
-        this.patchUi({toast: 'Контекст сжат предыдущей моделью. Можно продолжать работу.'});
-        return;
-      }
-      await modelServices.ensure(model.providerID, model.modelID, engine, { context: sessionId });
-      const current = this.getModelChoice();
-      if (generation !== this.connectionGeneration || current?.providerID !== model.providerID || current?.modelID !== model.modelID
-        || directory !== this.state.directory || sessionId !== this.state.activeSessionId
-        || engine !== this.engineIdFor(sessionId, directory) || this.isRunning(sessionId) || this.state.ui.sending)
+      const backend = this.conversation();
+      if (generation !== this.connectionGeneration || directory !== this.state.directory || sessionId !== this.state.activeSessionId
+        || this.isRunning(sessionId) || this.state.ui.sending)
         throw new Error("Состояние сессии изменилось; сжатие отменено.");
-      await backend.summarize(
-        sessionId,
-        directory,
-        model.providerID,
-        model.modelID,
-      );
+      // Manual compaction is a CURRENT-model runtime operation: no payload model
+      // (the runtime refuses a different one) and no UI Hub lease; the
+      // dispatcher leases the model the SDK actually summarizes with.
+      await backend.submit({ id: `compact-${crypto.randomUUID()}`, kind: "compact", sessionID: sessionId, directory, payload: {} });
       this.patchUi({ toast: "Запрос на сжатие контекста отправлен." });
     } catch (e) {
       this.patchUi({ toast: `Не удалось сжать контекст: ${errText(e)}` });
@@ -2859,16 +2731,13 @@ class Store {
 
   contextInfo() {
     const choice = this.getModelChoice();
-    const isPi = this.engineIdFor() === PI_BACKEND_ID;
     const chat = this.state.activeSessionId
       ? this.state.chat.sessions[this.state.activeSessionId]
       : undefined;
     return contextUsage(
       chat,
-      choice && (isPi
-        ? piModelInfo(this.state.piHealth, choice)
-        : this.modelInfo(choice.providerID, choice.modelID)),
-      isPi ? { auto: false } : this.state.compaction,
+      choice && this.modelInfo(choice.providerID, choice.modelID),
+      this.state.compaction,
     );
   }
 
@@ -2878,8 +2747,20 @@ class Store {
       ? accessMode(session.permission)
       : (this.state.prefs.newAccess ?? "inherit");
   }
+  /** Access may change while idle, or while the turn is PARKED on a tool
+   * permission: the runtime then re-decides that waiting call once by the new
+   * rules (PATCH /sessions/:id), so "full access" does not ask again. A turn that
+   * is streaming keeps its access until it stops. */
+  accessChangeAllowed(): boolean {
+    if (this.state.ui.sending || this.accessChanging) return false;
+    const id = this.state.activeSessionId;
+    const status = id ? this.activityStatus(id)?.type : undefined;
+    if (status !== "busy" && status !== "retry" && status !== "waiting") return true;
+    return !!id && this.pendingInteraction(id).permissions.length > 0 && !this.isLegacySession(id);
+  }
+
   async setAccessMode(mode: AccessMode) {
-    if (this.isRunning() || this.state.ui.sending || this.accessChanging) {
+    if (!this.accessChangeAllowed()) {
       this.patchUi({ toast: "Остановите ответ, чтобы изменить режим доступа." });
       return;
     }
@@ -2971,39 +2852,48 @@ class Store {
     } else this.persistPrefs();
   }
 
+  // ---------- runtime-owned prompt queue (mirror + user intent only) ----------
   getQueue(id = this.state.activeSessionId): QueuedPrompt[] { return this.promptQueue.getQueue(id); }
   isQueueArmed(id = this.state.activeSessionId): boolean { return this.promptQueue.isQueueArmed(id); }
-  enqueuePrompt(text: string, attachments?: QueuedPrompt["attachments"], captured?: Pick<QueuedPrompt, "model" | "agent">): boolean {
-    return this.promptQueue.enqueuePrompt(text, attachments, captured);
-  }
+  queuePausedReason(id = this.state.activeSessionId): string | null { return this.promptQueue.pausedReason(id); }
+  /** Text-only enqueue; the runtime stores it durably under a stable id. */
+  enqueuePrompt(text: string): Promise<boolean> { return this.promptQueue.enqueueWithAttachments(text, []); }
   enqueueWithAttachments(text: string, files: DraftAttachment[]): Promise<boolean> { return this.promptQueue.enqueueWithAttachments(text, files); }
   reorderQueued(id: string, before: string | null): boolean { return this.promptQueue.reorderQueued(id, before); }
   removeQueued(id: string): Promise<void> { return this.promptQueue.removeQueued(id); }
   isQueueLocked(): boolean { return this.promptQueue.isQueueLocked(); }
   removeQueuedAttachment(id: string, fileID: string): Promise<void> { return this.promptQueue.removeQueuedAttachment(id, fileID); }
   getQueueEdit() { return this.promptQueue.getQueueEdit(); }
+  editKeptFiles() { return this.promptQueue.editKeptFiles(); }
   editQueued(id: string) { return this.promptQueue.editQueued(id); }
   cancelQueueEdit(): Promise<void> { return this.promptQueue.cancelQueueEdit(); }
-  applyQueueEdit(text: string, files: DraftAttachment[], drain = true): Promise<boolean> { return this.promptQueue.applyQueueEdit(text, files, drain); }
-  resumeQueue(useSelectedModel = false): void { this.promptQueue.resumeQueue(useSelectedModel); }
+  applyQueueEdit(text: string, files: DraftAttachment[]): Promise<boolean> { return this.promptQueue.applyQueueEdit(text, files); }
+  resumeQueue(useSelectedModel = false): Promise<void> { return this.promptQueue.resumeQueue(useSelectedModel); }
+  pauseQueue(): Promise<void> { return this.promptQueue.pauseQueue(); }
   queueRecoveryReason(): string | null { return this.promptQueue.queueRecoveryReason(); }
   queueHasDifferentModel(): boolean { return this.promptQueue.queueHasDifferentModel(); }
+  /** Steering without abort: the runtime delivers it at the next boundary of the running turn. */
   steerQueued(id: string): Promise<void> { return this.promptQueue.steerQueued(id); }
+  /** An uncertain (lost-ACK) item: the user checked the history and decides; never auto-replayed. */
+  acknowledgeQueued(id: string, action: "drop" | "requeue"): Promise<void> { return this.promptQueue.acknowledge(id, action); }
   attentionItems(): {id:string; directory:string; title:string; reason:string}[] {
     const out = new Map<string,{id:string;directory:string;title:string;reason:string}>();
     const add = (id:string, reason:string, directory?:string) => {
       const session = this.activitySessions.get(id) ?? this.state.sessions.find(s=>s.id===id);
-      const dir = directory ?? session?.directory ?? this.state.prefs.piSessions?.[id]?.directory;
+      const dir = directory ?? session?.directory;
       if (!dir) return;
       const old=out.get(id);
-      out.set(id,{id,directory:dir,title:session?.title ?? this.state.prefs.piSessions?.[id]?.title ?? id,reason:old?`${old.reason} · ${reason}`:reason});
+      out.set(id,{id,directory:dir,title:session?.title ?? id,reason:old?`${old.reason} · ${reason}`:reason});
     };
     for (const [id,chat] of Object.entries(this.state.chat.sessions)) if(chat.lastError) add(id,chat.lastError);
     const pending=new Set([...Object.values(this.state.chat.permissions),...Object.values(this.state.chat.questions)].map(p=>p.sessionID));
     for(const id of pending) add(id,'Требуется ваш ответ');
-    for(const d of this.piDialogs) add(d.sessionId,'Разрешение Pi',d.directory);
-    for(const [id,queue] of Object.entries(this.state.prefs.queues??{})) if(queue.length&&(!this.isRunning(id)||queue.some(q=>q.error||q.state==='uncertain')))
-      add(id,queue.find(q=>q.error)?.error??`В очереди: ${queue.length}`,queue[0].directory);
+    for(const d of this.agentDialogs.all()) add(d.sessionID,'Запрос расширения',d.directory);
+    for(const [id,queue] of Object.entries(this.state.queues)) {
+      const items=queue.items;
+      if(items.length&&(!queue.armed||items.some(q=>q.error||q.state==='uncertain')))
+        add(id,queue.pausedReason??items.find(q=>q.error)?.error??`В очереди: ${items.length}`,items[0].directory);
+    }
     return [...out.values()];
   }
   async openAttentionChat(id:string,directory:string):Promise<void> {
@@ -3030,187 +2920,49 @@ class Store {
   async reconcileOperation(record: Operation): Promise<string> {
     const workspace = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
     if (workspace !== record.workspace) throw Error("Подключитесь к исходному компьютеру.");
-    if (record.engine === PI_BACKEND_ID) return "Pi не подтверждает исходный ID отправки. Проверьте историю чата вручную; повторной отправки не было.";
-    const backend = this.engine(this.engineIdFor(record.sessionId, record.directory));
-    if (backend.id !== record.engine) throw Error("Агент чата изменился.");
-    let before: string | undefined;
-    for (let page = 0; page < 10; page++) {
-      const result = await backend.messages(record.sessionId, { directory: record.directory, limit: 200, before });
-      if (workspace !== (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint)) throw Error("Подключение изменилось.");
-      if (result.messages.some(message => message.info.id === record.id && message.info.role === "user")) {
-        await operationJournal.confirm(record, true);
-        if (record.source === "queue" && record.sourceId) {
-          this.writeQueue(record.sessionId, this.getQueue(record.sessionId).filter(item => item.id !== record.sourceId));
-          savePrefs(this.state.prefs); flushPrefs();
-        }
-        return "Доставка подтверждена историей агента. Повторной отправки не было.";
+    // Only the exact ledger that received the send can prove anything about
+    // it. A record of an older engine (OpenCode / Pi CLI) or of another
+    // runtime ledger is checked by positive evidence only (its imported
+    // archive); a 404 here then means "unknown", never "not delivered".
+    const backend = this.backend;
+    const authority = ledgerAuthority(record), here = this.state.runtime?.hostId ? `runtime:${this.state.runtime.hostId}` : null;
+    if (!authority || authority !== here) return this.reconcileForeignOperation(record);
+    let receipt: import("../../src-tauri/resources/agent/src/protocol").CommandReceipt;
+    try { receipt = await backend.client.receipt(record.id); }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        // Same ledger that received the POST: it durably records before acting.
+        await operationJournal.settle(record, "refused");
+        return "Эта среда выполнения не получала этот запрос. Повторной отправки не было; верните его в черновик, если он нужен.";
       }
-      if (!result.before || result.before === before) break;
-      before = result.before;
+      throw error;
     }
-    return "Доставка не подтверждена. Проверьте историю чата; запрос не отправлялся повторно.";
+    if (workspace !== (this.state.prefs.workspaceKey ?? this.state.prefs.endpoint)) throw Error("Подключение изменилось.");
+    if (["accepted", "dispatching", "running", "completed", "failed"].includes(receipt.state)) {
+      await operationJournal.confirm(record, true);
+      return receipt.state === "failed"
+        ? `Запрос был принят, но завершился ошибкой: ${receipt.error ?? "без описания"}. Повторной отправки не было.`
+        : "Доставка подтверждена средой выполнения. Повторной отправки не было.";
+    }
+    if (receipt.state === "rejected" || receipt.state === "cancelled") {
+      // The receiving ledger's definite answer settles the record (no endless "uncertain").
+      await operationJournal.settle(record, receipt.state === "rejected" ? "refused" : "cancelled");
+      return "Среда выполнения не выполняла этот запрос. Повторной отправки не было.";
+    }
+    return "Исход неизвестен: среда выполнения остановилась во время выполнения. Проверьте историю чата; повторной отправки не было.";
   }
 
-  private drainQueue(): Promise<void> { return this.promptQueue.drainQueue(); }
-  private writeQueue(id: string, list: QueuedPrompt[]): void { this.promptQueue.writeQueue(id, list); }
-  private releaseQueueLock(sid: string): void { this.promptQueue.releaseQueueLock(sid); }
-
-  private async dispatchQueued(item: QueuedPrompt, steer: boolean) {
-    const sid = item.sessionID, engineId = this.engineIdFor(sid, item.directory),
-      backend = this.engine(engineId), workspaceBackend = this.backend,
-      gen = this.selectionGeneration;
-    const current = () => gen === this.selectionGeneration && workspaceBackend === this.backend
-      && sid === this.state.activeSessionId && item.directory === this.state.directory
-      && engineId === this.engineIdFor();
-    if (
-      this.queueLocks.has(sid) ||
-      this.scheduledLocks.has(sid) ||
-      this.compactLocks.has(sid) || this.modelTransitionLocks.has(sid) ||
-      this.state.ui.sending ||
-      this.accessChanging ||
-      sid !== this.state.activeSessionId ||
-      this.state.directory !== item.directory ||
-      !this.engineReady(engineId) ||
-      (engineId !== PI_BACKEND_ID && !!this.state.connection.statusError)
-    ) {
-      if (sid === this.state.activeSessionId && item.directory === this.state.directory)
-        this.patchUi({toast: this.state.connection.statusError
-          ? 'Не удалось проверить состояние чата. Восстановите подключение; запрос сохранён.'
-          : 'В этом чате идёт другая операция. Запрос сохранён в очереди.'});
-      return;
-    }
-    if (!steer && this.isRunning(sid)) return;
-    const pending = this.pendingInteraction(sid);
-    if (pending.permissions.length || pending.questions.length) {
-      this.patchUi({ toast: "Сначала ответьте на запрос агента." });
-      return;
-    }
-    this.queueLocks.add(sid);
-    this.patchUi({sendError: null});
-    this.writeQueue(
-      sid,
-      this.getQueue(sid).map((x) =>
-        x.id === item.id ? { ...x, state: "sending", error: undefined } : x,
-      ),
-    );
-    savePrefs(this.state.prefs);
-    const preparationStarted = Date.now();
-    const seq = this.statusSequence;
-    const stopped = this.queueStops.get(sid) ?? 0;
-    let posted = false;
-    let waitingBeforePost = false;
-    const defer = () => this.writeQueue(sid, this.getQueue(sid).map(q =>
-      q.id === item.id ? { ...q, state: "ready", error: undefined } : q));
-    const mustWait = () => {
-      const pending = this.pendingInteraction(sid);
-      return (!steer && this.isRunning(sid)) || pending.permissions.length > 0 || pending.questions.length > 0;
-    };
-    try {
-      if (!flushPrefs()) throw new Error("Не удалось сохранить состояние очереди. Запрос не отправлен.");
-      // OpenCode persists a new user message, then joins the existing run loop.
-      // No abort: the correction is seen at the next model/tool boundary.
-      this.assertContextReady(sid, item.model.providerID, item.model.modelID, this.engineIdFor(sid, item.directory));
-      await modelServices.ensure(item.model.providerID, item.model.modelID, this.engineIdFor(sid, item.directory), {context: sid});
-      if (!current()) throw new Error("Чат изменился; запрос не отправлен.");
-      const parts: Awaited<ReturnType<typeof prepareAttachments>> = [];
-      const imageModelInfo = engineId === PI_BACKEND_ID ? piModelInfo(this.state.piHealth,item.model) : this.modelInfo(item.model.providerID,item.model.modelID);
-      const referenceImages = isNative() && (engineId === PI_BACKEND_ID || isLocalComputer(this.state.prefs.endpoint,!!this.currentHost()));
-      if (item.attachments?.files.length) {
-        if (!backend.capabilities.attachments) throw new Error("Этот агент не принимает вложения.");
-        const info = engineId === PI_BACKEND_ID ? piModelInfo(this.state.piHealth, item.model) : this.modelInfo(item.model.providerID, item.model.modelID);
-        if (!info) throw new Error("Выбранная модель больше не доступна.");
-        await attachmentDrafts.ensure(item.attachments.scope);
-        const stored = attachmentDrafts.snapshot(item.attachments.scope);
-        const files = item.attachments.files.map(meta => stored.find(file => file.id === meta.id));
-        if (files.some(file => !file)) throw new Error("Вложения очереди не найдены. Верните запрос в черновик и приложите файлы заново.");
-        parts.push(...await prepareAttachments(files as DraftAttachment[], engineId === PI_BACKEND_ID
-          ? { ...info, capabilities: { ...info.capabilities, input: { ...info.capabilities?.input, pdf: false, audio: false, video: false } } } : info,
-          this.state.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT, this.state.prefs.asr ?? { endpoint: "", model: "", language: "" }, new AbortController().signal, undefined, this.archiveStager(backend), {imageReferences:referenceImages}));
-      }
-      if (!current()) throw new Error("Чат изменился; запрос не отправлен.");
-      // These are waits, not delivery failures: no POST has happened. Keep
-      // the queue armed so the next idle/interaction event can dispatch once.
-      if ((this.queueStops.get(sid) ?? 0) !== stopped) throw Error('Отправка отменена кнопкой «Стоп». Запрос остался в очереди.');
-      if (mustWait()) { defer(); return; }
-      const messageID = newMessageId(), dispatchAt = Date.now();
-      await modelServices.reserve(item.model.providerID, item.model.modelID, engineId, sid);
-      if (!current() || (this.queueStops.get(sid) ?? 0) !== stopped) throw new Error("Отправка отменена.");
-      if (mustWait()) { defer(); return; }
-      (this.state.chat.sessions[sid] ??= emptySessionChat()).pendingTiming = {
-        ...(this.engineIdFor(sid, item.directory) === PI_BACKEND_ID ? {} : {messageID}), dispatchAt,
-        preparationMs: dispatchAt - preparationStarted,
-        queueMs: typeof item.queuedAt === 'number' && preparationStarted >= item.queuedAt ? preparationStarted - item.queuedAt : null,
-      };
-      const submit = steer && backend.steer ? backend.steer.bind(backend) : backend.prompt.bind(backend);
-      await operationJournal.dispatch({ id: messageID, workspace: this.state.prefs.workspaceKey ?? this.state.prefs.endpoint, engine: engineId, sessionId: sid, directory: item.directory, source: "queue", sourceId: item.id, text: item.text, model: `${item.model.providerID}/${item.model.modelID}`, attachments: item.attachments ?? null },
-        () => current() && (this.queueStops.get(sid) ?? 0) === stopped, async () => {
-      if (engineId !== PI_BACKEND_ID) await ownWork(backend.endpoint, item.directory, sid, messageID, this.client.headers.Authorization);
-      if (!current() || (this.queueStops.get(sid) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
-      if (mustWait()) {
-        waitingBeforePost = true;
-        throw new NotDispatched("Ожидаем завершения текущего действия агента.");
-      }
-      await stageImagePromptContext({engine:engineId,sessionId:sid,directory:item.directory,messageId:messageID,parts,
-        supportsVision:!!imageModelInfo?.capabilities?.input?.image,
-        local:referenceImages});
-      if (!current() || (this.queueStops.get(sid) ?? 0) !== stopped) throw new NotDispatched("Отправка отменена.");
-      posted = true;
-      await submit(sid, item.directory, {
-        messageID,
-        model: {
-          providerID: item.model.providerID,
-          modelID: item.model.modelID,
-        },
-        agent: item.agent,
-        variant: item.model.variant ?? undefined,
-        parts: agentParts(this.state.prefs.workshop, sid, item.directory, steer ? steeringParts(sid, [{ type: "text", text: item.text }, ...imagePromptParts(parts,!!imageModelInfo?.capabilities?.input?.image,referenceImages)]) : [{ type: "text", text: item.text }, ...imagePromptParts(parts,!!imageModelInfo?.capabilities?.input?.image,referenceImages)]),
-      });
-      });
-      if (workspaceBackend !== this.backend) return;
-      this.writeQueue(
-        sid,
-        this.getQueue(sid).filter((x) => x.id !== item.id),
-      );
-      savePrefs(this.state.prefs);
-      if (flushPrefs() && item.attachments) await attachmentDrafts.remove(item.attachments.scope, item.attachments.files.map(file => file.id)).catch(() => {});
-      if (!current()) return;
-      if ((this.statusVersions.get(sid) ?? 0) <= seq) {
-        this.observeSessionStatus(sid, { type: "busy" }, item.directory);
-        const prev = this.state.chat.sessions[sid] ?? emptySessionChat();
-        this.mutate((s) => ({
-          chat: {
-            ...s.chat,
-            sessions: {
-              ...s.chat.sessions,
-              [sid]: { ...prev, status: { type: "busy" } },
-            },
-          },
-        }));
-      }
-      if (steer)
-        this.patchUi({
-          toast:
-            "Уточнение передано агенту. Он учтёт его на следующем шаге.",
-        });
-    } catch (e) {
-      if (waitingBeforePost && !posted && current() && (this.queueStops.get(sid) ?? 0) === stopped) {
-        defer(); return;
-      }
-      this.queueArmed.delete(sid);
-      // Persist an ambiguous outcome; NEVER automatically retry and execute it twice.
-      if (workspaceBackend === this.backend)
-        this.writeQueue(
-          sid,
-          this.getQueue(sid).map((x) =>
-            x.id === item.id
-              ? { ...x, state: posted ? "uncertain" : "ready", error: errText(e) }
-              : x,
-          ),
-        );
-    } finally {
-      this.releaseQueueLock(sid);
-      if (current()) void this.drainQueue();
-    }
+  /**
+   * Lost-ACK send recorded by an older engine or another ledger: ask the
+   * runtime for origin-bound POSITIVE evidence in the imported archive. Absence
+   * proves nothing; the record stays uncertain and nothing is resent.
+   */
+  private async reconcileForeignOperation(record: Operation): Promise<string> {
+    const engine = record.engine === "opencode" ? "opencode" : record.engine === "pi" && !record.authority ? "pi-cli" : null;
+    if (!engine) return "Запрос был отправлен другой средой выполнения Enki. Эта среда не может подтвердить или опровергнуть доставку. Проверьте историю чата; повторной отправки не было.";
+    const evidence = await this.backend.client.migrationEvidence({ engine, sessionID: record.sessionId, messageID: record.id, directory: record.directory, text: record.text });
+    if (evidence.evidence === "delivered") { await operationJournal.confirm(record, true); return evidence.detail; }
+    return `${evidence.detail} Исход остаётся неизвестным; повторной отправки не было.`;
   }
 
   // ---------- interaction ----------
@@ -3222,14 +2974,14 @@ class Store {
     const directory = this.state.directory;
     if (!directory) return;
     try {
-      await this.backend.replyPermission(req.id, reply, directory);
+      await this.backend.replyPermission(req.id, reply);
       this.mutate((s) => {
         const permissions = { ...s.chat.permissions };
         delete permissions[req.id];
         return { chat: { ...s.chat, permissions } };
       });
     } catch (e) {
-      this.patchUi({ toast: `Permission reply failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось ответить на запрос разрешения: ${errText(e)}` });
     }
   }
 
@@ -3240,6 +2992,7 @@ class Store {
     const directory = this.state.directory;
     if (!directory) return;
     try {
+      // Runtime `question` tool → POST /questions/:id/reply (400 for an invalid answer, 404 once closed).
       await this.backend.replyQuestion(req.id, answers, directory);
       this.mutate((s) => {
         const questions = { ...s.chat.questions };
@@ -3247,7 +3000,7 @@ class Store {
         return { chat: { ...s.chat, questions } };
       });
     } catch (e) {
-      this.patchUi({ toast: `Answer failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось отправить ответ: ${errText(e)}` });
     }
   }
 
@@ -3262,43 +3015,33 @@ class Store {
         return { chat: { ...s.chat, questions } };
       });
     } catch (e) {
-      this.patchUi({ toast: `Reject failed: ${errText(e)}` });
+      this.patchUi({ toast: `Не удалось отклонить вопрос: ${errText(e)}` });
     }
   }
 
   // ---------- event stream ----------
 
-  /**
-   * Pi streams over the native bridge, independently of the OpenCode SSE stream:
-   * a folder can hold chats from both engines at once, and neither stream may
-   * stall or cancel the other.
-   */
-  private startPiStream(directory: string, gen: number): void {
-    this.piStreamAbort?.abort();
-    this.piStreamAbort = null;
-    // A new Pi chat can be created after this subscription starts. Do not
-    // require existing metadata, otherwise its first run has no UI events.
-    if (!isLocalComputer(this.state.prefs.endpoint, !!this.currentHost())) return;
-    const ctrl = new AbortController();
-    this.piStreamAbort = ctrl;
-    this.pi().subscribeDirectory(directory, {
-      signal: ctrl.signal,
-      onEvent: (event: ServerEvent) => {
-        if (gen !== this.directoryGeneration) return;
-        this.handleEvent(event);
-      },
-      onState: () => {},
-    });
-  }
-
+  /** One durable runtime stream per open folder (seq cursor, replay on reconnect). */
   private startEventStream(directory: string, gen: number): void {
     const ctrl = new AbortController();
     this.streamAbort = ctrl;
-    this.backend.subscribeDirectory(directory, {
+    const backend = this.backend, connection = this.connectionGeneration;
+    backend.subscribeDirectory(directory, {
       signal: ctrl.signal,
       onEvent: (event: ServerEvent) => {
         if (gen !== this.directoryGeneration) return; // stale project events must not leak
+        if (event.type === "session.model_migrated") {
+          if (!ctrl.signal.aborted && backend === this.runtime && connection === this.connectionGeneration && directory === this.state.directory)
+            this.projectMigratedModel(event.properties, directory);
+          return;
+        }
         this.handleEvent(event);
+      },
+      // The journal could not replay the gap (new instance / expired cursor): reconcile.
+      onReset: () => {
+        if (gen !== this.directoryGeneration) return;
+        void this.resyncAfterReconnect(directory, gen);
+        void this.restorePiRuntime(directory).catch(() => {});
       },
       onState: (state, detail) => {
         if (gen !== this.directoryGeneration) return;
@@ -3319,9 +3062,9 @@ class Store {
   private async resyncAfterReconnect(
     directory: string,
     gen: number,
-    dispatchQueue = true,
+    refreshQueues = true,
   ): Promise<void> {
-    const journal: ServerEvent[] = [];
+    const journal = new HistoryJournal();
     this.historyJournals.add(journal);
     try {
       // Permission/question polling is optional: a backend that does not ask is
@@ -3337,9 +3080,12 @@ class Store {
           ? this.backend.pendingQuestions(directory)
           : Promise.resolve([]),
       ]);
-      if (gen !== this.directoryGeneration || journal.length >= 20000) return;
+      if (gen !== this.directoryGeneration) return;
+      // An incomplete journal cannot be replayed over this snapshot: retry once
+      // the burst is over instead of applying a status picture with holes.
+      if (journal.overflowed) { setTimeout(() => { if (gen === this.directoryGeneration) void this.resyncAfterReconnect(directory, gen, refreshQueues); }, 1_000); return; }
       for (const session of sessions) this.rememberActivitySession(session);
-      const visible = [...sessions.filter((s) => !s.parentID), ...this.state.sessions.filter(s => this.isPiSession(s.id) && s.directory === directory)];
+      const visible = sessions.filter((s) => !s.parentID);
       for (const [id, status] of Object.entries(statuses))
         this.observeSessionStatus(id, status, directory);
       this.rememberChatListing(directory, visible);
@@ -3348,9 +3094,8 @@ class Store {
         // locally accumulated busy state; sessions absent from it are idle again.
         const chatSessions: ChatRootState["sessions"] = { ...s.chat.sessions };
         for (const id of Object.keys(chatSessions)) {
-          // This response belongs to OpenCode in one directory. Pi and other
-          // projects have independent status authorities and must survive it.
-          if (this.isPiSession(id) || (this.activityDirectories.get(id) && this.activityDirectories.get(id) !== directory)) continue;
+          // This response covers one directory; other projects' chats keep their status.
+          if (this.activityDirectories.get(id) && this.activityDirectories.get(id) !== directory) continue;
           chatSessions[id] = {
             ...chatSessions[id],
             status: statuses[id] ?? { type: "idle" },
@@ -3366,7 +3111,7 @@ class Store {
           permissions: Object.fromEntries(permissions.map((p) => [p.id, p])),
           questions: Object.fromEntries(questions.map((q) => [q.id, q])),
         };
-        for (const event of journal) {
+        for (const event of journal.events) {
           if (
             event.type === "session.status" ||
             event.type.startsWith("permission.") ||
@@ -3378,14 +3123,15 @@ class Store {
           sessions: visible.filter((x) => !x.time.archived),
           archivedSessions: visible.filter((x) => x.time.archived),
           ui: { ...s.ui, sessionListError: null },
-          statuses: { ...Object.fromEntries(Object.entries(s.statuses).filter(([id]) => this.isPiSession(id) || (this.activityDirectories.get(id) && this.activityDirectories.get(id) !== directory))), ...statuses },
+          statuses: { ...Object.fromEntries(Object.entries(s.statuses).filter(([id]) => this.activityDirectories.get(id) && this.activityDirectories.get(id) !== directory)), ...statuses },
           connection: { ...s.connection, statusError: null },
           chat,
         };
       });
       const active = this.state.activeSessionId;
       if (active) await this.loadHistory(active, directory);
-      if (dispatchQueue) void this.drainQueue();
+      // Queues are dispatched by the runtime; refresh only the mirror of this folder.
+      if (refreshQueues) void this.restorePiRuntime(directory).catch(() => {});
     } catch (error) {
       if (gen === this.directoryGeneration) this.noteProjectFailure(error);
     } finally {
@@ -3394,6 +3140,19 @@ class Store {
   }
 
   private handleEvent(event: ServerEvent): void {
+    // An event too large for the wire (e.g. a big attachment in a part) was
+    // replaced by a stub: that chat's history is authoritative and re-read.
+    if (event.type === "event.oversized") {
+      const sessionID = event.properties?.sessionID;
+      if (typeof sessionID === "string") {
+        this.historyLoaded.delete(sessionID);
+        const directory = this.state.directory;
+        if (sessionID === this.state.activeSessionId && directory) void this.loadHistory(sessionID, directory);
+      }
+      return;
+    }
+    // Queue, dialog, schedule, notice and broker events never reach the chat reducer.
+    if (routeRuntimeEvent(event, this.runtimeSync, this.agentDialogs)) return;
     this.indexSidebarEvent(event);
     if ((event.type === "session.status" || event.type === "session.idle" || event.type === "session.error") &&
         typeof event.properties?.sessionID === "string") {
@@ -3413,8 +3172,7 @@ class Store {
         event.properties.sessionID,
         ++this.statusSequence,
       );
-    for (const journal of this.historyJournals)
-      if (journal.length < 20000) journal.push(event);
+    for (const journal of this.historyJournals) journal.push(event);
     if (event.type === "session.updated" && event.properties?.info) {
       const info = event.properties.info as Session;
       this.mutate((s) => {
@@ -3432,18 +3190,8 @@ class Store {
       void this.refreshSessions();
       return;
     }
-    const affected =
-      typeof event.properties?.sessionID === "string"
-        ? event.properties.sessionID
-        : undefined;
-    const info =
-      event.type === "message.updated"
-        ? (event.properties?.info as { sessionID?: string; error?: unknown })
-        : undefined;
-    if (event.type === "session.error" && affected && isQueuePausingError(describeMessageError(event.properties?.error)))
-      this.queueArmed.delete(affected);
-    if (info?.error && info.sessionID && isQueuePausingError(describeMessageError(info.error)))
-      this.queueArmed.delete(info.sessionID);
+    // Pausing errors are classified by the runtime, which disarms its own queue
+    // and announces it through `queue.updated`.
     const changed = reduceEvent(this.state.chat, event);
     if (changed) {
       this.state = { ...this.state, rev: this.state.rev + 1 };
@@ -3451,7 +3199,11 @@ class Store {
       this.notifications.notify(event.type === 'message.part.delta' ||
         (event.type === 'message.part.updated' && (part?.type === 'text' || part?.type === 'reasoning')));
     }
-    if (event.type === "session.status" || event.type === "session.idle" || /^(permission|question)(\.v2)?\.(replied|rejected)$/.test(event.type)) void this.drainQueue();
+    // A settled background chat may push stream-only slots over their bound.
+    const sessionID = event.properties?.sessionID;
+    if (typeof sessionID === "string" && sessionID !== this.state.activeSessionId && (event.type === "session.idle"
+        || (event.type === "session.status" && (event.properties?.status as SessionStatus | undefined)?.type === "idle")))
+      this.evictInactiveTranscripts();
   }
 
   activityStatus(id: string): SessionStatus | undefined {
@@ -3591,13 +3343,15 @@ class Store {
     backend.subscribeAll({
       signal: ctrl.signal,
       onEvent: ({ directory, payload }) => {
-        if (generation !== this.connectionGeneration || backend !== this.backend ||
+        if (generation !== this.connectionGeneration || backend !== this.runtime ||
             !payload || typeof payload.type !== "string") return;
-        if (payload.type === "global.disposed") {
-          invalidateCapabilities();
-          invalidateBrowserSetup();
+        if (payload.type === "session.model_migrated") {
+          if (!ctrl.signal.aborted) this.projectMigratedModel(payload.properties, directory);
           return;
         }
+        // Runtime-only events of other folders (and runtime-wide broker relays);
+        // the open folder's stream already routes its own, and routing is idempotent.
+        if ((directory ?? null) !== this.state.directory && routeRuntimeEvent(payload, this.runtimeSync, this.agentDialogs)) return;
         this.indexSidebarEvent(payload);
         if (payload.type === "session.updated" && payload.properties?.info) {
           const info = payload.properties.info as Session;
@@ -3733,7 +3487,8 @@ const stopCatalogPersistence = modelServices.subscribe(() => store.syncModelServ
 let hubModels: HubModelServices | undefined, stopHubModels: (() => void) | undefined, disposed = false;
 if (isNative()) modelServices.waitForHub(import("../models/hub").then(({HubModelServices}) => {
   if (disposed) return;
-  hubModels = new HubModelServices(undefined, id => store.isRunning(id));
+  // Display/probe only: the runtime owns Hub readiness and whole-turn leases.
+  hubModels = new HubModelServices();
   stopHubModels = modelServices.attachHub(hubModels);
   hubModels.start();
 }));
@@ -3744,9 +3499,6 @@ try {
 } catch (error) {
   store.state = { ...store.state, ui: { ...store.state.ui, toast: `Проверьте настройки сервисов моделей: ${errText(error)}` } };
 }
-// Both engines live in the registry, so `listBackendDescriptors()` is the honest
-// list of what this build can drive.
-registerBackendDescriptor(piDescriptor(() => store.pi()));
 import.meta.hot?.dispose(() => { disposed = true; stopCatalogPersistence(); stopHubModels?.(); hubModels?.dispose(); window.removeEventListener("arvela-hub-config-changed", refreshHubModels); store.dispose(); });
 
 export function useAppSelector<T extends object>(select: (state: AppState) => T): T {

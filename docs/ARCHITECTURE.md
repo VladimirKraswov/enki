@@ -4,22 +4,29 @@
 
 ```text
 Enki (Tauri + React; independent app version)
-  store facade → normalized AgentBackend → OpenCode HTTP/SSE (loopback / strict SSH)
-                                    └──→ Pi JSONL RPC (app-owned local process)
-  shared capability registry → OpenCode config adapter / Pi extension → same MCP/skills
+  store facade → AgentBackend → src/agent/runtime client → HTTP/SSE + bearer
+      ├─ this computer: native runtime.rs supervisor → bundled Enki Runtime
+      │    (resources/agent: pinned Pi SDK on the pinned bundled Node, loopback)
+      └─ SSH host: `enki-runtime ensure` → strict-key SSH tunnel → same runtime
+  legacy OpenCode/Pi CLI histories → read-only import → explicit continuation
+  shared capability registry → explicit runtime registry → same MCP/skills
   native Hub client → HTTPS + OS vault → private Hub catalog/history/project memory
   browser panel → app-owned private gateway → managed Chromium + official Playwright MCP
 Agents → separately configured inference providers (local or authorized cloud)
 ```
 
-Never import OpenCode internal database schemas or maintain a fork of its engine. Use published server interfaces and capabilities, with the live OpenAPI contract as the authority for the installed version. Keep HTTP concerns and schema normalization out of presentation components. An official SDK is acceptable only after validating its version against this server; do not accidentally install a v2 client for incompatible v1 interfaces.
+Enki Runtime is the sole executing agent. It embeds the exact pinned Pi SDK
+(`docs/SDK-UPGRADE.md`) and runs on the bundled, pinned Node — never on a host
+Node or an external OpenCode/Pi CLI install. External owner OpenCode/Pi
+installations, services and data are never started, stopped or modified. Keep
+HTTP concerns and schema normalization out of presentation components.
 
 ## Boundaries
 
 - `src/api/`: contract types, transport facade, response validation, API version/capability normalization.
-- `src/agent/`: the backend-neutral `AgentBackend` contract, its capability flags and the descriptor registry. OpenCode (`src/agent/opencode.ts`) is the default; Pi is a second implementation; see `docs/AGENT-BACKENDS.md`. The state layer calls only this contract, so another agent runtime is an added implementation rather than a UI/state rewrite. PTY, `/mcp` and the JSONC config editor are deliberately outside the contract and reach the OpenCode client through `asOpenCodeClient`, which returns null for any other backend.
-- `src/agent/pi/`: the Pi engine — RPC protocol types, a pure translator from Pi's event vocabulary into this app's own event model, the `AgentBackend` implementation and the native bridge. Pi is a local CLI driven over its documented JSONL RPC mode; see `docs/PI-ENGINE.md`.
-- `src/state/engines.ts`: which engine drives a folder or chat (per-chat override → folder preference → OpenCode). Pure and unit-tested; the absence of an entry *is* the migration for pre-existing projects and chats.
+- `src/agent/`: the `AgentBackend` contract, its capability flags and the descriptor registry; see `docs/AGENT-BACKENDS.md`. The state layer calls only this contract.
+- `src/agent/runtime/`: the only implementation — the Enki Runtime client, connection (local supervisor endpoint or remote `ensure` tunnel, bearer only in memory, no fallback between them), event translation and ids, plus `pluginUi/` for runtime extension dialogs.
+- `src/state/engines.ts`: every folder and chat resolves to the runtime. Old per-folder/per-chat OpenCode/Pi CLI preferences are ignored for execution; old chats are read-only and continue only explicitly.
 - `src/state/`: the store remains the public command/subscription facade; `types.ts` defines the schema, `initial.ts` constructs transient state from already-loaded preferences, and `modelChoice.ts` selects models from normalized state without I/O. Type exports from `store.ts` remain compatible. Preferences migration/persistence stays in `prefs.ts`; pure stream/history merge stays in `chatReducer.ts`.
 - `src/state/promptQueue.ts`: queue editing, persistence, arming and dispatch policy behind a typed `PromptQueueHost`. The store owns the shared snapshot, backend calls, connection generations and permission/stop reconciliation. The controller does not create a second state store or an agent loop.
 - `src/state/submission.ts`: preparation ownership and cancellation. Navigation invalidates an operation even after an away-and-back round trip. Only the operation owning the composer may unlock it. Stop before dispatch cancels preparation; a POST already in flight retains acknowledgement ownership and is never automatically replayed.
@@ -31,11 +38,11 @@ Never import OpenCode internal database schemas or maintain a fork of its engine
 - `src/outcomes/`, `src/memory/`, `src/hub/` plus native `hub.rs`/`hub/retrieval.rs`: accepted task records, explicit project bindings and approved memory, durable scrubbed telemetry, optional read-only shared memory MCP with per-folder grants. Native Hub/vault credentials never enter MCP arguments; search is off by default and automatic context preparation is not enabled. See `PROJECT-MEMORY.md` and M41 evidence.
 - `src/components/` and feature folders: workspace chrome, projects/sessions, conversation/composer, review/files, terminal, settings.
 - `src/native/`: the thin Tauri bridges (SSH tunnels, chime, chat workspaces) plus host-platform detection. Platform detection drives presentation only — window-chrome insets, the modifier-key label and OS-specific help text. Feature availability is decided by `AgentBackend.capabilities`, never by the host OS.
-- `src-tauri/src/pi.rs`: Pi process ownership — absolute-path launch, one child per (directory, session), strict JSONL framing, extension dialogs surfaced to the UI with default-deny on timeout, and every child killed on app exit.
+- `src-tauri/src/runtime.rs` (+ `runtime/artifact.rs`, `control.rs`, `vault.rs`, `config_fs.rs`, `config_commit.rs`): the supervisor of the bundled Enki Runtime — verified artifact and pinned Node, a single-flight start (`start_once`), generation-gated restarts and maintenance fences, loopback endpoint with a rotating in-memory bearer, profile-scoped vault namespace, and an owned process tree killed on app exit. `hosts.rs` runs the remote `enki-runtime ensure` and owns only its SSH tunnel.
 - `src-tauri/src/process.rs`: shared child-process ownership — bounded waits and bounded captured output, hidden consoles on Windows, Unix process groups, a Windows kill-on-close Job Object and a continuously drained output tail for long-lived children. It only ever signals processes Desktop spawned.
 - `src-tauri/src/browser.rs` (+ `browser/files.rs`, `browser/node.rs`, `browser/gateway.rs`): managed browser lifecycle facade over the pinned on-disk runtime, Node.js selection and the private loopback gateway. See `docs/BROWSER.md`. `src/browser/integration.ts` coordinates background setup; `src/browser/preferences.ts` holds the shared enabled/Node.js rules.
-- `src-tauri/src/local_server.rs`: narrowly scoped startup of the separately installed local OpenCode CLI. A strict loopback origin, cross-process lock and second health/port check prevent remote fallback or duplicate startup. It neither owns user sessions nor stops an existing server; exit leaves a started local server running.
-- `src-tauri/`: native dialog/opener integrations and the bounded ASR multipart command. OpenCode HTTP/SSE/WebSocket stays in the WebView; ASR uses a native request because the configured speech service may be outside the loopback CSP. Never an arbitrary command executor exposed to rendered content.
+- `src-tauri/src/paths.rs`: the explicit profile boundary. With `ENKI_PROFILE_DIR` set, profile data, vault names and tool discovery never read below the owner HOME (`discovery_home()` returns none; an invalid profile fails closed); the default profile keeps normal Node/LSP/skill discovery, after the bundled Node.
+- `src-tauri/`: native dialog/opener integrations and the bounded ASR multipart command. Runtime HTTP/SSE stays in the WebView; ASR uses a native request because the configured speech service may be outside the loopback CSP. Never an arbitrary command executor exposed to rendered content.
 - `src-tauri/src/control.rs` and `src/control/bridge.ts`: private per-user Unix-socket control plane plus the `--agent-mcp` stdio adapter. External agents invoke bounded semantic actions against the same visible store; no TCP listener, pointer automation, direct `localStorage` edits or second agent loop. See `docs/AGENT-CONTROL.md`.
 - `test/`: fixtures, API contract/event tests, component tests; test-owned repositories for any integration edits.
 
@@ -60,13 +67,13 @@ behavioral tests; they do not prove correctness or replace platform acceptance.
 
 ## Security and ownership
 
-The OpenCode endpoint is loopback-only. The separately configured ASR URL allows HTTPS, or HTTP on private/loopback hosts, with redirects disabled and bounded payloads/timeouts. ASR keys remain in memory and are bound to the selected URL. Validate allowed hosts/schemes/ports; remote workspaces use explicitly configured strict-key SSH tunnels; configured Hub requests use native HTTPS and pinned server identity. Do not disable backend authorization or globally loosen CORS. Use narrow Tauri capabilities and a real production CSP before packaging. Model Markdown and tool/file output are untrusted; never enable raw script-capable HTML. Open external links through controlled native APIs with safe scheme checks. Credentials must not appear in logs, URLs, Git, local storage or generated reports.
+The Enki Runtime endpoint is loopback-only and bearer-authenticated; remote runtimes are reached only through the strict SSH tunnel. The separately configured ASR URL allows HTTPS, or HTTP on private/loopback hosts, with redirects disabled and bounded payloads/timeouts. ASR keys remain in memory and are bound to the selected URL. Validate allowed hosts/schemes/ports; remote workspaces use explicitly configured strict-key SSH tunnels; configured Hub requests use native HTTPS and pinned server identity. Do not disable backend authorization or globally loosen CORS. Use narrow Tauri capabilities and a real production CSP before packaging. Model Markdown and tool/file output are untrusted; never enable raw script-capable HTML. Open external links through controlled native APIs with safe scheme checks. Credentials must not appear in logs, URLs, Git, local storage or generated reports.
 
-Reuse externally managed OpenCode without claiming process ownership. If the app starts its own installed executable, use an explicit argument vector, known working directory, startup health deadline and process identity. Never `pkill opencode` or stop an external daemon on app shutdown. Browser/preview content cannot share privileged Tauri APIs.
+The app owns only the processes it spawned: the bundled runtime tree, its build/update helpers and its SSH tunnels, each launched with an explicit argument vector, known working directory, deadline and process identity. External OpenCode/Pi CLI installs and daemons are never started, signalled or stopped; never `pkill` by name. Browser/preview content cannot share privileged Tauri APIs.
 
 ## Independent updates
 
-Record shell and detected server versions separately. Feature detection and adapter tests must tolerate additive fields/missing optional capabilities. Missing required endpoints cause a compatibility message with versions, not data migration. Updating the app touches only its own bundle/preferences. Updating the OpenCode CLI does not require changing the model, engine or existing session database.
+Record the app version and the runtime contract version separately. A remote runtime with another contract version produces a compatibility message with versions, not data migration or a fallback. Updating the app touches only its own bundle, profile data and bundled runtime; the Pi SDK pin changes only through `docs/SDK-UPGRADE.md`. Updating or removing an external OpenCode/Pi CLI never affects Enki.
 
 ## Host platforms and verification
 

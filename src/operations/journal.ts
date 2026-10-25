@@ -2,7 +2,7 @@ import { maintenance } from './maintenance';
 import { invoke } from '@tauri-apps/api/core';
 import { isNative } from '../native/platform';
 import { attachmentDrafts } from '../attachments/drafts';
-import { ApiError } from '../api/client';
+import { ApiError } from '../api/http';
 
 export class NotDispatched extends Error {}
 export type DeliveryState = 'prepared' | 'dispatching' | 'accepted' | 'uncertain' | 'refused' | 'cancelled';
@@ -11,6 +11,18 @@ export interface Operation {
   source: 'manual' | 'queue' | 'schedule'; sourceId: string | null; text: string;
   attachments: { scope: string; files: { id: string; name: string; mime: string; size: number }[] } | null;
   model: string; state: DeliveryState; updatedAt: number;
+  /**
+   * Exact ledger that received this send: `runtime:<hostId>` for 2.0 runtime
+   * commands. Absent on records written by an older Enki (OpenCode / Pi CLI
+   * engines): only the authority that received a request can prove it was
+   * not delivered, so a 2.0 ledger 404 is "unknown" for those, never "unsent".
+   */
+  authority?: string;
+}
+
+/** The runtime ledger identity a record was sent to, or null for pre-2.0/unknown origins. */
+export function ledgerAuthority(record: Pick<Operation, "authority">): string | null {
+  return typeof record.authority === "string" && /^runtime:[a-f0-9-]{36}$/.test(record.authority) ? record.authority : null;
 }
 export type OperationInput = Omit<Operation, 'state' | 'updatedAt'>;
 export interface JournalStorage {
@@ -90,6 +102,12 @@ export class OperationJournal {
   async cancelPrepared(record: Operation) {
     if (record.state !== 'prepared') throw Error('Доставка могла состояться. Сначала проверьте историю.');
     await this.write(record, 'cancelled', 'prepared');
+  }
+  /** The runtime's durable ledger says the command was refused or never recorded. */
+  async settle(record: Operation, state: 'refused' | 'cancelled') {
+    if (!['dispatching', 'uncertain'].includes(record.state)) return false;
+    await this.write(record, state, record.state);
+    return true;
   }
   async confirm(record: Operation, foundExactUserMessage: boolean) {
     if (!foundExactUserMessage || !['dispatching', 'uncertain'].includes(record.state)) return false;

@@ -1,79 +1,112 @@
 # Context, access, queue and dictation
 
+Since 2.0 every chat runs in the single bundled **Enki Runtime** (pinned Pi SDK
+0.85.1). Context, compaction, model transitions, the queue and timers are owned by
+that runtime; the window only displays state and forwards explicit user intent.
+OpenCode-era behaviour (0.2.x) is summarised at the end of each section only
+where older chats or clients still meet it.
+
 ## Context
 
-OpenCode owns automatic compaction. Desktop reads the selected project's actual `/config` and model limits; it does not erase messages or run its own summarizer. Existing configuration enables `auto` and `prune`. The circular indicator shows last reported model usage, the full context window and remaining budget before compaction. It is not a sum of historical billing tokens, and does not pretend to count tokens before the engine reports them.
+The SDK owns automatic compaction, configured per runtime in
+`Настройки → Агент Enki → Среда выполнения` (on/off; reserve and recent-tail
+budgets). Enki never erases messages: a compaction or branch summary is shown as
+a summary message while the summarised entries stay in the transcript. The
+circular indicator shows the last reported model usage, the model's context
+window and the remaining budget. It is not a sum of billing tokens and does not
+pretend to know usage before the model reports it; a fresh chat shows "unknown"
+until the first answer.
 
-For the current `local-qwen-next/qwen38-flash-next` configuration:
+Model windows come from the runtime's model catalogue (the Pi entry of the Hub
+catalogue, Enki's own `models.json`, or the SDK built-ins); see
+[AI environment](AI-ENVIRONMENT.md). Changing an inference server's window does
+not rewrite the catalogue automatically.
 
-| Parameter | Tokens |
-|---|---:|
-| Context window | 262,144 |
-| Input limit | 245,760 |
-| Reserved | 24,576 |
-| Automatic compaction threshold | **221,184** |
-| Output limit | 16,384 |
+**Сжать сейчас** (when idle) submits one durable `compact` command. It always runs
+on the chat's **current** model — a different model is refused with a pointer to
+model transition. For a Hub-routed model the runtime first takes the Hub lease of
+that exact model. Stop cancels it (`cancelled`, history unchanged); an explicitly
+expired or replaced Hub lease cancels it the same way with that reason, so a paid
+summary never continues without its reservation.
 
-These are the current 2026-09-27 OpenCode values. The V100 model also has a
-262,144-token physical window, but its declared input is 229,376 and its
-compaction threshold is 204,800. Changing an inference server's window does not
-automatically rewrite OpenCode's model limits; see [AI environment](AI-ENVIRONMENT.md).
+## Switching to a smaller model
 
-Calculation follows the versioned [OpenCode 1.18.18 overflow implementation](https://github.com/anomalyco/opencode/blob/v1.18.18/packages/opencode/src/session/overflow.ts): use reported `tokens.total`, or input + output + cache read + cache write; reasoning is not added twice. A fresh conversation shows an unknown usage until the first report. When switching tokenizers, the last measured usage still belongs to the preceding model until the next response. Manual “Сжать сейчас” is available when idle. It calls the engine's summarize endpoint; the request allows up to three minutes rather than prematurely labelling normal summarization a failure.
+Every path that changes the model — an ordinary prompt, a queued prompt, a timer
+wake, an explicit model choice — passes the worker's **one** transition:
 
-## Switching to a smaller model (0.2.97)
+1. The next request is estimated from the SDK's real messages, system prompt and
+   active tool schemas, taking `max(reported usage, estimate)`; unknown usage is
+   never treated as "fits".
+2. The target budget is its declared window minus its output reserve (declared
+   `maxTokens`, at most half the window). A caller budget may only lower it.
+3. If system + tools + the new prompt alone exceed the target, the request is
+   refused before any inference (shorten the prompt or pick a larger model).
+4. Otherwise, if the history does not fit, the **current (source) model**
+   summarises it via SDK compaction — under its own Hub lease — and the bounded
+   result is verified against the target. Only then is the target prepared (Hub
+   lease of the exact target) and selected.
 
-When the latest successful model usage exceeds the selected target's conservative
-input budget, Enki first invokes native OpenCode compaction with that previous
-larger model. Only one compaction request is sent, explicitly `auto:false`:
-no task continuation, replay or second agent loop. After verified completion it
-loads the target and commits selection. The dialog shows both stages. Previous
-provider access must still work; paid providers retain their normal billing.
-
-The complete conversation remains in the engine database. Its native summary and
-recent tail become the working context; Enki neither deletes history nor rewrites
-AGENTS.md with transient chat state. Failed, empty, truncated, missing or oversized
-summaries stop the transfer and keep the previous choice/draft. A pinned different
-compaction-role model is reported, not silently overridden. Already affected
-chats recover via «Сжать сейчас», which uses the history's previous larger model.
-A provider outage requires restoring that provider or choosing a model large
-enough for the original history; automatic lossy truncation is not a fallback.
-
-Manual/queued/scheduled sends wait through compaction and target readiness.
-Cancelling after the native request started cancels the target selection, while
-the native summary may finish in the original chat; Enki does not abort the agent.
-Native success is checked using a new assistant summary, completion/finish state,
-nonempty text and conservative output/tail budget. Polling observes the same
-request for at most15 minutes including its HTTP wait; it never reissues it.
-Token counts from different tokenizers are estimates for transfer planning; exact
-usage is displayed only after the chosen model reports it. Summary INPUT usage
-is not presented as the resulting compacted context.
+Each step is fenced by Stop/close: nothing reaches the target after a
+cancellation or a lost source lease. A refusal keeps the previous model, the
+draft and the queue, and explains the recovery (retry, larger model, or a new
+chat with a bounded handoff). A source summary that was already persisted is
+reported as such; it is never replayed. The original transcript is never
+truncated or deleted. Progress phases (planning, summary model, summarising,
+verifying, target model) are shown in the composer.
 
 ## Access
 
-The composer selects **session-scoped OpenCode permission rules**. It never rewrites global configuration or automatically approves a pending permission request.
+The composer selects **chat-scoped permission rules** evaluated by the runtime
+(last match wins). It never automatically approves a pending permission request.
 
-- **Как в OpenCode:** inherit project/agent rules.
+- **По умолчанию:** no chat rules; the runtime default from `Настройки → Агент Enki`
+  applies («Спрашивать» is the safe default: an unanswered request is refused).
 - **С подтверждением:** reading/search allowed, other tools ask.
 - **Только чтение:** reading/search allowed, shell commands and editing denied.
-- **Полный доступ:** tools allowed, including outside the project; the engine's doom-loop confirmation remains enabled.
+- **Полный доступ:** tools allowed without asking, including outside the project.
 - Existing nonstandard rules are displayed as **Свои разрешения** until explicitly changed.
 
-Changes are unavailable during execution and apply to that session only. These are tool permissions, **not an operating-system sandbox**. A newly created session uses the user's selected mode. The current project defaults are already permissive; the label “Как в OpenCode” deliberately does not promise restrictions that are absent from the engine configuration.
+Access may be changed while idle, and also while a turn is **parked on a tool
+permission**: the runtime then re-decides that waiting call once by the new rules
+(so switching to full access does not ask again). A turn that is streaming keeps
+its access until it stops. These are tool permissions, **not an operating-system
+sandbox**. A newly created chat uses the selected mode.
 
 ## Queue and correction
 
-Enter during generation adds a prompt to the local queue (maximum 20 items), retaining its selected model, variant, agent, session and project. Each queued item owns separate IndexedDB copies of its attachments; localStorage contains only filenames/IDs and routing metadata. Copying and preference persistence must succeed before the draft files are removed. File-only messages are supported. Items can be removed or moved back to an empty composer for editing, with their files restored. Missing files or conversion errors pause the queue before POST. Normal completion sends the next item once. Late failures are scoped to the original session, never shown in a different chat. Pi receives prepared text/image parts through its own adapter and retains its supported attachment limits.
+Enter during generation adds a prompt to the chat's **runtime-owned durable
+queue** (maximum 20 items) with its model, variant, attachments, chat and
+project. The runtime stores prepared parts and attachments itself; the window
+only mirrors queue state. Normal completion dispatches the next item exactly
+once, through the same gates and model transition as a manual prompt. Items can
+be edited, reordered, removed or sent as a correction. Item operations are scoped
+to their chat: an operation on an item that no longer belongs to the open chat
+is refused (409) and the window re-reads that chat's queue. Deleting a chat also
+removes its queued prompts and remembered permission answers; its timers stay
+listed, paused with "chat deleted".
 
-**Скорректировать сейчас** posts that item to the existing OpenCode session immediately. The installed engine persists the new user message and joins its existing run loop; the agent sees it at the **next model/tool boundary**. It cannot retroactively change already generated tokens and does not kill an executing command. Contract: [prompt.ts](https://github.com/anomalyco/opencode/blob/v1.18.18/packages/opencode/src/session/prompt.ts), [run-state.ts](https://github.com/anomalyco/opencode/blob/v1.18.18/packages/opencode/src/session/run-state.ts).
+**Скорректировать сейчас** delivers that item as a steering message to the
+running turn. The SDK shows it to the agent at the **next model/tool boundary**;
+it cannot retroactively change generated tokens and does not kill an executing
+command. If the turn ends before delivery, the item returns to the queue.
 
 Queue guards:
 
-- Serial dispatch and duplicate-click lock; generation acknowledgement cannot overwrite a newer idle event.
-- Stop, engine error or pending interaction pauses automatic execution.
-- Persist `sending` before POST. Ambiguous network outcomes are **never automatically retried**: check history before manually repeating an item.
-- Closing/reloading the application restores the queue paused. It does not silently launch jobs on startup.
-- Queues are isolated by endpoint/session. Automatic dispatch is attached to the selected conversation; returning to it reconciles current status before continuing. Desktop must remain open for local queue dispatch. OpenCode owns any already-started run.
+- Durable command ids: a lost acknowledgement is retried under the same id and
+  can never execute twice.
+- Stop, a pausing error (balance, authentication, explicit Stop) or a pending
+  interaction pauses the queue; resuming is an explicit action (optionally with
+  the currently selected model).
+- An item whose delivery is uncertain is shown as such and is **never replayed
+  automatically**: check the history, then drop or requeue it.
+- The queue survives window reloads, hidden windows and runtime restarts; it runs
+  while the window is hidden or in the tray. A full quit stops dispatch; nothing
+  is launched in a burst on the next start.
+
+Timers ("wake-ups") are dispatched by the same runtime: a refused (provably
+unsent) wake-up is re-attempted under a new id with back-off and pauses after 4
+refusals; a cancelled one is consumed and the next occurs a full interval later;
+an uncertain one pauses for the owner to check ([schedules](SCHEDULES.md)).
 
 ## Dictation
 

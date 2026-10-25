@@ -1,96 +1,116 @@
 // @vitest-environment jsdom
+// The real Composer over the runtime-owned queue (shared route fixture). Files
+// are prepared when queued (ZIP staging is native-only, so a text file stands
+// in for the archive); corrections go to POST /queue/:item/steer.
 import 'fake-indexeddb/auto';
 import {File as NodeFile,Blob as NodeBlob} from 'node:buffer';
 import {act,createElement} from 'react';import {createRoot,type Root} from 'react-dom/client';
 import {afterEach,expect,it,vi} from 'vitest';
-vi.mock('../src/api/events',()=>({globalEventStreamUrl:()=>'',eventStreamUrl:()=>'',runEventStream:vi.fn(async()=>{})}));
+import type {QueueItemDTO,QueueStateDTO} from '../src-tauri/resources/agent/src/protocol';
 vi.mock('../src/components/ContextMeter',()=>({ContextMeter:()=>null}));
 vi.mock('../src/components/WorkspacePicker',()=>({HostPicker:()=>null}));
 vi.mock('../src/components/VoiceInput',()=>({VoiceInput:()=>null}));
 let root:Root|undefined;
-async function archiveComposer() {
+async function composer(files:Array<[string,string,string]>=[]){
+ vi.resetModules();
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('matchMedia',()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}}));vi.stubGlobal('File',NodeFile);vi.stubGlobal('Blob',NodeBlob);
+ const fixture=await import('./helpers/runtime-fixture');
  const {store}=await import('../src/state/store');const {Composer}=await import('../src/components/Composer');
  const {attachmentDrafts,attachmentScope}=await import('../src/attachments/drafts');
- const sid='ses_archive_'+crypto.randomUUID(),directory='/archive-ui-'+crypto.randomUUID();
- store.state={...store.state,directory,activeSessionId:sid,connection:{...store.state.connection,phase:'connected',streamState:'open'},statuses:{[sid]:{type:'busy'}},connectedProviderIds:['p']};
- vi.spyOn(store,'activeSession').mockReturnValue({id:sid} as any);vi.spyOn(store,'engineReady').mockReturnValue(true);vi.spyOn(store,'modelInfo').mockReturnValue({id:'m',capabilities:{input:{text:true}}} as any);
- const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
+ const sid='ses_ui_'+crypto.randomUUID(),directory='/queue-ui-'+crypto.randomUUID();
+ const fx=fixture.runtimeFixture();fixture.withProvider(fx);
+ let queue:QueueStateDTO={sessionID:sid,armed:true,pausedReason:null,items:[]};
+ fx.on('GET','/sessions',()=>[{id:sid,directory,title:'ui',projectID:'p',time:{created:1,updated:1}}]);
+ fx.on('GET','/sessions/status',()=>({[sid]:{type:'busy'}}));
+ fx.on('GET','/sessions/:id/queue',()=>queue);
+ fx.on('POST','/sessions/:id/queue',c=>{const b=c.body as {id:string;text:string;parts:Array<{filename?:string;mime?:string}>;model:QueueItemDTO['model']};
+  const attachments=b.parts.filter(p=>p.filename).map((p,i)=>({id:`${b.id}-f${i}`,name:p.filename!,mime:p.mime!,size:4}));
+  queue={...queue,items:[...queue.items,{id:b.id,sessionID:sid,directory,text:b.text,model:b.model,state:'ready',queuedAt:1,commandId:null,...(attachments.length?{attachments}:{})}]};return queue;});
+ fx.on('PATCH','/sessions/:id/queue/:item',c=>{const p=c.body as {text?:string;removeAttachments?:string[]};
+  queue={...queue,items:queue.items.map(i=>i.id!==c.params.item?i:{...i,...(p.text?{text:p.text}:{}),attachments:(i.attachments??[]).filter(f=>!(p.removeAttachments??[]).includes(f.id))})};return queue;});
+ fx.on('POST','/sessions/:id/queue/reorder',c=>{const b=c.body as {id:string;before:string|null};const moving=queue.items.find(i=>i.id===b.id)!,rest=queue.items.filter(i=>i.id!==b.id);
+  rest.splice(b.before===null?rest.length:rest.findIndex(i=>i.id===b.before),0,moving);queue={...queue,items:rest};return queue;});
+ fx.on('POST','/sessions/:id/queue/:item/steer',c=>{queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item)};return {id:`queue-${c.params.item}-1`,kind:'steer',sessionID:sid,state:'accepted',createdAt:1,updatedAt:1};});
+ fixture.bindStore(store,fx);
+ await store.setDirectory(directory,{sessionId:sid});
  store.setModelChoice('p','m','medium');store.setDraft('');
- const scope=attachmentScope(store.state.prefs.workspaceKey??store.state.prefs.endpoint,directory,sid);
- await attachmentDrafts.add(scope,[new NodeFile(['PK\x03\x04zip'],'project.zip',{type:'application/zip'}) as unknown as File]);
- await store.enqueueWithAttachments('read project',attachmentDrafts.snapshot(scope));
- const node=document.createElement('div');document.body.append(node);root=createRoot(node);await act(async()=>root!.render(createElement(Composer)));
- await vi.waitFor(async()=>{await act(async()=>{});expect(document.querySelector(".queued-prompt")).not.toBeNull();});
- return {store,attachmentDrafts,scope,prompt};
+ const scope=attachmentScope(store.state.prefs.workspaceKey,directory,sid);
+ if(files.length)await attachmentDrafts.add(scope,files.map(([body,name,type])=>new NodeFile([body],name,{type}) as unknown as File));
+ const node=document.createElement('div');document.body.append(node);root=createRoot(node);
+ const mount=()=>act(async()=>root!.render(createElement(Composer)));
+ return {store,fx,attachmentDrafts,scope,mount,sid};
 }
+const steers=(fx:any)=>fx.made('POST','/sessions/:id/queue/:item/steer');
+const button=(text:string)=>Array.from(document.querySelectorAll('button')).find(b=>b.textContent===text)!;
 afterEach(()=>{if(root)act(()=>root!.unmount());root=undefined;vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML='';});
-it('queued file controls remove ZIP before Now and re-enable the send control',async()=>{
- const {store,prompt}=await archiveComposer();
+
+it('queued file controls remove the file before Now and re-enable the send control',async()=>{
+ const {store,fx,attachmentDrafts,scope,mount}=await composer([['notes','notes.txt','text/plain']]);
+ await store.enqueueWithAttachments('read project',attachmentDrafts.snapshot(scope));
+ await mount();
+ await vi.waitFor(async()=>{await act(async()=>{});expect(document.querySelector('.queued-prompt')).not.toBeNull();});
  await act(async()=>{(document.querySelector('[aria-label="Вложения в очереди"]') as HTMLButtonElement).click();});
- const remove=document.querySelector('[aria-label="Убрать из запроса project.zip"]') as HTMLButtonElement;
+ const remove=document.querySelector('[aria-label="Убрать из запроса notes.txt"]') as HTMLButtonElement;
  expect(remove).not.toBeNull();
  await act(async()=>{remove.click();await vi.waitFor(()=>expect(store.isQueueLocked()).toBe(false));});
  expect(store.getQueue()[0].attachments).toBeUndefined();
- const now=Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Скорректировать')!;
+ const now=button('Скорректировать');
  expect(now.disabled).toBe(false);
- await act(async()=>{now.click();await vi.waitFor(()=>expect(prompt).toHaveBeenCalledTimes(1));});
- expect(prompt.mock.calls[0][2].parts).toEqual([expect.objectContaining({type:'text',text:'read project',metadata:{arvelaSteering:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{arvelaSteeringContext:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{arvelaResponseLanguage:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{arvelaToolWorkflow:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{enkiSchedules:1}})]);
+ await act(async()=>{now.click();await vi.waitFor(()=>expect(steers(fx)).toHaveLength(1));});
+ expect(fx.made('PATCH','/sessions/:id/queue/:item')[0].body).toEqual({removeAttachments:[expect.stringMatching(/-f0$/)]});
+ expect(fx.made('POST','/sessions/:id/stop')).toEqual([]);
 });
-it('Now from the queue editor uses immediate removal and the latest text',async()=>{
- const {store,prompt}=await archiveComposer();
- const edit=Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Изменить')!;
- await act(async()=>{edit.click();await vi.waitFor(()=>expect(store.getQueueEdit()).toBeDefined());});
+
+it('Now from the queue editor applies the removal and the latest text before steering',async()=>{
+ const {store,fx,attachmentDrafts,scope,mount}=await composer([['notes','notes.txt','text/plain']]);
+ await store.enqueueWithAttachments('read project',attachmentDrafts.snapshot(scope));
+ await mount();
+ await vi.waitFor(async()=>{await act(async()=>{});expect(document.querySelector('.queued-prompt')).not.toBeNull();});
+ await act(async()=>{button('Изменить').click();await vi.waitFor(()=>expect(store.getQueueEdit()).toBeDefined());});
  await act(async()=>store.setDraft('updated correction'));
  await act(async()=>{
-   (document.querySelector('[aria-label="Убрать project.zip"]') as HTMLButtonElement).click();
-   const now=Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Скорректировать')!;
+   (document.querySelector('[aria-label="Убрать notes.txt"]') as HTMLButtonElement).click();
+   const now=button('Скорректировать');
    expect(now.disabled).toBe(false);now.click();
-   await vi.waitFor(()=>expect(prompt).toHaveBeenCalledTimes(1));
+   await vi.waitFor(()=>expect(steers(fx)).toHaveLength(1));
  });
- expect(prompt.mock.calls[0][2].parts).toEqual([expect.objectContaining({type:'text',text:'updated correction',metadata:{arvelaSteering:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{arvelaSteeringContext:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{arvelaResponseLanguage:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{arvelaToolWorkflow:1}}),expect.objectContaining({type:'text',synthetic:true,metadata:{enkiSchedules:1}})]);
+ expect(fx.made('PATCH','/sessions/:id/queue/:item').map((c:any)=>c.body)).toEqual([{text:'updated correction',removeAttachments:[expect.stringMatching(/-f0$/)]}]);
  expect(store.getQueueEdit()).toBeUndefined();
 });
-it('the actual running composer accepts files into the queue instead of blocking them',async()=>{
- vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('matchMedia',()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}}));vi.stubGlobal('File',NodeFile);vi.stubGlobal('Blob',NodeBlob);
- const {store}=await import('../src/state/store');const {Composer}=await import('../src/components/Composer');
- const {attachmentDrafts,attachmentScope}=await import('../src/attachments/drafts');
- store.state={...store.state,directory:'/composer-'+crypto.randomUUID(),activeSessionId:'ses_ui',connection:{...store.state.connection,phase:'connected',streamState:'open'},statuses:{ses_ui:{type:'busy'}},connectedProviderIds:['p']};
- vi.spyOn(store,'activeSession').mockReturnValue({id:'ses_ui'} as any);vi.spyOn(store,'modelInfo').mockReturnValue({id:'m',capabilities:{input:{image:true}}} as any);
- store.setModelChoice('p','m','medium');store.setDraft('follow up with files');
- const scope=attachmentScope(store.state.prefs.workspaceKey??store.state.prefs.endpoint,store.state.directory,'ses_ui');
- await attachmentDrafts.add(scope,[new NodeFile(['contents'],'note.txt',{type:'text/plain'}) as unknown as File]);
- const node=document.createElement('div');document.body.append(node);root=createRoot(node);
- await act(async()=>root!.render(createElement(Composer)));
+
+it('the running composer accepts files into the queue instead of blocking them',async()=>{
+ const {store,fx,attachmentDrafts,scope,mount}=await composer([['contents','note.txt','text/plain']]);
+ store.setDraft('follow up with files');
+ await mount();
  expect(document.querySelector('[aria-label="Приложить файлы"]')?.hasAttribute('disabled')).toBe(false);
- await act(async()=>{document.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await vi.waitFor(()=>expect(store.state.ui.sending).toBe(false), {timeout:3000});});
- expect(store.getQueue()).toHaveLength(1);expect(store.getQueue()[0].attachments?.files[0].name).toBe('note.txt');
+ await act(async()=>{document.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));await vi.waitFor(()=>expect(store.getQueue()).toHaveLength(1),{timeout:3000});});
+ expect(store.getQueue()[0].attachments?.files[0].name).toBe('note.txt');
+ expect(fx.made('POST','/sessions/:id/queue')[0].body).toMatchObject({text:'follow up with files',parts:[expect.objectContaining({type:'file',filename:'note.txt'})]});
  expect(document.querySelector('[aria-label="Вложения в очереди"]')?.getAttribute('title')).toBe('note.txt');expect(document.body.textContent).not.toContain('Вложения можно отправить после');
  expect(attachmentDrafts.snapshot(scope)).toHaveLength(0);
+ expect(fx.made('POST','/commands')).toEqual([]);
 });
 
 it('five queued prompts stay as single-line summaries and edit/apply uses the composer',async()=>{
- vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('matchMedia',()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}}));
- const {store}=await import('../src/state/store');const {Composer}=await import('../src/components/Composer');
- const sid='ses_edit_ui';store.state={...store.state,directory:'/queue-ui-'+crypto.randomUUID(),activeSessionId:sid,connection:{...store.state.connection,phase:'connected',streamState:'open'},statuses:{[sid]:{type:'busy'}}};
- vi.spyOn(store,'activeSession').mockReturnValue({id:sid} as any);vi.spyOn(store,'engineReady').mockReturnValue(true);store.setModelChoice('p','m','medium');store.setDraft('');
- for(let i=0;i<5;i++)store.enqueuePrompt('Задача '+i+'\nПодробное описание '.repeat(20));
- const original=store.getQueue().map(q=>q.id);
- const node=document.createElement('div');document.body.append(node);root=createRoot(node);await act(async()=>root!.render(createElement(Composer)));
+ const {store,fx,mount}=await composer();
+ for(let i=0;i<5;i++)await store.enqueuePrompt('Задача '+i+'\nПодробное описание '.repeat(20));
+ const original=store.getQueue().map((q:any)=>q.id);
+ await mount();
  expect(document.querySelectorAll('.queued-summary')).toHaveLength(5);
  expect(document.querySelector('.queued-summary')!.textContent).not.toContain('\n');
- const edit=Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Изменить')!;
- await act(async()=>{edit.click();await vi.waitFor(()=>expect(store.getQueueEdit()?.id).toBe(original[0]));});
+ await act(async()=>{button('Изменить').click();await vi.waitFor(()=>expect(store.getQueueEdit()?.id).toBe(original[0]));});
  expect(document.querySelector('textarea')!.value).toContain('Задача 0\n');expect(document.activeElement).toBe(document.querySelector('textarea'));
- expect(store.getQueue().map(q=>q.id)).toEqual(original);
+ expect(store.getQueue().map((q:any)=>q.id)).toEqual(original);
  await act(async()=>store.setDraft('Уточнённая задача'));
  await act(async()=>{(document.querySelector('[aria-label="Применить изменения"]') as HTMLButtonElement).click();await vi.waitFor(()=>expect(store.getQueueEdit()).toBeUndefined());});
- expect(store.getQueue().map(q=>q.id)).toEqual(original);expect(store.getQueue()[0].text).toBe('Уточнённая задача');expect(document.querySelector('textarea')!.value).toBe('');
+ expect(store.getQueue().map((q:any)=>q.id)).toEqual(original);expect(store.getQueue()[0].text).toBe('Уточнённая задача');expect(document.querySelector('textarea')!.value).toBe('');
+ expect(fx.made('PATCH','/sessions/:id/queue/:item').map((c:any)=>c.params.item)).toEqual([original[0]]);
 });
 
 it('queue handles move saved entries with the keyboard and keep row actions usable',async()=>{
- const {store}=await archiveComposer();
- await act(async()=>{store.enqueuePrompt('second');store.enqueuePrompt('third');});
+ const {store,mount}=await composer();
+ for(const text of ['read project','second','third'])await store.enqueuePrompt(text);
+ await mount();
  const handle=document.querySelector('[aria-label="Переместить задание 3"]') as HTMLButtonElement;
  handle.focus();
  await act(async()=>{handle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true}));});

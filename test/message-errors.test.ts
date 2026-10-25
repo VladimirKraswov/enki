@@ -23,7 +23,7 @@ it("does not relabel HTTP refusal, engine disconnect, balance or tool errors as 
     { name: "ToolError", data: { message: raw } },
   ]) expect(isModelConnectionError(value)).toBe(false);
   for (const value of [null, 42, {}, "failure", { data: null }]) expect(() => describeMessageError(value)).not.toThrow();
-  expect(describeMessageError({ name: "MessageAbortedError" })).toContain("aborted");
+  expect(describeMessageError({ name: "MessageAbortedError" })).toBe("Ответ остановлен.");
 });
 it("deduplicates only the last visible assistant error and accepts legacy raw banners", () => {
   expect(sessionBannerError(describeMessageError(error), [failed])).toBeNull();

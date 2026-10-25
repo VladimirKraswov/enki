@@ -39,7 +39,7 @@ export function RemovedProjects() {
     {open && <div className="modal-overlay" onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}>
       <div className="modal removed-projects" role="dialog" aria-modal="true" aria-label="Убранные проекты">
         <h3>Убранные проекты</h3>
-        <p>Папки и сессии остаются в OpenCode. Восстановление возвращает их в боковую панель.</p>
+        <p>Папки и чаты не удаляются и остаются в среде выполнения Enki. Восстановление возвращает их в боковую панель.</p>
         <div className="removed-list">{dirs.map((dir) => <div className="removed-row" key={dir}>
           <span><b>{pathBasename(dir)}</b><small className="project-path">{dir}</small></span>
           <button className="btn small" onClick={() => { if (dirs.length === 1) setOpen(false); store.restoreProject(dir); }}>Вернуть</button>

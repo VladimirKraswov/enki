@@ -1,7 +1,7 @@
 # Task timing (M43)
 
 Chat details → **Время и выполнение задачи** shows one already-loaded user
-request in either engine. It performs no history search, agent requests or
+request of an Enki chat (or a read-only archive). It performs no history search, agent requests or
 configuration changes. The optional JSON export contains only bounded counters
 and provenance, without message text, tool input/output, paths or screenshots.
 
@@ -10,10 +10,11 @@ scheduled dispatch captures preparation (schedule lateness is not a measured
 queue). The first response is the first received nonempty text/reasoning event,
 not a provider TTFT or assistant-start marker. Full observed time includes
 Desktop queue/preparation until an observed end; no result check is inferred.
-Engine timestamp history can provide elapsed intervals for OpenCode. Pi entry
-creation/completion timestamps do not establish generation duration: history-only
-Pi wall/phase durations stay unknown. Pi's echoed user timestamp links temporary
-and durable ids only when unique. Observation data is bounded to 100 turns per
+Archived OpenCode history may carry engine timestamps that provide elapsed
+intervals. Runtime (Pi SDK) entry creation/completion timestamps do not establish
+generation duration: history-only wall/phase durations of runtime chats stay
+unknown; live observation measures them. The echoed user timestamp links
+temporary and durable ids only when unique. Observation data is bounded to 100 turns per
 loaded chat and is transient until the app exits; Hub's opt-in numeric transfer
 can retain it under the existing metadata retention policy.
 

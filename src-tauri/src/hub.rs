@@ -180,9 +180,20 @@ fn origin(value: &str) -> Result<String, String> {
     }
     Ok(u.origin().ascii_serialization())
 }
+/// Hub device key account: the exact endpoint origin, as shipped.
+pub(crate) fn device_account(endpoint: &str) -> String {
+    endpoint.to_string()
+}
+/// Cached model-admin key account, in the same profile Hub service.
+pub(crate) fn admin_account(endpoint: &str) -> String {
+    format!("{endpoint}#model-admin")
+}
 fn vault(endpoint: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("dev.local.opencodedesktop.hub", endpoint)
-        .map_err(|_| "System credential store unavailable".into())
+    keyring::Entry::new(
+        &crate::paths::HUB_SECRETS.service()?,
+        &device_account(endpoint),
+    )
+    .map_err(|_| "System credential store unavailable".into())
 }
 fn validate(c: &Config) -> Result<(), String> {
     if c.endpoint.is_empty() && !c.enabled {
@@ -531,6 +542,36 @@ pub async fn hub_request(
     .await
     .map_err(|_| "Hub request task failed")?
 }
+/// Enki Runtime broker: identity of the configured Hub (the same scope the UI
+/// uses), or None when Hub coordination is off.
+pub(crate) fn broker_identity() -> Result<Option<String>, String> {
+    let c = load()?;
+    Ok((c.enabled && !c.endpoint.is_empty()).then(|| scope(&c)))
+}
+/// Enki Runtime broker: model-service coordination only (catalog, prepare,
+/// status, release). Memory, packages, devices and releases stay UI-only. The
+/// device key never leaves this process.
+pub(crate) fn broker_request(
+    path: &str,
+    body: Option<Value>,
+    expected: &str,
+) -> Result<Value, String> {
+    let allowed = ["catalog", "prepare", "status", "release", "inspect"];
+    let Some(rest) = path.strip_prefix("model-services/") else {
+        return Err("Среда выполнения может обращаться только к сервисам моделей Hub".into());
+    };
+    if !allowed.contains(&rest) {
+        return Err("Недопустимый запрос сервиса моделей".into());
+    }
+    let c = load()?;
+    if !c.enabled {
+        return Err("Hub disabled".into());
+    }
+    if expected != scope(&c) {
+        return Err("Hub connection changed; request cancelled".into());
+    }
+    request(&c, path, body)
+}
 fn id_ok(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
@@ -576,8 +617,8 @@ fn valid_files(v: &Value) -> Result<BTreeMap<String, String>, String> {
 }
 fn admin_vault(endpoint: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(
-        "dev.local.opencodedesktop.hub",
-        &format!("{endpoint}#model-admin"),
+        &crate::paths::HUB_SECRETS.service()?,
+        &admin_account(endpoint),
     )
     .map_err(|_| "System credential store unavailable".into())
 }

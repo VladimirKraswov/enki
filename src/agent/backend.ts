@@ -1,16 +1,16 @@
-// Backend-neutral agent contract.
+// Agent contract used by the application state machine.
 //
-// The application state machine (src/state/store.ts) talks to an *agent backend*,
-// never to a concrete HTTP client. OpenCode is the only implemented backend today
-// (src/agent/opencode.ts) and stays the default; this file exists so another agent
-// runtime can be added by implementing `AgentBackend` + registering a descriptor,
-// instead of rewriting the UI/state layer or inventing a second agent loop.
+// The store (src/state/store.ts) talks to this interface, never to a concrete
+// transport. Exactly one implementation exists: the Enki Runtime client
+// (src/agent/runtime/backend.ts), which drives the bundled Pi SDK runtime on
+// this computer or on an SSH host.
 //
-// Rules for any future implementation:
+// Rules:
 // - The backend owns the transport. It never exposes URLs or wire formats upwards.
 // - Every directory-sensitive call carries the directory it belongs to.
-// - `prompt` acknowledges *acceptance*, not completion. Progress arrives as events.
-// - Permission/question prompts are surfaced, never auto-answered.
+// - `prompt` acknowledges *acceptance* (a durable command receipt), not
+//   completion. Progress arrives as events.
+// - Permission and extension dialogs are surfaced, never auto-answered.
 
 import type {
   AgentInfo,
@@ -31,17 +31,17 @@ import type { CompactionConfig } from "../state/context";
 
 /** Optional surfaces. The UI must degrade per-capability, never by version gate. */
 export interface AgentCapabilities {
-  /** Interactive shell sessions owned by the backend. */
+  /** Interactive shell sessions owned by the runtime. */
   pty: boolean;
   /** Tool-call approval prompts the user answers. */
   permissions: boolean;
   /** Structured questions the agent asks mid-run. */
   questions: boolean;
-  /** File/image/audio parts in a prompt. */
+  /** File/image parts in a prompt. */
   attachments: boolean;
   /** Branching a conversation from an earlier message. */
   fork: boolean;
-  /** Server-side history summarization. */
+  /** Runtime-side history summarization. */
   compaction: boolean;
   /** Working-tree diffs for the review panel. */
   vcsDiff: boolean;
@@ -87,9 +87,11 @@ export interface EventSubscription<T> {
   signal: AbortSignal;
   onEvent: (event: T) => void;
   onState: (state: StreamState, detail?: string) => void;
+  /** The stream could not replay everything since the last event: reconcile. */
+  onReset?: (reason: "instance" | "expired" | "oversized") => void;
 }
 
-/** An event observed on the backend-wide stream, tagged with its directory. */
+/** An event observed on the runtime-wide stream, tagged with its directory. */
 export interface DirectoryEvent {
   directory?: string;
   payload: ServerEvent;
@@ -100,9 +102,6 @@ export interface AgentBackend {
   /** Stable origin identity used for request guards and preference scoping. */
   readonly endpoint: string;
   readonly capabilities: AgentCapabilities;
-
-  /** Credentials stay in memory and are bound to the connection, never persisted. */
-  setAuthHeaders(headers: Record<string, string>): void;
 
   // ---- connection / runtime metadata ----
   health(signal?: AbortSignal): Promise<HealthInfo>;
@@ -163,7 +162,7 @@ export interface AgentBackend {
       signal?: AbortSignal;
     },
   ): Promise<{ messages: MessageResponse[]; before?: string }>;
-  /** Resolves when the run was *accepted*. Completion is observed through events. */
+  /** Resolves when the command was durably *accepted*. Completion is observed through events. */
   prompt(
     sessionID: string,
     directory: string,
@@ -207,19 +206,6 @@ export interface AgentBackend {
     directory: string,
     subscription: EventSubscription<ServerEvent>,
   ): void;
-  /** Backend-wide activity, used to notice work finishing outside the open chat. */
+  /** Runtime-wide activity, used to notice work finishing outside the open chat. */
   subscribeAll(subscription: EventSubscription<DirectoryEvent>): void;
-}
-
-/** Everything needed to offer, validate and construct one backend kind. */
-export interface AgentBackendDescriptor {
-  readonly id: string;
-  readonly label: string;
-  readonly description: string;
-  readonly defaultEndpoint: string;
-  readonly capabilities: AgentCapabilities;
-  /** Rejects endpoints the security model does not allow (e.g. non-loopback). */
-  isAllowedEndpoint(endpoint: string): boolean;
-  normalizeEndpoint(endpoint: string): string;
-  create(endpoint: string): AgentBackend;
 }

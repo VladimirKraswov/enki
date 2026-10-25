@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 LIMIT = 262144
@@ -69,26 +70,88 @@ def inventory(roots):
                 raise ValueError('Too many skills')
     return records
 
+def mark_connected(records, connected):
+    """Enki Runtime loads only enabled registry sources, never ambient folders."""
+    roots = {c.resolve() for c in connected}
+    for record in records:
+        record['enki'] = 'connected-source' if Path(record['path']).parent.parent in roots else 'not-loaded'
+    return records
+
+def profile_root(value, home):
+    """Read-only mirror of native `paths::validate_profile_root`.
+
+    Absolute, not `..`, not HOME; no existing component may be a symbolic link
+    or a file (a linked profile or linked ancestor could alias another profile
+    or HOME); an existing profile is compared with HOME by physical identity.
+    Unlike native, nothing is created: a missing profile simply has no registry.
+    Any doubt fails closed (ValueError), never falls back to the owner."""
+    profile = Path(value)
+    if not value or not profile.is_absolute() or profile.parent == profile or '..' in profile.parts or profile == home:
+        raise ValueError('ENKI_PROFILE_DIR must be a separate absolute directory')
+    prefix = Path(profile.anchor)
+    for part in profile.parts[1:]:
+        prefix = prefix / part
+        try:
+            mode = os.lstat(prefix).st_mode
+        except FileNotFoundError:
+            break
+        except OSError:
+            raise ValueError('ENKI_PROFILE_DIR cannot be inspected')
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise ValueError('ENKI_PROFILE_DIR contains a link or a file')
+    if not profile.exists():
+        return profile
+    try:
+        physical, owner = profile.resolve(strict=True), home.resolve(strict=True)
+    except OSError:
+        raise ValueError('ENKI_PROFILE_DIR or HOME is unavailable')
+    if physical == owner:
+        raise ValueError('ENKI_PROFILE_DIR must not be the home directory')
+    return physical
+
+def locations(env, home, windows):
+    """(registry root, owner-HOME skill roots) for this installation.
+
+    Mirrors the native registry: an explicit ENKI_PROFILE_DIR owns
+    `<profile>/capabilities` and nothing below the owner's HOME is inspected;
+    an invalid profile fails closed instead of reading the owner's data. An
+    inherited MESH_CAPABILITIES_ROOT never redirects an explicit profile (the
+    native registry has no such override); a caller that really owns another
+    registry passes `--registry`. The default Windows registry lives under
+    `%USERPROFILE%\\.enki` (legacy `.opencode-desktop`), outside
+    MSIX-virtualised AppData."""
+    if 'ENKI_PROFILE_DIR' in env:
+        return profile_root(env['ENKI_PROFILE_DIR'], home) / 'capabilities', []
+    explicit = env.get('MESH_CAPABILITIES_ROOT')
+    if explicit:
+        return Path(explicit), [home / '.agents/skills']
+    if windows:
+        bases = [home / '.enki', home / '.opencode-desktop']
+    else:
+        xdg = Path(env.get('XDG_DATA_HOME') or '.')
+        data = xdg if xdg.is_absolute() else home / '.local/share'  # relative XDG is ignored, as natively
+        bases = [data / 'enki', data / 'opencode-desktop']
+    # Read-only legacy discovery before migration.
+    registry = next((b / 'capabilities' for b in bases if (b / 'capabilities').exists()), bases[0] / 'capabilities')
+    return registry, [home / '.agents/skills']
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', type=Path)
     parser.add_argument('--registry', type=Path)
     parser.add_argument('--source', type=Path, action='append', default=[])
     args = parser.parse_args()
-    home = Path.home()
-    default = Path(os.environ.get('LOCALAPPDATA', home / 'AppData/Local')) if os.name == 'nt' else Path(os.environ.get('XDG_DATA_HOME', home / '.local/share'))
-    registry = args.registry or Path(os.environ.get('MESH_CAPABILITIES_ROOT', default / 'enki/capabilities'))
-    if not args.registry and not registry.exists() and 'MESH_CAPABILITIES_ROOT' not in os.environ:
-        registry = default / 'opencode-desktop/capabilities'  # read-only legacy discovery before migration
     try:
-        roots = [home / '.agents/skills']
+        registry, roots = locations(os.environ, Path.home(), os.name == 'nt')
+        registry = args.registry or registry
         if args.project:
             if not args.project.is_absolute() or not args.project.is_dir():
                 raise ValueError('Project must be an existing absolute directory')
             roots.append(args.project / '.agents/skills')
-        roots.extend(registry_sources(registry, args.project))
+        connected = registry_sources(registry, args.project)
+        roots.extend(connected)
         roots.extend(args.source)
-        print(json.dumps({'skills': inventory(roots), 'scope': 'common local sources; current engine catalogue remains authoritative'}, ensure_ascii=False, indent=2))
+        print(json.dumps({'skills': mark_connected(inventory(roots), connected), 'scope': 'common local sources; current engine catalogue remains authoritative'}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, UnicodeError) as error:
         print(json.dumps({'error': type(error).__name__, 'detail': 'Catalogue unavailable; inspect the engine catalogue and connected sources'}, ensure_ascii=False))

@@ -35,6 +35,15 @@ function RecoveryCenter({workspace, close}:{workspace:string; close:()=>void}) {
         {quit.filter(q=>q.endpoint===store.state.prefs.endpoint).map(q=><article key={q.sessionId}><b>Остановка не подтверждена</b><p>При закрытии приложения агент не ответил. Проверьте состояние чата.</p><button className="btn small" disabled={!!busy} onClick={()=>void run(q.sessionId,async()=>{await store.openAttentionChat(q.sessionId,q.directory);close();})}>Открыть чат</button></article>)}
         {!issues.length&&<p className="muted">Нет ожидающих ответов и ошибок в загруженных чатах.</p>}
         {issues.map(item=><article key={item.id}><b>{item.title}</b><p>{item.reason}</p><button className="btn small" disabled={!!busy} onClick={()=>void run(item.id,async()=>{await store.openAttentionChat(item.id,item.directory);close();})}>Открыть чат</button></article>)}
+        {store.cutoverIssues().length>0&&<div className="context-panel-header"><h3>Перенос из прежней версии</h3></div>}
+        {store.cutoverIssues().map(item=><article key={item.id}>
+          <b>{item.kind==='queue'?'Запрос очереди не перенесён':'Таймер не перенесён'}</b>
+          <p>{item.state==='received'?'Перенос ещё не завершён; содержимое сохранено.':item.reason ?? 'Нужна ваша проверка.'} Ничего не отправлялось.</p>
+          <div className="btn-row">
+            {item.retryable&&<button className="btn small" disabled={!!busy} onClick={()=>void run(item.id,()=>store.retryCutover(item.id))}>Повторить перенос</button>}
+            {item.state==='quarantined'&&<button className="btn small" disabled={!!busy} title="Сохранённая копия останется в журнале среды выполнения" onClick={()=>void run(item.id,()=>store.resolveCutover(item.id))}>Больше не переносить</button>}
+          </div>
+        </article>)}
         <div className="context-panel-header"><h3>Журнал отправок</h3><label><input type="checkbox" checked={all} onChange={e=>setAll(e.target.checked)}/> Все</label></div>
         {!shown.length&&<p className="muted">Нет отправок для проверки.</p>}
         {shown.map(record=><article key={record.id}>

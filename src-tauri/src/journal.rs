@@ -18,6 +18,10 @@ pub struct Operation {
     pub model: String,
     pub state: String,
     pub updated_at: i64,
+    /// Exact ledger that received the send (`runtime:<hostId>`); absent on
+    /// records of older engines, whose delivery a 2.0 ledger cannot disprove.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<String>,
 }
 
 fn connection(path: &Path) -> Result<Connection, String> {
@@ -72,6 +76,7 @@ fn write(path: &Path, record: Operation, expected: Option<String>) -> Result<(),
         || !matches!(record.source.as_str(), "manual" | "queue" | "schedule")
         || record.model.len() > 512
         || record.engine.len() > 32
+        || record.authority.as_ref().is_some_and(|a| a.len() > 128)
     {
         return Err("Invalid operation".into());
     }
@@ -174,7 +179,35 @@ mod tests {
             model: "model".into(),
             state: "prepared".into(),
             updated_at: 1,
+            authority: None,
         }
+    }
+    #[test]
+    fn authority_is_part_of_the_immutable_identity_and_old_records_still_load() {
+        let root = std::env::temp_dir().join(format!(
+            "arvela-journal-authority-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("journal.sqlite");
+        // A pre-authority body (written by an older Enki) still deserializes.
+        let old: Operation = serde_json::from_str(r#"{"id":"msg_old","workspace":"host-a","engine":"opencode","sessionId":"ses_a","directory":"/test","source":"manual","sourceId":null,"text":"t","attachments":null,"model":"m","state":"uncertain","updatedAt":1}"#).unwrap();
+        assert!(old.authority.is_none());
+        let mut r = record();
+        r.id = "msg_bound".into();
+        r.authority = Some("runtime:00000000-0000-4000-8000-000000000000".into());
+        write(&path, r.clone(), None).unwrap();
+        r.state = "dispatching".into();
+        write(&path, r.clone(), Some("prepared".into())).unwrap();
+        // Rebinding a record to another ledger is an identity change.
+        let mut other = r.clone();
+        other.state = "uncertain".into();
+        other.authority = None;
+        assert!(write(&path, other, Some("dispatching".into())).is_err());
+        assert_eq!(list(&path, "host-a").unwrap()[0].authority, r.authority);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn crash_receipt_is_durable_and_cannot_be_replayed_or_rebound() {

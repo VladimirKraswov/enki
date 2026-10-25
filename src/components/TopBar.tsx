@@ -1,7 +1,6 @@
 import { RecoveryButton } from "./RecoveryCenter";
 import { BrowserButton } from "./BrowserSettings";
-import { PI_BACKEND_ID } from "../agent/pi/backend";
-import { piAvailability } from "../state/engines";
+import { RUNTIME_CAPABILITIES } from "../agent/runtime/backend";
 import { store, useAppState } from "../state/store";
 import { Icon } from "./Icon";
 import { CONTEXT_PANEL_ID } from "./ContextPanel";
@@ -9,13 +8,9 @@ export function TopBar() {
   const s = useAppState(),
     l = s.prefs.layout,
     session = store.activeSession();
-  const engineId = store.engineIdFor();
-  const engineLabel = engineId === PI_BACKEND_ID ? "Pi" : "OpenCode";
-  const otherEngine = engineId === PI_BACKEND_ID ? "opencode" : PI_BACKEND_ID;
-  const otherLabel = engineId === PI_BACKEND_ID ? "OpenCode" : "Pi";
-  const canContinueOnOtherEngine = engineId === PI_BACKEND_ID
-    ? s.connection.phase === "connected"
-    : store.piInstalled && piAvailability(s.prefs).available;
+  // One executing agent. An imported OpenCode chat is a read-only archive with
+  // an explicit continuation into a new Enki chat (nothing is sent or replayed).
+  const archive = !!session && store.isLegacySession(session.id);
   return (
     <header className="topbar" data-tauri-drag-region="deep">
       {!l.sidebarOpen && (
@@ -38,24 +33,24 @@ export function TopBar() {
           {store.hostLabel()}
         </span>
       )}
-      {engineLabel && (
-        <span className="execution-badge" title="Агент этого чата">
-          {engineLabel}
+      {archive && (
+        <span className="execution-badge" title="Импортированный чат OpenCode: история доступна только для чтения">
+          Архив OpenCode
         </span>
       )}
-      {session && canContinueOnOtherEngine && (
+      {session && archive && (
         <button
           className="icon-btn handoff-button"
-          title={`Создать чат ${otherLabel} и перенести контекст`}
-          aria-label={`Продолжить в ${otherLabel}`}
+          title="Создать новый чат Enki с историей этого архива. Архив не меняется, ничего не отправляется."
+          aria-label="Продолжить в Enki"
           disabled={s.connection.phase !== "connected"}
-          onClick={() => void store.continueOnEngine(session, otherEngine)}
+          onClick={() => void store.continueLegacySession(session)}
         >
           <Icon name="handoff" size={17} />
-          <span>В {otherLabel}</span>
+          <span>Продолжить в Enki</span>
         </button>
       )}
-      {session && engineId !== PI_BACKEND_ID && <button className="icon-btn handoff-button" title="Передать задачу в другую сессию" aria-label="Передать задание" disabled={s.connection.phase !== "connected" || !store.backend.capabilities.fork} onClick={() => store.setUi({ handoffSource: session })}>
+      {session && !archive && <button className="icon-btn handoff-button" title="Передать задачу в другую сессию" aria-label="Передать задание" disabled={s.connection.phase !== "connected" || !RUNTIME_CAPABILITIES.fork} onClick={() => store.setUi({ handoffSource: session })}>
         <Icon name="handoff" size={17} /><span>Передать</span>
       </button>}
       <button className={`icon-btn${s.ui.contextOpen ? " on" : ""}`} aria-label="Контекст задачи" aria-expanded={s.ui.contextOpen} aria-controls={s.ui.contextOpen ? CONTEXT_PANEL_ID : undefined} title="Расписание, результаты, субагенты и источники" onClick={() => store.setUi({ contextOpen: !s.ui.contextOpen })}><Icon name="context" /></button>

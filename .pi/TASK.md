@@ -1,3 +1,32 @@
+# Enki 2.0 — контрольная запись о проверке кода
+
+Это сведения о выполненной миграции, а не поручение заново запускать старые задания.
+Текущее прямое поручение пользователя определяет работу. Основное ядро — встроенный
+Enki Runtime: Pi SDK 0.85.1 и Node 24.22.1. Внешние OpenCode/Pi CLI не изменяются;
+их истории доступны через архив и явное продолжение без повтора прежних команд.
+
+На Mac проверен код снимка V5: TypeScript ядра и UI без диагностик;
+347/347 runtime Vitest, 161/161 public Node, 1070/1070 UI. Отдельные 8 проверок
+профиля входят в 347, а не прибавляются к ним. Rust fmt/check/clippy/test compilation
+прошли; 260 тестов прошли под строгим sandbox, единственный отказ ASR на bind
+сохранён отдельно, тот же ASR-тест прошёл в собственном loopback fixture; 6 ignored.
+Public artifact: 77 PASS/1 Windows skip; release/evaluation: 22 PASS;
+Hub: 93 PASS/1 Windows skip; catalog: 8 PASS; ASR stubs: 3 PASS.
+Первоначальные ошибки тестовых фикстур и административного запуска сохранены;
+после установления причин выполнены конкретные исправления, без ослабления проверок.
+
+Последующее прямое пожелание владельца: новый медно-янтарный знак «e» с искрой.
+Заменяются существующие ресурсы иконки, без изменения кода ядра. Промпты и упаковка —
+[docs/ENKI-ICON.md](../docs/ENKI-ICON.md). Проверку пакета после подписи, реальный
+запуск, установку и публикацию следует подтверждать отдельно по
+[docs/VERIFICATION.md](../docs/VERIFICATION.md) и канонической квитанции
+`.local/releases/2.0.0-stable.json`. Версия в исходниках сама по себе этого не доказывает.
+Прежние контрольные записи ниже сохраняют историю реально проверенных версий.
+
+---
+
+ENKI 2.0 — SOURCE CHECKPOINT BEFORE FINAL RELEASE GATES (2026-10-25). One bundled Pi SDK runtime, SDK0.85.1/Node24.22.1; application metadata2.0.0. Borrowed authoring host work ended and owned files were removed after verified recovery; continue locally. Complete external review and honest interrupted partial port were reviewed separately. Root fixes cover LSP generation/settlement, model-lease cancellation, package traversal, cross-host queue/settings replies, bounded ZIP reading/validation and SDK repo_inspect/safe_edit. Actual focused checks: whole-agent and frontend TypeScript0diagnostics, runtime96/96, LSP/Node8/8, frontend51/51, no unexpected guard denials; original failures and corrections preserved privately. Legacy maintained client/engine/installer copies retired after successor checks, histories/owner CLIs/configs unchanged. This dated checkpoint records source acceptance only. Full final suites, real packaged/native/Hub/model acceptance, CI, signed Hub publication and owner installation/resume are later independent gates; consult current canonical release receipt and installed version rather than replaying this checkpoint as a task.
+
 DONE / HUB STABLE VERIFIED — queueauto-resume0.2.115/runtime9f6338b(includes9d5891e). Owner:queuerepeatedlyshowed'Приостановлена'withoutstop;mustauto-continuenextitem. Rootcause:queuewasdisarmedbyANYsession/messageerror(session.error,info.error,lastError)andthenlastErrorcleared=>unexplainedpause. Fix:isQueuePausingErroronlyfatal(insufficientbalance/credits/payment/auth/quota)orexplicitstop(aborted/stopped);storeeventhandler+drainQueueusefatalgate;recoverableoutput-limit/context/connectionerrorsletthenextitemrun.Tests:queue-access+2(recoverableerrorkeepsarmed&drains;classifier),all1138frontend/6skipsgreen. Alsofixedflakyimage-editingrace:orderimagegenerationsbyinvocation(synchronousnextRequestOrder=>attempt.order=>jobOrder)so reverseacks cannot pick older latest;6/6stable. vitest.configtestTimeout20000forheavyDOMmountsunderload(test-only,commit580c080onmain). Release:parallelsessionpublished0.2.115from9f6338b(includesmy9d5891e);myuploadgotHub409(versionalreadypublished). VERIFIEDpublished0.2.115:headrevisionfpmatch,bothpacketsSHA-exact,bothsignedenvelopesPASSnativepinnedkey,sourcecontainsmypromptQueue/store/image-context/queue-tests. vitestconfigNOTin0.2.115(test-only; shipsnextrelease). NativeFP=>yellow;noapplytolivingsession. Noagents/goals/automations.
 
 DONE / IMAGE EDIT115 —runtime9f6338b/sourceHub115/headBOTHpinnedsignatures51source20hotexact/mainpushed;canonical1138front6skip/178native3ignore/83Hub3ASR15publisher/buildarch203bundlefmtstrictClippyPASS. Native115installednormalHubsourcebuild;entireinstalledtree==hashboundplan+codesignvalid, OpenCode1149preserved. ActualordinaryQwenMediumsid ses_e90737a24ffeZCnALgfigFLlIa own .local/image-edit-113/enki-chat:realUIattachedreference→image_inputs/edit→bluehairjob85f8c200137.61s/512;ownerhimselfsentfollowuphandcorrection→latestjob75187b53139.02s/512;sourceSHA==previousPNG, bothget_images/readVisionattachments,finishSTOP/noerrors,inlinecardnativeAXobserved. NoextraCodexred-dresspromptbecauseowneralreadyusedchat. Bothresident/queue0/source10moduleunitexactGit. Privateproof.local/image-edit-113/{ordinary-enki,ordinary-proof,native-installed-proof,deployment-proof,packet115-proof.log}. CUAoneAXtimeoutrebindrecovered;usernavigatedCloudTask, wrongscreenshotremoved/noUIhangclaim. Userauthorisedpause/install/resume;workshopwasONLYactuallystopped, privateownerresume.saved;finalreadonlystatusconfirmedworkshopalreadyBUSYagain(no duplicate resume prompt sent). Queue9d5891ein115already,neverrepublish114. NoASR/GPUchanges, noactiveowninference/testjobs. Ownisolatedworktreeimage-release-111removedonlyaftercopyingreceipts/proof/hotSHAmanifest;foreignenki-release-02115andallotherworktreespreserved. Proofdocspushed3f8318d;finalcheckpointpushnext.

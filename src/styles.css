@@ -1155,6 +1155,52 @@ select {
 .term-host .xterm {
   height: 100%;
 }
+
+/* ---- Runtime plugin UI (statuses, widgets, real SDK TUI surface) ---- */
+.plugin-ui {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 auto 6px;
+  width: min(100%, var(--composer-width, 860px));
+  padding: 0 12px;
+  font-size: 0.857143rem;
+}
+.plugin-ui-error { flex-direction: row; align-items: center; color: var(--danger, var(--warn)); }
+.plugin-ui-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.plugin-ui-status, .plugin-ui-working {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plugin-ui-working { color: var(--accent); border-color: var(--accent); }
+.plugin-ui-notices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.plugin-ui-notices li[data-level="error"] { color: var(--danger, var(--warn)); }
+.plugin-ui-notices li[data-level="warning"] { color: var(--warn); }
+.plugin-widgets { display: flex; flex-direction: column; gap: 4px; margin: 0 auto; width: min(100%, var(--composer-width, 860px)); padding: 0 12px; }
+.plugin-widget {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font: 0.785714rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+.plugin-surface { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+.plugin-surface-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.plugin-surface-status { flex: 1; color: var(--text-dim); font-size: 0.785714rem; }
+.plugin-surface[data-state="error"] .plugin-surface-status,
+.plugin-surface[data-state="closed"] .plugin-surface-status { color: var(--warn); }
+.plugin-surface-viewport { height: clamp(180px, 38vh, 460px); padding: 2px 0 0 6px; overflow: hidden; }
+.plugin-surface-viewport .xterm { height: 100%; }
 .status-dot {
   width: 8px;
   height: 8px;
@@ -2681,6 +2727,9 @@ kbd {
 
 /* App-wide appearance preferences. Chat and code sizes are independent of UI. */
 :root { --accent-fill: var(--accent); --accent-on: var(--bg); }
+/* Aliases used by later component blocks that were never defined (an undefined
+   custom property made "muted" text render at full contrast). */
+:root { --muted: var(--text-dim); --text-muted: var(--text-dim); --fg-muted: var(--text-dim); --bg-hover: var(--bg-sunken); --font-sm: .857143rem; }
 .btn.primary, .send-btn:not(:disabled) { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-on); }
 button:focus-visible, [tabindex]:focus-visible { outline-color: var(--accent); }
 .chat-inner { max-width: var(--chat-width, 830px); font-size: var(--chat-font-size, 14px); }
@@ -3193,6 +3242,8 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .schedule-dialog::backdrop { background:#0008; }
 .schedule-dialog .context-task p { overflow-wrap:anywhere; white-space:pre-wrap; }
 
+.generated-images>.btn{margin-top:8px}.generated-images>p[role=status]{margin:6px 0 0;color:var(--text-dim);font-size:.857143rem;overflow-wrap:anywhere}
+.pi-settings ul[aria-label="Диагностика пакета"]{margin:6px 0 0;padding-left:18px;text-align:left}
 .generated-images{margin:12px 0;max-width:760px}.generated-images-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}.generated-image-preview{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:12px;min-height:160px;cursor:pointer}.generated-image-preview img{width:100%;max-width:256px;aspect-ratio:1;object-fit:contain;border-radius:8px}.generated-images>small{display:block;margin-top:8px;color:var(--text-dim)}
 
 .image-generation-settings .setting-control>input[type=checkbox]{width:auto}

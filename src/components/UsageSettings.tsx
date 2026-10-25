@@ -1,7 +1,7 @@
 import { SettingHelp } from "./SettingHelp";
 import { usageSources } from "../usage/sources";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { store, useAppState } from "../state/store";
+import { useAppState } from "../state/store";
 import { periodStart, type UsagePeriod } from "../usage/metrics";
 import { reportFromCache } from "../usage/cache";
 import { computeUsage, DAY_MS, type UsageComputation } from "../usage/accounting";
@@ -15,8 +15,7 @@ const fmtRub = (value: number) =>
 export function UsageSettings() {
   const state = useAppState();
   const unavailable = [
-    state.connection.phase !== "connected" ? "OpenCode сейчас не подключён" : "",
-    Object.keys(state.prefs.piSessions ?? {}).length > 0 && !store.piInstalled ? "Pi не установлен: его чаты пропущены" : "",
+    state.connection.phase !== "connected" ? "Среда выполнения Enki сейчас не подключена" : "",
   ].filter(Boolean);
   const [period, setPeriod] = useState<UsagePeriod>("30d");
   const [refresh, setRefresh] = useState(0);
@@ -33,7 +32,7 @@ export function UsageSettings() {
     setProgress({ done: 0, found: 0 });
     if (!current.length) {
       setProgress(null);
-      setError("Подключитесь к OpenCode или установите Pi, чтобы прочитать историю использования.");
+      setError("Подключитесь к среде выполнения Enki, чтобы прочитать историю использования.");
       return () => { controller.abort(); if (currentScan.current === controller) currentScan.current = null; };
     }
     void computeUsage(current, period, controller.signal, {
@@ -74,7 +73,7 @@ export function UsageSettings() {
   const money = computed?.money ?? null;
   const notes = (computed?.notes ?? []).filter((note, index, list) => list.indexOf(note) === index);
   return <div className="usage-settings">
-    <p className="settings-intro">Статистика по ответам OpenCode и Pi.</p>
+    <p className="settings-intro">Статистика по ответам агента Enki, включая импортированные архивы.</p>
     <div className="usage-toolbar">
       <div className="usage-periods" role="group" aria-label="Период использования"><SettingHelp topic="usage.period" title="Период и подсчёт токенов"/>
         {([ ["7d", "7 дней"], ["30d", "30 дней"], ["all", "Всё время"] ] as const).map(([key, title]) => <button key={key} className="btn" aria-pressed={period === key} onClick={() => setPeriod(key)}>{title}</button>)}

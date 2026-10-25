@@ -2,7 +2,7 @@
 name: reliable-web-search
 description: Search the web with shared Enki tools, recover from provider HTTP403/429/timeouts, and verify original sources. Use for requests to find current information or when builtin websearch fails.
 ---
-Use `mesh_web_search_search` first when available, in both OpenCode and Pi. It performs bounded fallback across independent public search services. Query only necessary terms; exclude credentials, private document text and personal identifiers.
+Use `mesh_web_search_search` first when available. It performs bounded fallback across independent public search services. Query only necessary terms; exclude credentials, private document text and personal identifiers.
 
 Read the returned provider, failures and retryAt. An HTTP403 means a provider denied access; it does not prove that the target website is blocked. Do not repeat the same failing builtin websearch. `mesh_web_search_status` reads provider cooldown without another network request.
 

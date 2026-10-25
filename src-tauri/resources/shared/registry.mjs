@@ -58,6 +58,37 @@ export function remoteUrl(raw) {
     throw new Error("Invalid MCP address");
   return url;
 }
+// Installation profile identity of THIS process for app-owned native children.
+// The MCP SDK stdio transport only inherits HOME/PATH/USER-like variables, so
+// it would otherwise drop the profile and let the child fall back to the
+// owner's default roots and vault names. Presence is kept exactly, including
+// an empty or invalid value the native child must refuse; absence stays
+// absence. Nothing else from the environment is forwarded.
+export const PROFILE_ENV = "ENKI_PROFILE_DIR";
+export function profileEnvironment(env = process.env) {
+  return Object.prototype.hasOwnProperty.call(env, PROFILE_ENV) &&
+    typeof env[PROFILE_ENV] === "string"
+    ? { [PROFILE_ENV]: env[PROFILE_ENV] }
+    : {};
+}
+// Exact extra environment of a configured stdio MCP child (on top of the SDK's
+// default HOME/PATH-like set): its declared envKeys, which must exist, and for
+// the app-owned image service only its native state-lock command plus this
+// installation's profile identity. Never the whole environment.
+export function stdioEnvironment(spec, env = process.env) {
+  const out = {};
+  if (spec.id === "enki-images") {
+    if (path.isAbsolute(env.MESH_CAPABILITIES_COMMAND ?? ""))
+      out.MESH_CAPABILITIES_COMMAND = env.MESH_CAPABILITIES_COMMAND;
+    Object.assign(out, profileEnvironment(env));
+  }
+  for (const name of spec.envKeys || []) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) || env[name] === undefined)
+      throw new Error("Required environment variable is missing");
+    out[name] = env[name];
+  }
+  return out;
+}
 export function toolName(server, tool) {
   if (!validId(server) || !/^[a-zA-Z0-9_-]{1,100}$/.test(tool))
     throw new Error("Invalid MCP tool name");

@@ -104,6 +104,22 @@ fn import(
             .as_nanos()
     ));
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+    let result = copy_and_publish(legacy, root, &stage, &check);
+    if result.is_err() {
+        // Only this call's own partial copy; the legacy source is never touched
+        // and anything already published stays where it is.
+        let _ = std::fs::remove_dir_all(&stage);
+    }
+    result
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn copy_and_publish(
+    legacy: &std::path::Path,
+    root: &std::path::Path,
+    stage: &std::path::Path,
+    check: &impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
     for name in ["profile", "current", "browsers"] {
         let source = legacy.join(name);
         if name != "browsers"
@@ -112,7 +128,7 @@ fn import(
             return Err("Browser migration refuses a linked profile or runtime.".into());
         }
         if source.is_dir() {
-            copy_tree(&source, &stage.join(name), 0, &check)?;
+            copy_tree(&source, &stage.join(name), 0, check)?;
         }
     }
     // The manifest must refer to the copied cache, not its AppData alias.
@@ -139,7 +155,7 @@ fn import(
             std::fs::rename(stage.join(name), root.join(name)).map_err(|e| e.to_string())?;
         }
     }
-    std::fs::remove_dir(&stage).map_err(|e| e.to_string())?;
+    std::fs::remove_dir(stage).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -232,6 +248,50 @@ mod tests {
             std::fs::read(root.join("legacy/profile/fixture")).unwrap(),
             b"preserved"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_or_cancelled_import_leaves_no_partial_stage_behind() {
+        let stages = |shared: &std::path::Path| {
+            std::fs::read_dir(shared)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("migration-"))
+                .count()
+        };
+        // Cancelled in the middle of copying a profile.
+        let root = fixture();
+        std::fs::write(root.join("legacy/profile/second"), "x").unwrap();
+        let calls = std::cell::Cell::new(0);
+        assert!(import(&root.join("legacy"), &root.join("shared"), || {
+            calls.set(calls.get() + 1);
+            if calls.get() >= 3 {
+                Err("cancelled".into())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        assert_eq!(stages(&root.join("shared")), 0, "partial copy kept");
+        assert!(root.join("legacy/profile/fixture").exists());
+        // Refused after the copy (manifest outside the managed cache).
+        std::fs::create_dir_all(root.join("legacy/current")).unwrap();
+        std::fs::write(
+            root.join("legacy/current/installed.json"),
+            serde_json::json!({"browserExecutable": root.join("unmanaged/chrome.exe")}).to_string(),
+        )
+        .unwrap();
+        assert!(import(&root.join("legacy"), &root.join("shared"), || Ok(())).is_err());
+        assert_eq!(stages(&root.join("shared")), 0, "refused copy kept");
+        // A later successful import is not blocked by any leftover.
+        std::fs::remove_dir_all(root.join("legacy/current")).unwrap();
+        import(&root.join("legacy"), &root.join("shared"), || Ok(())).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("shared/profile/fixture")).unwrap(),
+            b"preserved"
+        );
+        assert_eq!(stages(&root.join("shared")), 0);
         std::fs::remove_dir_all(root).unwrap();
     }
 

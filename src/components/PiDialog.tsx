@@ -1,106 +1,79 @@
-// A blocking dialog requested by a Pi extension (`extension_ui_request`).
+// A blocking dialog requested by an agent extension (runtime `dialog.asked`).
 //
-// The agent is stopped until this is answered, so the dialog is deliberately
-// modal and offers no "remember this" shortcut: there is no hidden blanket
-// approval anywhere in this path. Dismissing it answers `cancelled`, which the
-// extension receives as "no". If the window never answers, the native side
-// auto-cancels after its deadline — silence is a denial, never an approval.
+// The agent waits until this is answered, so the dialog is deliberately modal
+// and offers no "remember this" shortcut: there is no hidden blanket approval in
+// this path. Dismissing it answers `cancelled`, which the extension receives as
+// "no". An unanswered dialog is cancelled by the runtime at its deadline —
+// silence is a denial, never an approval. The dialog leaves the screen only
+// when the runtime reports it replied or expired (any attached client may answer).
 
 import { useEffect, useRef, useState } from "react";
-import { store, useAppState } from "../state/store";
+import { store, useAppSelector } from "../state/store";
+import type { AppState } from "../state/types";
+
+// Always mounted: re-render only when the dialog itself changes.
+const dialogSnapshot = (s: AppState) => ({ dialog: s.ui.agentDialog });
 
 export function PiDialog() {
-  const s = useAppState();
-  const dialog = s.ui.piDialog;
+  const { dialog } = useAppSelector(dialogSnapshot);
   const [value, setValue] = useState("");
-  const first = useRef<HTMLButtonElement | HTMLInputElement | null>(null);
+  const [sending, setSending] = useState(false);
+  const first = useRef<HTMLButtonElement | null>(null);
+  const field = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    setValue(dialog?.request.prefill ?? "");
-    first.current?.focus();
-  }, [dialog?.request.id]);
+    setValue(dialog?.prefill ?? "");
+    setSending(false);
+    (field.current ?? first.current)?.focus();
+  }, [dialog?.id]);
 
   if (!dialog) return null;
-  const request = dialog.request;
-  const answer = (value: {value?: string; confirmed?: boolean; cancelled?: boolean}) =>
-    void store.answerPiDialog(value, {key: dialog.key, id: request.id}).catch(() => {});
+  const answer = (reply: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
+    if (sending) return;
+    setSending(true);
+    void store.answerAgentDialog(reply, dialog.id).catch(() => {}).finally(() => setSending(false));
+  };
   const cancel = () => answer({ cancelled: true });
+  const title = dialog.title || "Запрос расширения";
+  const deadline = new Date(dialog.deadline).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
 
   return (
-    <div
-      className="dialog-backdrop"
-      role="presentation"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") cancel();
-      }}
-    >
-      <div
-        className="dialog pi-dialog"
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={request.title ?? "Запрос расширения Pi"}
-      >
-        <h2>{request.title ?? "Запрос расширения Pi"}</h2>
-        <button className="btn" onClick={() => void store.stopSession(dialog.sessionId)}>Остановить задачу</button>
+    <div className="dialog-backdrop" role="presentation" onKeyDown={(e) => { if (e.key === "Escape") cancel(); }}>
+      <div className="dialog pi-dialog" role="alertdialog" aria-modal="true" aria-label={title}>
+        <h2>{title}</h2>
+        <button className="btn" onClick={() => void store.stopSession(dialog.sessionID)}>Остановить задачу</button>
         <p className="dialog-description">
-          Запрос от расширения Pi в чате. Пока вы не ответите, агент ждёт.
+          Запрос расширения в чате. Пока вы не ответите, агент ждёт; без ответа до {deadline} запрос будет отклонён.
         </p>
-        {request.message && <p>{request.message}</p>}
+        {dialog.message && <p>{dialog.message}</p>}
 
-        {request.method === "select" && (
+        {dialog.method === "select" && (
           <div className="btn-row pi-dialog-options">
-            {(request.options ?? []).map((option, index) => (
-              <button
-                key={option}
-                ref={index === 0 ? (first as never) : undefined}
-                className="btn"
-                onClick={() => answer({ value: option })}
-              >
+            {(dialog.options ?? []).map((option, index) => (
+              <button key={option} ref={index === 0 ? first : undefined} className="btn" disabled={sending} onClick={() => answer({ value: option })}>
                 {option}
               </button>
             ))}
           </div>
         )}
 
-        {(request.method === "input" || request.method === "editor") && (
+        {(dialog.method === "input" || dialog.method === "editor") && (
           <label>
-            {request.method === "editor" ? (
-              <textarea
-                aria-label={request.title ?? "Текст"}
-                rows={8}
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-              />
+            {dialog.method === "editor" ? (
+              <textarea ref={(node) => { field.current = node; }} aria-label={title} rows={8} value={value} onChange={(e) => setValue(e.target.value)} />
             ) : (
-              <input
-                aria-label={request.title ?? "Значение"}
-                placeholder={request.placeholder}
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-              />
+              <input ref={(node) => { field.current = node; }} aria-label={title} placeholder={dialog.placeholder} value={value} onChange={(e) => setValue(e.target.value)} />
             )}
           </label>
         )}
 
         <div className="btn-row">
-          <button className="btn" onClick={cancel}>
-            Отклонить
-          </button>
-          {request.method === "confirm" && (
-            <button
-              className="btn primary"
-              onClick={() => answer({ confirmed: true })}
-            >
-              Разрешить
-            </button>
+          <button className="btn" disabled={sending} onClick={cancel}>Отклонить</button>
+          {dialog.method === "confirm" && (
+            <button ref={first} className="btn primary" disabled={sending} onClick={() => answer({ confirmed: true })}>Разрешить</button>
           )}
-          {(request.method === "input" || request.method === "editor") && (
-            <button
-              className="btn primary"
-              onClick={() => answer({ value })}
-            >
-              Отправить
-            </button>
+          {(dialog.method === "input" || dialog.method === "editor") && (
+            <button className="btn primary" disabled={sending} onClick={() => answer({ value })}>Отправить</button>
           )}
         </div>
       </div>

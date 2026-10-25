@@ -1,191 +1,166 @@
-/** Generic bridge, not an agent loop. Discovery starts on session_start only.
- * All registered tools still pass Desktop's Pi approval gate. */
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+/** Shared MCP tools for SDK-hosted Pi sessions. A bridge, not an agent loop.
+ *
+ * Connections come from one runtime-wide pool keyed by server signature, so
+ * several sessions share one MCP connection per server instead of starting a
+ * duplicate process per chat. Every registered tool still passes the Enki tool
+ * gate; failures are reported, never retried, because the call may already
+ * have had side effects. */
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
-import { readRegistry, toolName, signature } from "./registry.mjs";
-import { isAbsolute } from "node:path";
-const safeError =
-  "Общий MCP недоступен. Проверьте каталог инструментов; действие не повторялось.";
-export async function loadConnection(
-  command: string,
-  key: string,
-  id: string,
-  cwd: string,
-) {
-  const clientModule = "@modelcontextprotocol/sdk/client/index.js",
-    transportModule = "@modelcontextprotocol/sdk/client/stdio.js";
-  const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import(clientModule),
-    import(transportModule),
-  ]);
-  const client = new Client(
-    { name: "enki-pi-shared", version: "1.0.0" },
-    { capabilities: {} },
-  );
-  return {
-    connect: (signal: AbortSignal) =>
-      client.connect(
-        new StdioClientTransport({
-          command,
-          args: ["--shared-mcp", key, id],
-          cwd,
-          stderr: "ignore",
-          maxBufferSize: 8 * 1024 * 1024,
-        }),
-        { signal, timeout: 10000 },
-      ),
-    list: (signal: AbortSignal) =>
-      client.listTools({}, { signal, timeout: 10000 }),
-    call: (name: string, args: Record<string, unknown>, signal?: AbortSignal) =>
-      client.callTool({ name, arguments: args }, undefined, {
-        signal,
-        timeout: 90000,
-      }),
-    close: () => client.close(),
-  };
+import { toolName, signature, type SharedRegistry, type SharedServerSpec } from "./registry.mjs";
+
+export const SAFE_ERROR = "Общий MCP недоступен. Проверьте каталог инструментов; действие не повторялось.";
+
+export interface McpTool { name: string; description?: string; inputSchema?: { type?: string; [key: string]: unknown } }
+export interface McpResult { content: Array<{ type: string; [key: string]: unknown }>; isError?: boolean; structuredContent?: unknown }
+
+/** One live MCP connection, shared between sessions by the pool. */
+export interface SharedConnection {
+  tools(signal: AbortSignal): Promise<McpTool[]>;
+  call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpResult>;
 }
-export function attachShared(pi: ExtensionAPI, load = loadConnection) {
-  let epoch = 0,
-    abort: AbortController | undefined;
-  const report = (servers: unknown[]) => {
-    process.stdout.write(
-      JSON.stringify({ type: "mesh_capability_status", servers }) + "\n",
-    );
-  };
-  const owned = new Set<Awaited<ReturnType<typeof loadConnection>>>();
-  const stop = async () => {
+
+/** Registry scope ("global" or "project-<fnv>") and the native proxy executable. */
+export interface SharedScope { registryKey: string; command: string }
+
+export interface SharedPool {
+  /** Ref-counted; `release` closes the connection when the last user leaves. */
+  acquire(spec: SharedServerSpec, scope: SharedScope, cwd: string, signal: AbortSignal): Promise<{ connection: SharedConnection; release(): void }>;
+}
+
+export interface ServerStatus { id: string; signature: string; state: "checking" | "connected" | "error"; tools: string[] }
+
+export const MCP_ERROR_CHARS = 4000;
+/** Tool error text for an MCP `isError` result: the server's own text blocks
+ * (bounded, untrusted data) plus the no-blind-retry rule. */
+export function mcpErrorText(result: McpResult): string {
+  const text = result.content.flatMap((block) => block.type === "text" && typeof block.text === "string" ? [block.text] : []).join("\n").trim();
+  const reason = text.length > MCP_ERROR_CHARS ? `${text.slice(0, MCP_ERROR_CHARS)}…` : text;
+  return `MCP сообщил об ошибке${reason ? `: ${reason}` : "."} Не повторяйте действие вслепую.`;
+}
+
+/** Largest structuredContent kept in a tool result's persisted details. */
+export const MCP_DETAILS_CHARS = 64 * 1024;
+/** `details` is persisted in the SDK transcript next to `content`. Keep a
+ * bounded summary: image/text payloads already travel in `content` (storing
+ * the raw result duplicated every screenshot), and an oversized structured
+ * payload is recorded by size only. */
+export function mcpDetails(result: McpResult): { isError: boolean; blocks: string[]; structuredContent?: unknown; structuredTruncated?: { chars: number } } {
+  const blocks = result.content.map((block) => String(block.type)).slice(0, 256);
+  const base = { isError: result.isError === true, blocks };
+  if (result.structuredContent === undefined) return base;
+  let text: string | undefined;
+  try { text = JSON.stringify(result.structuredContent); } catch { text = undefined; }
+  if (text === undefined) return base;
+  return text.length <= MCP_DETAILS_CHARS ? { ...base, structuredContent: JSON.parse(text) as unknown } : { ...base, structuredTruncated: { chars: text.length } };
+}
+
+export interface SharedOptions {
+  registry(): Promise<SharedRegistry>;
+  scope: SharedScope;
+  pool: SharedPool;
+  report(servers: ServerStatus[]): void;
+  /** Tool names already claimed by built-ins and other extensions in this session. */
+  reserved(): readonly string[];
+}
+
+export function attachShared(pi: ExtensionAPI, options: SharedOptions): void {
+  let epoch = 0;
+  let abort: AbortController | undefined;
+  let held: Array<() => void> = [];
+  const stop = () => {
     epoch++;
     abort?.abort();
-    await Promise.all([...owned].map((c) => c.close().catch(() => {})));
-    owned.clear();
+    for (const release of held) release();
+    held = [];
   };
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    await stop();
-    const generation = epoch,
-      cancel = new AbortController();
+    stop();
+    const generation = epoch;
+    const cancel = new AbortController();
     abort = cancel;
-    const timer = setTimeout(() => cancel.abort(), 35000);
-    const root = process.env.MESH_CAPABILITIES_ROOT,
-      key = process.env.MESH_CAPABILITIES_KEY,
-      command = process.env.MESH_CAPABILITIES_COMMAND;
-    if (!root || !key || !command || !isAbsolute(command)) {
-      clearTimeout(timer);
-      return;
-    }
-    let statuses: {
-      id: string;
-      signature: string;
-      state: string;
-      tools: string[];
-    }[] = [];
+    const timer = setTimeout(() => cancel.abort(), 35_000);
+    // Every await below can outlive this session (shutdown/restart bump the
+    // epoch; the discovery deadline aborts): nothing registers unless live, and
+    // a replaced session reports/notifies nothing over its successor.
+    const current = () => generation === epoch;
+    const live = () => current() && !cancel.signal.aborted;
+    let statuses: ServerStatus[] = [];
     try {
-      const specs = (await readRegistry(root, key)).servers.filter(
-        (s) => s.enabled,
-      );
-      statuses = specs.map((s) => ({
-        id: s.id,
-        signature: signature(s),
-        state: "checking",
-        tools: [] as string[],
-      }));
-      report(statuses);
-      // Bounded sequential discovery keeps startup memory/process pressure low.
+      const specs = (await options.registry()).servers.filter((s) => s.enabled);
+      if (!current()) return;
+      statuses = specs.map((s) => ({ id: s.id, signature: signature(s), state: "checking", tools: [] }));
+      options.report(statuses);
+      // Sequential discovery keeps startup process/memory pressure bounded.
       for (const spec of specs) {
-        if (generation !== epoch || cancel.signal.aborted) return;
-        const c = await load(command, key, spec.id, ctx.cwd);
-        owned.add(c);
+        if (!live()) return;
+        const status = statuses.find((s) => s.id === spec.id);
         try {
-          await c.connect(cancel.signal);
-          const listed = await c.list(cancel.signal);
-          if (generation !== epoch || cancel.signal.aborted) {
-            await c.close();
-            owned.delete(c);
-            return;
-          }
-          if (listed.nextCursor || listed.tools.length > 128)
-            throw new Error(safeError);
+          const lease = await options.pool.acquire(spec, options.scope, ctx.cwd, cancel.signal);
+          if (generation !== epoch) { lease.release(); return; }
+          // Held from here: stop() releases it even while discovery is pending.
+          held.push(lease.release);
+          const tools = await lease.connection.tools(cancel.signal);
+          if (!current()) return;
+          if (cancel.signal.aborted || tools.length > 128) throw new Error(SAFE_ERROR);
+          const taken = new Set(options.reserved());
           const names = new Set<string>();
-          for (const tool of listed.tools) {
+          for (const tool of tools) {
             const name = toolName(spec.id, tool.name);
-            if (names.has(name) || tool.inputSchema?.type !== "object")
-              throw new Error(safeError);
+            if (names.has(name) || taken.has(name) || tool.inputSchema?.type !== "object") throw new Error(SAFE_ERROR);
             names.add(name);
           }
-          for (const tool of listed.tools)
+          for (const tool of tools)
             pi.registerTool({
               name: toolName(spec.id, tool.name),
               label: `${spec.name} · ${tool.name}`,
               description: tool.description || "Shared MCP tool",
               parameters: tool.inputSchema as TSchema,
               async execute(_id, params, signal, _update, executionContext) {
-                if (generation !== epoch || signal?.aborted)
-                  throw new Error(safeError);
-                const active = (await readRegistry(root, key)).servers.find(
-                  (s) => s.id === spec.id && s.enabled,
-                );
-                if (JSON.stringify(active) !== JSON.stringify(spec))
-                  throw new Error(
-                    "Подключение изменилось. Переоткройте сессию Pi.",
-                  );
-                let result;
-                try {
-                  const arguments_ = { ...params as Record<string, unknown> };
-                  if (spec.id === 'enki-images') {
-                    // SessionManager is authoritative even for background chats;
-                    // never accept a session identity supplied by the model.
-                    const sessionID = (executionContext ?? ctx).sessionManager.getSessionId();
-                    if (!/^[A-Za-z0-9_-]{1,200}$/.test(sessionID)) throw new Error(safeError);
-                    arguments_.__enkiImageContext = { engine: 'pi', sessionID };
-                  }
-                  result = await c.call(
-                    tool.name,
-                    arguments_,
-                    signal,
-                  );
-                } catch {
-                  throw new Error(safeError);
+                if (generation !== epoch || signal?.aborted) throw new Error(SAFE_ERROR);
+                const active = (await options.registry()).servers.find((s) => s.id === spec.id && s.enabled);
+                // The lease may have been released while the registry was read.
+                if (generation !== epoch || signal?.aborted) throw new Error(SAFE_ERROR);
+                if (JSON.stringify(active) !== JSON.stringify(spec)) throw new Error("Подключение изменилось. Переоткройте чат, чтобы обновить инструменты.");
+                const args = { ...(params as Record<string, unknown>) };
+                delete args.__enkiImageContext;
+                if (spec.id === "enki-images") {
+                  // The session manager is authoritative even for background chats;
+                  // never accept a session identity supplied by the model.
+                  const sessionID = (executionContext ?? ctx).sessionManager.getSessionId();
+                  if (!/^[A-Za-z0-9_-]{1,200}$/.test(sessionID)) throw new Error(SAFE_ERROR);
+                  args.__enkiImageContext = { engine: "pi", sessionID };
                 }
-                if (result.isError)
-                  throw new Error(
-                    "MCP сообщил об ошибке. Проверьте результат; не повторяйте действие вслепую.",
-                  );
-                return {
-                  content: result.content.filter(
-                    (b) => b.type === "text" || b.type === "image",
-                  ) as any,
-                  details: { mcp: result },
-                };
+                let result: McpResult;
+                try { result = await lease.connection.call(tool.name, args, signal); }
+                catch { throw new Error(signal?.aborted ? "Действие MCP отменено." : SAFE_ERROR); }
+                // The server's own explanation (attempt limits, missing Vision,
+                // provider failures with retryAt) is what the model must act on.
+                if (result.isError) throw new Error(mcpErrorText(result));
+                const content = result.content.flatMap<TextContent | ImageContent>((block) =>
+                  block.type === "text" && typeof block.text === "string" ? [{ type: "text" as const, text: block.text }]
+                  : block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string" ? [{ type: "image" as const, data: block.data, mimeType: block.mimeType }]
+                  : []);
+                return { content, details: { mcp: mcpDetails(result) } };
               },
             });
-          Object.assign(statuses.find((s) => s.id === spec.id)!, {
-            state: "connected",
-            tools: listed.tools.map((t) => toolName(spec.id, t.name)),
-          });
-          report(statuses);
+          if (status) Object.assign(status, { state: "connected", tools: [...names] });
+          options.report(statuses);
         } catch {
-          Object.assign(statuses.find((s) => s.id === spec.id)!, {
-            state: "error",
-          });
-          report(statuses);
-          await c.close().catch(() => {});
-          owned.delete(c);
-          ctx.ui.notify(`${spec.name}: ${safeError}`, "warning");
+          if (!current()) return;
+          if (status) status.state = "error";
+          options.report(statuses);
+          ctx.ui.notify(`${spec.name}: ${SAFE_ERROR}`, "warning");
         }
       }
     } catch {
-      ctx.ui.notify(safeError, "warning");
+      if (current()) ctx.ui.notify(SAFE_ERROR, "warning");
     } finally {
       clearTimeout(timer);
-      if (
-        generation === epoch &&
-        statuses.some((s) => s.state === "checking")
-      ) {
-        for (const status of statuses)
-          if (status.state === "checking") status.state = "error";
-        report(statuses);
+      if (generation === epoch && statuses.some((s) => s.state === "checking")) {
+        for (const status of statuses) if (status.state === "checking") status.state = "error";
+        options.report(statuses);
       }
     }
   });

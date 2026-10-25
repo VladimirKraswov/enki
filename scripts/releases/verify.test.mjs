@@ -1,5 +1,40 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {verifyPublication,publishAndVerify} from './verify.mjs';import {hash} from './packet.mjs';
+import crypto from 'node:crypto';import fs from 'node:fs';
+import {assertSignedForClients,verifyPublication,publishAndVerify} from './verify.mjs';import {hash} from './packet.mjs';
+/** Test-only minisign (legacy 'Ed') key and signatures in the exact wrapped
+ * format the release tooling and clients parse. Never a release key. */
+function minisignKey(){
+ const {publicKey,privateKey}=crypto.generateKeyPairSync('ed25519'),id=crypto.randomBytes(8);
+ const raw=publicKey.export({format:'der',type:'spki'}).subarray(-32);
+ const wrapped=Buffer.from(`untrusted comment: test key\n${Buffer.concat([Buffer.from('Ed'),id,raw]).toString('base64')}\n`).toString('base64');
+ const sign=(payload,version)=>{
+  const sig=crypto.sign(null,payload,privateKey),comment=`timestamp:1\tfile:packet.json\tversion:${version}`;
+  const global=crypto.sign(null,Buffer.concat([sig,Buffer.from(comment)]),privateKey);
+  return Buffer.from(`untrusted comment: test\n${Buffer.concat([Buffer.from('Ed'),id,sig]).toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`).toString('base64');
+ };
+ return {wrapped,sign};
+}
+function signedRelease(key,{version='1.2.3',fp='a'.repeat(64),kinds={hot:'hot',source:'source'}}={}){
+ return Object.fromEntries(Object.entries(kinds).map(([slot,kind])=>{
+  const payload=Buffer.from(JSON.stringify({schemaVersion:1,kind,version,nativeFingerprint:fp,notes:'',files:{}}));
+  return [slot,{payload:payload.toString('base64'),signature:key.sign(payload,version)}];
+ }));
+}
+test('nothing is published unless both packets verify against the pinned client key',()=>{
+ const key=minisignKey(),expected={version:'1.2.3',nativeFingerprint:'a'.repeat(64)};
+ assert.doesNotThrow(()=>assertSignedForClients(signedRelease(key),expected,key.wrapped));
+ // Signed with a key the clients do not trust (the real pinned updater.pub).
+ const pinned=fs.readFileSync(new URL('../../src-tauri/updater.pub',import.meta.url),'utf8');
+ assert.throws(()=>assertSignedForClients(signedRelease(key),expected,pinned),/Invalid release signature/);
+ // Version, fingerprint or kind slot that differs from this release.
+ assert.throws(()=>assertSignedForClients(signedRelease(key,{version:'1.2.4'}),expected,key.wrapped),/Signed version mismatch|does not match/);
+ assert.throws(()=>assertSignedForClients(signedRelease(key,{fp:'b'.repeat(64)}),expected,key.wrapped),/does not match this release/);
+ assert.throws(()=>assertSignedForClients(signedRelease(key,{kinds:{hot:'source',source:'source'}}),expected,key.wrapped),/does not match this release/);
+ // Tampered bytes after signing, and a missing packet.
+ const tampered=signedRelease(key);tampered.hot.payload=Buffer.from('{"kind":"hot"}').toString('base64');
+ assert.throws(()=>assertSignedForClients(tampered,expected,key.wrapped),/verification failed/);
+ assert.throws(()=>assertSignedForClients({hot:signedRelease(key).hot},expected,key.wrapped),/Missing signed source packet/);
+});
 function fixture(){
  const envelopes=Object.fromEntries(['hot','source'].map(kind=>[kind,{payload:Buffer.from(kind).toString('base64'),signature:`signed-${kind}`}]))
  const head={available:true,version:'1.2.3',nativeFingerprint:'fp',revision:'revision',artifacts:Object.fromEntries(['hot','source'].map(kind=>[kind,{digest:hash(Buffer.from(kind)),bytes:kind.length}]))};

@@ -171,8 +171,6 @@ impl OwnedBrowser {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserStatus {
-    #[serde(flatten)]
-    pub plugins: crate::agent_plugins::Catalog,
     pub supported: bool,
     pub installed: bool,
     pub running: bool,
@@ -186,11 +184,13 @@ pub struct BrowserStatus {
     pub error: Option<String>,
 }
 
-pub fn installed_pi_extension() -> Option<std::path::PathBuf> {
+/// Installed managed browser tools: the bundled runtime attaches its browser
+/// tools (via `--browser-mcp`) and loads the browser skills from here.
+pub fn installed_skills() -> Option<std::path::PathBuf> {
     let current = support_dir().ok()?;
     installed_at(&current)
-        .then(|| current.join("pi-extension.ts"))
-        .filter(|p| p.is_file())
+        .then(|| current.join("skills"))
+        .filter(|p| p.is_dir())
 }
 
 fn status(configured: Option<&str>) -> Result<BrowserStatus, String> {
@@ -200,7 +200,6 @@ fn status(configured: Option<&str>) -> Result<BrowserStatus, String> {
     let health = gateway::health(&root).ok().map(|(_, value)| value);
     let installed = installed_at(&current);
     Ok(BrowserStatus {
-        plugins: crate::agent_plugins::ensure()?,
         supported: cfg!(any(
             target_os = "macos",
             target_os = "linux",
@@ -556,6 +555,21 @@ pub async fn browser_stop(
     .await
 }
 
+/// Next selection revision: strictly greater than every earlier one and than
+/// `now`, so it stays monotonic across a Desktop reconnect. An explicit CAS
+/// loop: `fetch_update` is deprecated on current stable and its replacement
+/// `try_update` is not available on older supported toolchains.
+fn next_selection_revision(epoch: &AtomicU64, now: u64) -> u64 {
+    let mut previous = epoch.load(Ordering::Acquire);
+    loop {
+        let next = previous.max(now) + 1;
+        match epoch.compare_exchange_weak(previous, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return next,
+            Err(actual) => previous = actual,
+        }
+    }
+}
+
 /// Select a projection without stopping any background browser or agent.
 #[tauri::command]
 pub async fn browser_session(
@@ -572,14 +586,7 @@ pub async fn browser_session(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_micros() as u64;
-    let revision = state
-        .selection_epoch
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |previous| {
-            Some(previous.max(now) + 1)
-        })
-        .unwrap()
-        .max(now)
-        + 1;
+    let revision = next_selection_revision(&state.selection_epoch, now);
     let payload = match (directory, engine, session_id) {
         (Some(directory), Some(engine), Some(session_id)) => {
             if !Path::new(&directory).is_absolute()
@@ -808,29 +815,6 @@ pub fn shutdown(app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
-pub async fn browser_pi_support(
-    window: tauri::Window,
-    node_program: Option<String>,
-) -> Result<Value, String> {
-    main_window(&window)?;
-    blocking(move || {
-        let current = support_dir()?;
-        let node = self::node_program(node_program.as_deref())?;
-        if !installed_at(&current) {
-            return Err("Инструменты браузера не установлены.".into());
-        }
-        Ok(json!({
-            "extensionPath": current.join("pi-extension.ts"),
-            "runtimePath": current,
-            "nodeProgram": node,
-            "command": shared::command()?,
-            "skillPath": current.join("skills"),
-        }))
-    })
-    .await
-}
-
 /// Poll until the daemon answers, so an engine that launches the proxy while
 /// Desktop is still starting its browser does not fail needlessly.
 fn wait_for_service(root: &Path, limit: Duration) -> Result<(), String> {
@@ -844,7 +828,7 @@ fn wait_for_service(root: &Path, limit: Duration) -> Result<(), String> {
     }
 }
 
-/// `--browser-mcp`: the stdio entry point OpenCode and Pi launch. It never
+/// `--browser-mcp`: the stdio entry point the Enki Runtime launches. It never
 /// starts or stops the daemon; it only connects to the one Desktop owns.
 pub fn mcp_main() -> Result<(), String> {
     let root = root_dir()?;
@@ -876,6 +860,36 @@ pub fn mcp_main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selection_revisions_are_strictly_monotonic_and_never_below_now() {
+        let epoch = AtomicU64::new(0);
+        assert_eq!(next_selection_revision(&epoch, 100), 101);
+        // A clock that went backwards (or a reconnect) still advances.
+        assert_eq!(next_selection_revision(&epoch, 50), 102);
+        assert_eq!(next_selection_revision(&epoch, 500), 501);
+        assert_eq!(epoch.load(Ordering::SeqCst), 501, "stored = returned");
+        // Concurrent selections never hand out the same revision.
+        let shared = Arc::new(AtomicU64::new(0));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let shared = shared.clone();
+                std::thread::spawn(move || {
+                    (0..250)
+                        .map(|_| next_selection_revision(&shared, 7))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut all: Vec<u64> = threads
+            .into_iter()
+            .flat_map(|t| t.join().unwrap())
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), 2000);
+        assert_eq!((all[0], all[1999]), (8, 2007));
+    }
+
     #[test]
     fn panel_inputs_are_bounded_and_do_not_accept_arbitrary_tools() {
         for (action, args) in [

@@ -17,7 +17,7 @@ export function HandoffDialog() {
 function HandoffForm({ session }: { session: Session }) {
   const s = useAppState();
   const [source] = useState<HandoffSource>(() => ({ session, connection: {
-    client: store.client, key: s.prefs.workspaceKey ?? s.prefs.endpoint,
+    client: store.backend, key: s.prefs.workspaceKey ?? s.prefs.endpoint,
     hostId: s.prefs.activeHost ?? "local", label: store.hostLabel(),
   } }));
   const [host, setHost] = useState(source.connection.hostId);
@@ -47,7 +47,7 @@ function HandoffForm({ session }: { session: Session }) {
   const prepare = async () => {
     if (prepareController.current || !selected || !connection || locked.current) return;
     if (Object.values(store.state.activityStatuses).some((status) => status.type !== "idle")) {
-      setError("OpenCode выполняет задачу. Дождитесь завершения или заполните пакет вручную."); return;
+      setError("Агент выполняет задачу. Дождитесь завершения или заполните пакет вручную."); return;
     }
     const ctrl = new AbortController(); prepareController.current = ctrl;
     setPreparing(true); setContextReady(false); setError("");
@@ -55,8 +55,8 @@ function HandoffForm({ session }: { session: Session }) {
       const profile = recipientProfile(store.state.prefs, source.connection.key, source.session);
       if (store.state.activeSessionId === source.session.id && source.connection.key === (store.state.prefs.workspaceKey ?? store.state.prefs.endpoint)) {
         const choice = store.getModelChoice();
-        if (choice) { profile.model = { providerID: choice.providerID, modelID: choice.modelID }; profile.variant = choice.variant ?? undefined; }
-        profile.agent = store.getAgentChoice() ?? undefined;
+        // The runtime has one agent profile; only model and variant are per turn.
+        if (choice) { profile.model = { providerID: choice.providerID, modelID: choice.modelID }; profile.variant = choice.variant ?? null; }
       }
       const text = await prepareHandoff(source, instruction, selected, connection, profile, ctrl.signal);
       if (!ctrl.signal.aborted) { setContext(text); setContextReady(true); }
@@ -68,7 +68,7 @@ function HandoffForm({ session }: { session: Session }) {
     let live = true;
     generation.current++;
     setConnection(null); setSelected(null); setSessions([]); setCursor(null); setProjects([]); setLoading(true); setError("");
-    void handoffConnection(store.state.prefs, store.client, host).then(async (target) => {
+    void handoffConnection(store.state.prefs, store.backend, host).then(async (target) => {
       const list = await target.client.projects();
       if (!live) return;
       const prefs = target.key === (store.state.prefs.workspaceKey ?? store.state.prefs.endpoint)
@@ -167,7 +167,7 @@ function HandoffForm({ session }: { session: Session }) {
       {receipt && <div className="handoff-receipt" role="status">
         <h4>{receipt === "draft" ? "Черновик сохранён" : receipt.state === "accepted" ? "Задание передано" : "Доставка не подтверждена"}</h4>
         <p>{selected?.title} · {connection?.label}</p>
-        <p>{receipt === "draft" ? "Откройте сессию, проверьте черновик и отправьте его, когда будете готовы." : receipt.state === "accepted" ? "OpenCode принял поручение. Ход выполнения и ответ появятся в сессии получателя." : "Ответ сервера потерялся. Сообщение могло быть принято. Откройте сессию и проверьте историю перед повторной отправкой."}</p>
+        <p>{receipt === "draft" ? "Откройте сессию, проверьте черновик и отправьте его, когда будете готовы." : receipt.state === "accepted" ? "Среда выполнения получателя приняла поручение. Ход выполнения и ответ появятся в сессии получателя." : "Ответ сервера потерялся. Сообщение могло быть принято. Откройте сессию и проверьте историю перед повторной отправкой."}</p>
       </div>}
       {error && <p className="handoff-error" role="alert">{error}{!connection && <button className="btn small" disabled={sending} onClick={() => setRetry(retry + 1)}>Повторить подключение</button>}</p>}
       <div className="btn-row">

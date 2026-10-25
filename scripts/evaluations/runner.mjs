@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname, toNamespacedPath } from 'node:path';
+import { join, resolve, dirname, isAbsolute, toNamespacedPath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -8,17 +9,58 @@ import { StringDecoder } from 'node:string_decoder';
 import { fixtures, suiteVersion } from './fixtures.mjs';
 import { startBackend } from './backend.mjs';
 import { startProxy, providerPolicy } from './proxy.mjs';
+import { SDK_CONTRACT } from '../runtime/sdk-contract.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const AGENT_PACKAGE = resolve(here, '../../src-tauri/resources/agent');
+
+/** The ONE execution adapter: `pi-sdk`, the exact pinned Pi SDK that Enki
+ * bundles (the reviewed agent lock at SDK_CONTRACT.sdk), run through that
+ * package's own CLI entry with this Node — the product's agent loop, without
+ * Enki's runtime policy/queue/UI layers (core-only evaluation, not UI
+ * acceptance). The former external `opencode` / `pi` CLI baselines are
+ * retired: nothing here launches an independently installed CLI. Historical
+ * reports of those engines stay readable (`parseAgentEvents`). */
+export const ENGINES = Object.freeze(['pi-sdk']);
+export const DEFAULT_ENGINES = 'pi-sdk';
+/** Engines whose recorded event streams can be parsed (history only for the retired ones). */
+export const HISTORICAL_ENGINES = Object.freeze(['opencode', 'pi']);
+const piFamily = engine => engine === 'pi' || engine === 'pi-sdk';
+const typed = (code, message) => Object.assign(new Error(message), { code });
+
+/** The pinned SDK CLI, verified by package identity against the reviewed
+ * contract: never PATH, a global `pi` or a version other than the pinned one. */
+export function pinnedSdkCli(agent = AGENT_PACKAGE, expected = SDK_CONTRACT.sdk) {
+  const root = join(agent, 'node_modules', '@earendil-works', 'pi-coding-agent');
+  let pkg;
+  try { pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')); }
+  catch { throw typed('EVAL_SDK_MISSING', 'Pinned Pi SDK is not installed: npm ci --prefix src-tauri/resources/agent --ignore-scripts'); }
+  const bin = pkg && typeof pkg.bin === 'object' ? pkg.bin?.pi : undefined;
+  if (pkg?.name !== '@earendil-works/pi-coding-agent' || pkg.version !== expected || typeof bin !== 'string'
+    || isAbsolute(bin) || /^[\\/]/.test(bin) || bin.split(/[\\/]/).includes('..'))
+    throw typed('EVAL_SDK_UNVERIFIED', `Installed Pi SDK is not the reviewed ${expected} package`);
+  return { cli: join(root, ...bin.split(/[\\/]/).filter(part => part && part !== '.')), version: pkg.version };
+}
+
+/** How an engine is launched: program plus fixed leading arguments. */
+export function launcher(engine, sdk = () => pinnedSdkCli()) {
+  if (!ENGINES.includes(engine)) throw typed(HISTORICAL_ENGINES.includes(engine) ? 'EVAL_ENGINE_RETIRED' : 'EVAL_UNKNOWN_ENGINE',
+    HISTORICAL_ENGINES.includes(engine) ? `Evaluation engine ${engine} is retired; only pi-sdk runs` : `Unknown evaluation engine ${engine}`);
+  return { command: process.execPath, prefix: [sdk().cli] };
+}
+
+/** `--agents` value: a non-empty list of distinct known engines. */
+export function parseEngines(value = DEFAULT_ENGINES) {
+  const engines = String(value).split(',');
+  if (!engines.length || new Set(engines).size !== engines.length || engines.some(e => !ENGINES.includes(e))) throw Error('Unknown/duplicate agent');
+  return engines;
+}
 const hash = data => createHash('sha256').update(data).digest('hex');
 const active = new Set();
 export function cleanEnvironment(home) {
   const env = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: tmpdir(),
     XDG_CONFIG_HOME: join(home, 'config'), XDG_DATA_HOME: join(home, 'data'), XDG_CACHE_HOME: join(home, 'cache'), XDG_STATE_HOME: join(home, 'state'),
-    PI_CODING_AGENT_DIR: join(home, 'pi'), PI_OFFLINE: '1', PI_TELEMETRY: '0',
-    OPENCODE_CONFIG_DIR: join(home, 'config', 'opencode'), OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
-    OPENCODE_DISABLE_AUTOUPDATE: 'true', OPENCODE_DISABLE_LSP_DOWNLOAD: 'true', OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
-    OPENCODE_TEST_HOME: home, OPENCODE_ENABLE_EXPERIMENTAL_MODELS: 'true' };
+    PI_CODING_AGENT_DIR: join(home, 'pi'), PI_OFFLINE: '1', PI_TELEMETRY: '0' };
   if (process.platform === 'win32') for (const key of ['SystemRoot', 'COMSPEC', 'PATHEXT']) if (process.env[key]) env[key] = process.env[key];
   return env;
 }
@@ -87,7 +129,7 @@ export function parseAgentEvents(engine, text) {
   for (const line of text.split('\n')) {
     let event; try { event = JSON.parse(line); } catch { continue; }
     if (event.type === 'error') errors++;
-    if (engine === 'pi' && event.type === 'message_end' && event.message?.role === 'assistant') {
+    if (piFamily(engine) && event.type === 'message_end' && event.message?.role === 'assistant') {
       assistantTurns++; const u = event.message.usage;
       if (u) { usagePresent = true; for (const key of Object.keys(tokens)) tokens[key] += Number(u[key]) || 0; }
       if (event.message.stopReason === 'error' || event.message.errorMessage) errors++;
@@ -104,7 +146,8 @@ async function prepareAgent(engine, root, work, backend, proxy, model, effort, c
   const home = join(root, 'home'); await mkdir(home);
   const env = { ...cleanEnvironment(home), ARVELA_EVAL_URL: backend.url, ARVELA_EVAL_TOKEN: backend.token, ARVELA_EVAL_CATEGORY: category, ARVELA_EVAL_MEMORY: memoryMode, ARVELA_EVAL_NAVIGATION:navigationMode };
   const prompt = 'Synthetic evaluation task. Use only fixture tools. Inspect the available files/browser, solve the task, then give a brief result. Do not ask for human intervention. Refresh browser snapshots after mutations or stale refs.\n';
-  if (engine === 'pi') {
+  if (!ENGINES.includes(engine)) throw typed('EVAL_ENGINE_RETIRED', `Evaluation engine ${engine} is retired; only pi-sdk runs`);
+  {
     await mkdir(join(home, 'pi'));
     await writeFile(join(home, 'pi', 'models.json'), JSON.stringify({ providers: { eval: {
       baseUrl: proxy.url, api: 'openai-completions', apiKey: '$ARVELA_EVAL_API_KEY',
@@ -113,21 +156,9 @@ async function prepareAgent(engine, root, work, backend, proxy, model, effort, c
     } } }), { mode: 0o600 });
     await writeFile(join(home, 'pi', 'settings.json'), JSON.stringify({ retry: { enabled: false }, compaction: { enabled: false } }));
     env.ARVELA_EVAL_API_KEY = proxy.token;
-    return { command: 'pi', args: ['--offline', '--mode', 'json', '-p', '--no-session', '--no-builtin-tools', '--no-extensions', '--no-skills', '--no-context-files', '--no-prompt-templates', '--no-themes', '-e', join(here, 'pi-extension.ts'), '--provider', 'eval', '--model', model, '--thinking', effort], env, prompt };
+    const { command, prefix } = launcher(engine);
+    return { command, args: [...prefix, '--offline', '--mode', 'json', '-p', '--no-session', '--no-builtin-tools', '--no-extensions', '--no-skills', '--no-context-files', '--no-prompt-templates', '--no-themes', '-e', join(here, 'pi-extension.ts'), '--provider', 'eval', '--model', model, '--thinking', effort], env, prompt };
   }
-  const config = {
-    $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false,
-    enabled_providers: ['eval'], lsp: false, formatter: false,
-    provider: { eval: { npm: '@ai-sdk/openai-compatible', name: 'Isolated evaluation', options: { baseURL: proxy.url, apiKey: proxy.token },
-      models: { [model]: { name: model, limit: { context: 262144, output: 4096 }, reasoning: true } } } },
-    agent: { build: { tools: { '*': false, 'fixture_*': true }, permission: { '*': 'deny', 'fixture_*': 'allow' }, steps: Math.min(40,requestLimit+2) } },
-    mcp: { fixture: { type: 'local', command: [process.execPath, join(here, 'mcp.mjs')], enabled: true, environment: { ARVELA_EVAL_URL: backend.url, ARVELA_EVAL_TOKEN: backend.token, ARVELA_EVAL_CATEGORY: category, ARVELA_EVAL_MEMORY: memoryMode, ARVELA_EVAL_NAVIGATION:navigationMode } } },
-  };
-  await mkdir(join(home, 'config', 'opencode'), { recursive: true });
-  const configPath = join(home, 'config', 'opencode', 'opencode.json');
-  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
-  env.OPENCODE_CONFIG = configPath;
-  return { command: 'opencode', args: ['run', '--pure', '--format', 'json', '--model', `eval/${model}`, '--agent', 'build', '--variant', effort, '--dir', work], env, prompt };
 }
 
 export function renderReport(report) {
@@ -158,8 +189,7 @@ async function main() {
   if (args.includes('--self-check')) { console.log(JSON.stringify(await selfCheck(), null, 2)); return; }
   if (!args.includes('--live')) throw Error('Live inference is opt-in: --live required. Offline CI: --self-check.');
   const integer = (flag, fallback, min, max) => { const n = Number(value(flag, fallback)); if (!Number.isInteger(n) || n < min || n > max) throw Error(`Invalid ${flag}`); return n; };
-  const engines = value('--agents', 'opencode,pi').split(',');
-  if (!engines.length || new Set(engines).size !== engines.length || engines.some(e => !['opencode', 'pi'].includes(e))) throw Error('Unknown/duplicate agent');
+  const engines = parseEngines(value('--agents', DEFAULT_ENGINES));
   const requested = value('--cases', fixtures.map(f => f.id).join(',')).split(',');
   const selected = fixtures.filter(f => requested.includes(f.id));
   if (selected.length !== requested.length) throw Error('Unknown/duplicate case');
@@ -201,7 +231,12 @@ async function main() {
   const sources = ['../../services/hub/memory.py', '../../services/hub/server.py', 'fixtures.mjs', 'project-fixtures.mjs', 'backend.mjs', 'proxy.mjs', 'runner.mjs', 'mcp.mjs', 'pi-extension.ts', 'memory.mjs', 'memory.py','../../src-tauri/resources/shared/project-map-core.mjs'];
   const revisions = Object.fromEntries(await Promise.all(sources.map(async name => [name, hash(await readFile(join(here, name)))])));
   const versions = {};
-  for (const engine of engines) { const v = await runProcess(engine, ['--version'], { seconds: 10, bytes: 1024 }); if (v.exitCode !== 0) throw Error(`${engine} unavailable`); versions[engine] = v.stdout.trim(); }
+  for (const engine of engines) {
+    const { command, prefix } = launcher(engine);
+    const v = await runProcess(command, [...prefix, '--version'], { seconds: 10, bytes: 1024 });
+    if (v.exitCode !== 0) throw Error(`${engine} unavailable`);
+    versions[engine] = engine === 'pi-sdk' ? `${v.stdout.trim()} (pinned SDK ${SDK_CONTRACT.sdk}, host Node ${process.version})` : v.stdout.trim();
+  }
   const report = { schemaVersion: 3, suiteVersion, startedAt: new Date().toISOString(), provider, modelMetadata, model, effort, memoryMode, navigationMode, effectiveEffort: policy.effectiveEffort, trialOffset, plannedTrials: plan.map(t => ({ ...t, fixture: t.fixture.id })), environment: { node: process.version, platform: process.platform, arch: process.arch }, revisions, skillRevisions: [], versions, limits, trials: [], budget, complete: false };
   const start = performance.now(); let cancelled = false;
   const interrupt = () => { cancelled = true; for (const child of active) child.evalKill('cancelled'); };

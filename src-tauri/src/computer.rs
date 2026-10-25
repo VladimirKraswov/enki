@@ -3,12 +3,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Write},
     path::PathBuf,
     process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(target_os = "macos")]
@@ -157,54 +157,53 @@ fn is_enabled() -> bool {
     settings_dir().is_ok_and(|p| p.join("enabled").is_file())
 }
 
+/// Skill directory for the runtime's explicit ResourceSpec, only while the
+/// user has enabled computer use on THIS execution host and the installed
+/// driver and the written SKILL.md are real files (no link is followed). The
+/// MCP gate still checks `is_enabled()` on every call.
+pub fn enabled_skill_path() -> Option<String> {
+    if !is_enabled() || !driver_path().is_ok_and(|p| p.is_file()) {
+        return None;
+    }
+    let skill = settings_dir().ok()?.join("skill");
+    let file = skill.join("SKILL.md");
+    let real = |p: &std::path::Path| {
+        p.symlink_metadata()
+            .is_ok_and(|m| !m.file_type().is_symlink())
+    };
+    (real(&skill) && skill.is_dir() && real(&file) && file.is_file())
+        .then(|| skill.display().to_string())
+}
+
 fn runtime_revoked(status: &Value) -> bool {
     status["status"] == "refused"
         && status.pointer("/refusal/code") == Some(&json!("authorization_suspended"))
 }
 
-// Drain both pipes while waiting: even a verbose driver must not deadlock the UI.
 fn run(args: &[&str]) -> Result<String, String> {
-    let mut child = Command::new(driver_path()?)
+    run_program(&driver_path()?, args)
+}
+
+/// The shared bounded runner: both pipes drained concurrently and capped, a
+/// hidden console on Windows, the owned group stopped at the deadline, and no
+/// unbounded wait for a descendant that keeps a pipe open after the exit.
+fn run_program(program: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new(program);
+    command
         .args(args)
-        .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "false")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let out = thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = stdout.take(512 * 1024).read_to_end(&mut b);
-        b
-    });
-    let err = thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = stderr.take(512 * 1024).read_to_end(&mut b);
-        b
-    });
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            let output = String::from_utf8_lossy(&out.join().unwrap_or_default())
-                .trim()
-                .to_string();
-            let error = String::from_utf8_lossy(&err.join().unwrap_or_default())
-                .trim()
-                .to_string();
-            return if status.success() {
-                Ok(output)
-            } else {
-                Err(if error.is_empty() { output } else { error })
-            };
-        }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Cua Driver не ответил за 15 секунд".into());
-        }
-        thread::sleep(Duration::from_millis(30));
+        .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "false");
+    let output =
+        crate::process::output_with_timeout(&mut command, Duration::from_secs(15), 512 * 1024)
+            .map_err(|error| match error {
+                crate::process::RunError::TimedOut => "Cua Driver не ответил за 15 секунд".into(),
+                crate::process::RunError::Spawn(error) => error.to_string(),
+            })?;
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_string();
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(if stderr.is_empty() { stdout } else { stderr })
     }
 }
 
@@ -256,9 +255,23 @@ pub async fn computer_status() -> Result<ComputerStatus, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Computer control is switched only from the main window.
+fn main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() == "main" {
+        Ok(())
+    } else {
+        Err("Управление компьютером доступно только в основном окне Enki".into())
+    }
+}
+
 /// A local gate is checked for every tool call, including existing MCP connections.
 #[tauri::command]
-pub fn computer_set_enabled(enabled: bool) -> Result<(), String> {
+pub fn computer_set_enabled(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    main_window(&window)?;
+    set_enabled(enabled)
+}
+
+fn set_enabled(enabled: bool) -> Result<(), String> {
     let dir = settings_dir()?;
     fs::create_dir_all(dir.join("skill")).map_err(|e| e.to_string())?;
     if enabled {
@@ -274,7 +287,11 @@ pub fn computer_set_enabled(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn computer_action(action: String) -> Result<String, String> {
+pub async fn computer_action(
+    window: tauri::WebviewWindow,
+    action: String,
+) -> Result<String, String> {
+    main_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || match action.as_str() {
         "resume" => {
             driver_path()?;
@@ -299,14 +316,17 @@ pub async fn computer_action(action: String) -> Result<String, String> {
                 return Err("На Windows Cua Driver использует текущий интерактивный сеанс; отдельного помощника разрешений нет.".into());
             }
             // The signed driver owns onboarding; the application never changes TCC grants itself.
-            Command::new(driver_path()?).args(["permissions","grant"])
+            let mut helper = Command::new(driver_path()?).args(["permissions","grant"])
                 .env("CUA_DRIVER_RS_TELEMETRY_ENABLED","false")
                 .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
                 .spawn().map_err(|e|e.to_string())?;
+            // The onboarding helper lives as long as the user needs; reap it
+            // when it exits instead of leaving a zombie until Enki quits.
+            thread::spawn(move || { let _ = helper.wait(); });
             Ok("Открылся помощник разрешений Cua Driver. Подтвердите доступ в macOS, затем нажмите «Проверить».".into())
         },
         "stop" => {
-            computer_set_enabled(false)?;
+            set_enabled(false)?;
             if cfg!(target_os = "windows") {
                 Ok("Шлюз Desktop выключен: новые вызовы управления заблокированы.".into())
             } else {
@@ -554,7 +574,10 @@ fn emit(writer: &Arc<Mutex<io::Stdout>>, value: &Value) {
 /// Modern MCP stdio is newline-delimited JSON. Forward schemas/images unchanged,
 /// expose only window tools, and gate every action without recording window data.
 pub fn mcp_main() -> Result<(), String> {
-    let mut child = Command::new(driver_path()?)
+    let mut command = Command::new(driver_path()?);
+    // The windowless MCP host must not open a console for the driver.
+    crate::process::hide_console(&mut command);
+    let mut child = command
         .arg("mcp")
         .env("CUA_DRIVER_RS_TELEMETRY_ENABLED", "false")
         .stdin(Stdio::piped())
@@ -711,6 +734,29 @@ mod tests {
             .entry("session")
             .or_insert(json!("own-test-session"));
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
+    }
+    #[cfg(unix)]
+    #[test]
+    fn driver_commands_are_bounded_even_when_a_descendant_keeps_the_pipe_open() {
+        let sh = std::path::Path::new("/bin/sh");
+        assert_eq!(run_program(sh, &["-c", "printf ready"]).unwrap(), "ready");
+        assert_eq!(
+            run_program(sh, &["-c", "printf out; printf denied >&2; exit 3"]).unwrap_err(),
+            "denied"
+        );
+        assert_eq!(
+            run_program(sh, &["-c", "printf only-out; exit 4"]).unwrap_err(),
+            "only-out"
+        );
+        // The command exits at once, but a background child inherits stdout.
+        // The former reader joins waited for that child's EOF (here 8 s; the
+        // test-owned sleeper then exits on its own).
+        let started = std::time::Instant::now();
+        assert!(run_program(sh, &["-c", "/bin/sleep 8 & exit 0"]).is_ok());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited for a descendant's pipe"
+        );
     }
     #[test]
     fn readonly_handshake_survives_disabled_gate() {

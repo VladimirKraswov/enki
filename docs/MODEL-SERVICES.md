@@ -1,22 +1,28 @@
 # Managed model services
 
-## Hub coordinator — 0.2.75
+Since 2.0 the only executing agent is the bundled **Enki Runtime** (pinned Pi
+SDK). It — not the window — discovers Hub routes, holds whole-turn Hub leases and
+decides when a model may be called. Older 0.2.x clients (OpenCode or Pi CLI) are
+still served by the same Hub through their own provider blocks.
 
-The normal path for the owner's shared models is now:
+## Hub coordinator
+
+The normal path for the owner's shared models is:
 
 ```text
 Enki (Windows / macOS / Linux)
-  → authenticated, pinned HTTPS → Hub catalog + reservations + status
+  → Enki Runtime → native broker → authenticated, pinned HTTPS → Hub catalog + reservations + status
       → private control API → gateway in VM 5100 → one resident V100 model
       → truthy loaded health + exact model ID → fixed Strata gateway in VM 5200
-Agent → its existing inference URL / SSH tunnel → streaming model response
+Enki Runtime → the model's inference URL (Pi provider entry) → streaming model response
 ```
 
 Hub coordinates models; it does not proxy token streams, run agents, execute
 commands, move GPUs or implicitly boot VMs. A VM's gateway alone owns unloading,
 loading and health checks of its child engine. Separate physical GPUs have separate
 resource IDs and do not block one another. Two services for one physical GPU must
-share one resource ID. Existing OpenCode/Pi provider URLs and headers are retained.
+share one resource ID. The Pi provider entries of the shared catalog are what 2.0
+applies; OpenCode blocks remain only for 0.2.x clients.
 
 The shared model catalog has an optional explicit field:
 
@@ -63,42 +69,49 @@ All coordinator routes require the usual device authentication:
 | `POST /api/model-services/status` | `{ticket}`; observe progress and renew the reservation |
 | `POST /api/model-services/release` | `{ticket}`; release this device's reservation, without stopping the model |
 
-Prepare is idempotent for a device and request key. After a lost acknowledgement,
-an explicit retry reuses that key; the client does not automatically replay a
-prompt. FIFO reservations are persisted in `model-reservations.sqlite3`, scoped
-to the authenticated device. Same-model clients can share residency. Another
-model waits while an earlier request or an active run owns that GPU, including
-gaps when the agent is running tools rather than generating tokens. A selection
-only warms the model; a run reservation is acquired again at the final dispatch
-boundary after preparing attachments. Manual, queued and scheduled prompts use it.
+Prepare is idempotent for a device and request key. The runtime retries a lost
+acknowledgement or a transient failure (network, timeout, 408/429/5xx) **once
+with the same key**, refreshes the key once only after an explicit
+`lease_expired`, and answers a generic 409 or other 4xx without retrying; at most
+three prepares per readiness check. FIFO reservations are persisted in
+`model-reservations.sqlite3`, scoped to the authenticated device. Same-model
+clients can share residency. Another model waits while an earlier request or an
+active run owns that GPU, including gaps when the agent is running tools rather
+than generating tokens. A run reservation is taken by the runtime right before
+the exact model is used: the source model before it summarises history for a
+smaller target, the target before its turn, the current model before a manual
+compaction. Manual, queued and scheduled prompts use the same path.
 
-While waiting/loading, status is polled about every 800 ms. Active agent sessions
-renew every 15 seconds; terminal sessions release on the next renewal tick.
-The UI preserves reservation receipts across reloads and allows startup/POST
-resynchronization. Abandoned reservations expire after 10 minutes without contact;
-this is a bounded network-failure policy, not a promise to protect an offline
-client indefinitely. Hub restart retains reservations without restarting prompts.
-Loader failure or an out-of-Hub model change is terminal, with no automatic
-inference replay. Upgrade older clients to participate: direct legacy controllers
-cannot provide a whole-turn reservation to Hub, though the VM gateway still drains
-their active HTTP streams. Coordination does not grant additional tool permissions.
+While waiting/loading, status is polled about every 800 ms. While a turn,
+summary or compaction holds a lease, the runtime renews it every 15 seconds;
+settled sessions release on the next renewal tick. If the Hub **explicitly**
+ends or replaces a held reservation, the runtime stops the work that depends on
+it — a running turn, a source summary, a manual compaction or a target about to
+be selected — with a truthful `HubLeaseLost` notice and a cancelled outcome; it
+never re-prepares mid-turn or continues on whatever model the Hub now serves. An
+unreachable Hub or an unreadable answer does not count as loss. Abandoned
+reservations expire after 10 minutes without contact; Hub restart retains
+reservations without restarting prompts. Loader failure or an out-of-Hub model
+change is terminal, with no automatic inference replay. Coordination does not
+grant additional tool permissions.
 
-Progress is scoped to the requesting chat and engine. Checking, waiting, unloading,
-loading and warming show concise Russian status; byte progress is shown only if
-the loader reports it. No invented overall percentage. Ready status disappears.
+Progress is scoped to the requesting chat. Checking, waiting, unloading, loading
+and warming show concise Russian status; byte progress is shown only if the
+loader reports it. No invented overall percentage. Ready status disappears.
 Stop/cancel keeps the draft and prevents dispatch; cancelling selection retains
 the previous model. A prompt is sent only after the exact requested model is ready.
+A readiness **check** of a Hub-owned model (Settings or a failed message) only
+inspects status: it never prepares, selects or calls the model.
 
 Legacy explicitly configured local services remain supported for other deployments.
-Additional providers at an already bound agent API root inherit its control gate
-and require fresh registry authorization for their exact ID; names/prefixes do not
+Additional providers at an already bound API root inherit its control gate and
+require fresh registry authorization for their exact ID; names/prefixes do not
 establish ownership. Hub routes take precedence over these local bindings.
 
-Enki separates an **agent** (OpenCode or Pi), its provider/model
-selection, and the **inference service** holding weights in VRAM. OpenCode remains
-the default for new projects. Pi settings, histories, credentials and extensions
-remain independent. Selecting an agent does not rename or reinterpret a transcript;
-use the explicit context continuation to create a chat with another agent.
+Enki separates the **agent** (always the Enki Runtime in 2.0), its provider/model
+selection, and the **inference service** holding weights in VRAM. Read-only
+archives of former OpenCode/Pi CLI chats keep their provenance; continuing one
+creates a new Enki chat.
 
 ## Configuring a service
 
@@ -116,21 +129,24 @@ store and are restored after relaunch; credentials never enter preferences.
 Removing a binding does not
 stop the external service or erase an agent's provider configuration.
 
-Provider URLs and models are still configured in their owning agents. For a
-Pi-only service model, configure Pi's provider header `X-Ninfer-Agent: pi`.
-The NInfer gateway conservatively treats missing headers as `opencode`. This is
-an explicit client compatibility policy, not cryptographic proof of agent identity;
+Provider URLs and models are configured in the runtime's model catalogue (the
+Pi entry of the Hub catalogue or Enki's own `models.json`). For a Pi-only service
+model, configure the provider header `X-Ninfer-Agent: pi`. The NInfer gateway
+conservatively treats missing headers as `opencode` (a 0.2.x client). This is an
+explicit client compatibility policy, not cryptographic proof of agent identity;
 protect inference endpoints with the existing private network/tunnel controls.
 The catalog's `agents` list determines visibility. No model-name matching is used.
 
 ## Discovery, offline models and selection
 
-Since 0.2.35, configured models remain in the picker when their inference service
-is offline. OpenCode uses connected/configured providers, not its entire global
-model database; Pi keeps its own catalog, custom IDs and access badges. Service
-bindings supplement providers configured in the owning agent. Removing a model
-from its agent configuration or its binding removes that source of the row;
-removing a service alone does not erase an independent provider configuration.
+Configured models remain in the picker when their inference service is offline.
+The picker shows the runtime's connected/configured providers, custom IDs and
+access badges. Service bindings supplement providers configured in the runtime
+catalogue. Removing a model from the catalogue or its binding removes that source
+of the row; removing a service alone does not erase an independent provider
+configuration. On a fresh runtime, a model whose Hub ownership is still unknown
+waits for the Hub catalogue: it is never sent directly just because the route
+cache is empty, and an unreadable catalogue refuses instead of guessing.
 
 The service catalog stores only last-known public display metadata in preferences,
 scoped to its endpoint. This retains labels and Pi-only visibility across relaunch
@@ -138,18 +154,19 @@ and temporary network failures. Cached metadata never authorizes inference; an
 unknown policy must be obtained from the service before execution. Fresh policy
 changes replace the display metadata. Keys remain in the system credential vault.
 
-“Обновить список” in the picker reads the owning agent and service catalogs without
+“Обновить список” in the picker reads the runtime and service catalogs without
 loading weights or prompting a model. Partial failures retain configured rows and
-show the error. Selecting a managed target waits for its exact ready state; Pi
-additionally performs its existing small real access probe. Failure opens a modal
+show the error. Selecting a managed target in an idle chat is one runtime model
+transition (summary with the current model first when the history does not fit).
+Failure opens a modal
 with retry, leaves the row and the previous selection intact, and never selects a
 substitute. A late readiness result cannot change another chat or workspace.
 Previously selected configured models also remain selected when offline.
 
 ## Model connection failures
 
-Since 0.2.50, an assistant model transport error is displayed once, separately
-from the OpenCode event-stream connection. “Проверить модель” on a managed model's
+An assistant model transport error is displayed once, separately from the
+runtime event-stream connection. “Проверить модель” on a managed model's
 failed message reads a fresh catalog and status for that message's exact model.
 It never calls select, changes weights or sends a prompt. A reachable service
 with a different active model, a loading operation or failed engine is not
@@ -189,7 +206,9 @@ service availability during network loss or prevent interruption of a request
 already streaming when the network fails. After recovery verify `/v1/models`
 and the authenticated control status, not merely that the local port listens.
 Do not disable host-key verification, expose a LAN listener or restart the
-externally managed agent/inference server as a recovery shortcut.
+inference server as a recovery shortcut. (Tunnels matter mostly for 0.2.x
+clients and direct services; Hub-routed 2.0 models use the LAN routes of the
+catalogue.)
 
 For a listening but stalled forward, `scripts/model-tunnel-supervisor.py` also
 checks the actual HTTP endpoint every 15 seconds with a 5-second timeout. Three
@@ -222,8 +241,9 @@ or terminates external SSH/agent/model processes. Offline unit/HTTP tests are in
 
 С 2026-10-15 Qwen, Qwen Pi и Gemma 4 31B используют один gateway и одну
 VM 5100. NInfer и llama.cpp запускаются последовательно через явные профили
-реестра; смена движка не требует передачи GPU между VM. Gemma доступна обоим
-агентам под провайдером `local-gemma4`; профиль Qwen Pi сохраняет свою политику.
+реестра; смена движка не требует передачи GPU между VM. Gemma доступна под
+провайдером `local-gemma4` (Enki 2.0 и клиентам 0.2.x); профиль Qwen Pi
+сохраняет свою политику.
 Подробности и фактические проверки: [локальные модели](LOCAL-MODELS.md).
 
 ## Version-1 control contract
@@ -243,35 +263,25 @@ Status includes `operation_id`, `phase`, `ready`, `active_model`, `target_model`
 current loader stage, not an invented overall completion percentage. Ready means
 the native engine passed health and confirmed the requested public model ID.
 
-Desktop waits for the exact selected model before normal, queued, scheduled or
+The runtime waits for the exact model before normal, queued, scheduled or
 compaction requests. It keeps the draft on failure. A changed configuration,
 conflicting operation or changed workspace cancels dependent sending. Changing
-a model during the current chat's running turn is disabled. Remote clients and
-other chats still need coordination: gateway draining covers active HTTP requests,
-including streams and native queued requests, not an entire agent tool loop.
-It never chooses a substitute model after a failure.
+a model during the current chat's running turn is deferred to its next prompt.
+Remote clients and other chats still need coordination: gateway draining covers
+active HTTP requests, including streams and native queued requests, not an entire
+agent tool loop. It never chooses a substitute model after a failure.
 
-## Pi and common surfaces
+## One runtime, common surfaces (2.0)
 
-| Function | OpenCode | Pi |
-|---|---|---|
-| Streaming text, reasoning, tools, abort, usage | Native server | Native RPC |
-| Model and effort selection | Explicit prompt profile | RPC selection and confirmation |
-| History, edit as branch, compaction | Native session APIs | Native durable fork/compact |
-| Images | Provider capabilities | Direct native images |
-| Text files / prepared PDF, audio, video | Common helper | Common helper → text/images |
-| Dictation, browser, sources, schedules, results | Shared Desktop | Shared Desktop |
-| File and shell approvals, questions | Server queues | Pi extension dialogs |
-| LSP and extensions | Agent configuration | Pi extensions and server paths |
-| Terminal / files / working-copy Git | Workspace server | Same workspace server when connected |
-| OpenCode per-session diff / child-session inventory | Server API | No identical Pi API; working-copy Git remains available |
-| Remote SSH execution | Supported OpenCode host | Not implemented for Pi |
-
-Pi does not pretend to have OpenCode's permission queues or PTY protocol. An
-unreachable workspace server does not prevent local Pi chat; its workspace-only
-panels are disabled. Changing a selection in an already-open Pi process explicitly
-calls `set_model` / `set_thinking_level` and checks `get_state`; an unconfirmed
-selection or a busy model change cannot silently send to the wrong model.
+Streaming text, reasoning, tools, Stop, usage, model/effort selection, history,
+edit as a branch, compaction, images, prepared attachments, questions, file and
+shell approvals, LSP, extensions and their UI, the terminal, files and Git, the
+per-chat changes panel and remote SSH execution are all provided by the same
+Enki Runtime — on this computer or on the selected SSH host. There is no
+per-engine matrix any more: an archived OpenCode or Pi CLI chat is read-only and
+continues in a new Enki chat. In 0.2.x these surfaces differed between OpenCode
+(server APIs) and Pi CLI (JSONL RPC); that comparison is kept only in the release
+history.
 
 ## Product rename
 
@@ -296,13 +306,15 @@ Secret Service session; Windows/Linux vault acceptance has not been run on Mac.
 
 ## Local model comparison
 
-The actual Pi RPC comparison of the two V100 checkpoints, Medium/XHigh, independent
-checks and timing limitations are recorded in [the comparison report](PI-MODEL-COMPARISON-20261007.md).
-Pi is an additional checkpoint choice, not a general speedup claim.
+The historical Pi RPC comparison (0.2.x) of the two V100 checkpoints,
+Medium/XHigh, independent checks and timing limitations are recorded in
+[the comparison report](PI-MODEL-COMPARISON-20261007.md). It is a checkpoint
+comparison, not a general speedup claim.
 
 ## RTX5090: Strata — 2026-10-19
 
-Сохранены service/resource `rtx5090`, served ID и прежние URL OpenCode/Pi.
+Сохранены service/resource `rtx5090`, served ID и прежние URL (запись Pi для
+Enki 2.0, запись OpenCode для клиентов 0.2.x).
 НаVM5200 работает независимый Strata и inference-only gateway; полный
 сервер доступен только через loopback с отдельным закрытым ключом.
 Каталог Hub обновляет название и исправляет Pi contextWindow до262144;

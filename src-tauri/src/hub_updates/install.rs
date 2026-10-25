@@ -121,22 +121,22 @@ pub fn cli() -> Result<(), String> {
         return Err("Invalid private update plan".into());
     }
     let plan: Plan = read_json(&file)?;
-    let result = apply(&plan);
-    atomic(
+    let applied = apply(&plan);
+    // The receipt is diagnostics: its failure is reported but never blocks
+    // reopening, and it never claims a rollback that did not happen.
+    let recorded = atomic(
         &base.join("last-install.json"),
-        &serde_json::json!({"version":plan.version,"installed":result.is_ok(),"error":result.as_ref().err()}),
-    )?;
-    // If application replacement failed, reopen the previous working version.
-    if let Err(e) = &result {
+        &applied.receipt(&plan.version),
+    );
+    if let Some(e) = applied.error() {
         eprintln!("{e}");
     }
-    let reopen_target = if result.is_ok() {
-        destination(&plan)
-    } else {
-        plan.target.clone()
-    };
-    reopen(&reopen_target)?;
-    if result.is_ok() {
+    if let Err(e) = &recorded {
+        eprintln!("last-install.json: {e}");
+    }
+    // Reopen the application that actually exists after this phase.
+    reopen(applied.reopen_path(&plan.target))?;
+    if applied.installed() {
         if let Some(build) = plan.artifact.ancestors().find(|p| {
             p.parent() == Some(base.as_path())
                 && p.file_name().is_some_and(|n| {
@@ -148,7 +148,136 @@ pub fn cli() -> Result<(), String> {
             let _ = fs::remove_dir_all(build);
         }
     }
-    result
+    match applied {
+        Applied::Committed { .. } => Ok(()),
+        Applied::NotCommitted(e) | Applied::Interrupted { error: e, .. } => Err(e),
+    }
+}
+
+/// Where an application replacement ended. Only `Committed` means the new
+/// bundle is installed; recovery reopens the bundle that actually exists.
+#[derive(Debug, PartialEq, Eq)]
+// `Interrupted` arises only from the macOS bundle rename sequence.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) enum Applied {
+    /// Nothing was replaced; the installed application is untouched at its path.
+    NotCommitted(String),
+    /// The old bundle was moved aside and could not be put back: it is intact at
+    /// `previous`, which is what must be reopened. The new bundle is not installed.
+    Interrupted { previous: PathBuf, error: String },
+    /// The new bundle is installed at `destination`; the old one is retained at
+    /// `previous` (macOS). `warning`: bookkeeping AFTER the commit failed.
+    Committed {
+        destination: PathBuf,
+        previous: Option<PathBuf>,
+        warning: Option<String>,
+    },
+}
+impl Applied {
+    fn installed(&self) -> bool {
+        matches!(self, Self::Committed { .. })
+    }
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::NotCommitted(e) | Self::Interrupted { error: e, .. } => Some(e.as_str()),
+            Self::Committed { warning, .. } => warning.as_deref(),
+        }
+    }
+    fn reopen_path<'a>(&'a self, target: &'a Path) -> &'a Path {
+        match self {
+            Self::NotCommitted(_) => target,
+            Self::Interrupted { previous, .. } => previous,
+            Self::Committed { destination, .. } => destination,
+        }
+    }
+    fn receipt(&self, version: &str) -> serde_json::Value {
+        let (phase, previous) = match self {
+            Self::NotCommitted(_) => ("not_committed", None),
+            Self::Interrupted { previous, .. } => ("interrupted", Some(previous)),
+            Self::Committed { previous, .. } => ("committed", previous.as_ref()),
+        };
+        serde_json::json!({"version": version, "installed": self.installed(), "phase": phase,
+            "error": self.error(), "previous": previous})
+    }
+}
+
+/// Filesystem steps of a macOS bundle replacement (injectable for fault tests).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) trait BundleOps {
+    fn copy(&mut self, from: &Path, to: &Path) -> Result<(), String>;
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()>;
+    fn record_previous(&mut self, previous: &Path) -> Result<(), String>;
+}
+
+/// copy → target→previous → staging→destination (the commit) → previous record.
+/// Every failure is classified by the phase it happened in; the old bundle is
+/// never deleted.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn replace_bundle(
+    ops: &mut impl BundleOps,
+    artifact: &Path,
+    target: &Path,
+    destination: &Path,
+    staging: &Path,
+    previous: &Path,
+) -> Applied {
+    if let Err(e) = ops.copy(artifact, staging) {
+        let _ = fs::remove_dir_all(staging);
+        return Applied::NotCommitted(e);
+    }
+    if let Err(e) = ops.rename(target, previous) {
+        let _ = fs::remove_dir_all(staging);
+        return Applied::NotCommitted(format!("Нет права заменить приложение: {e}"));
+    }
+    if let Err(e) = ops.rename(staging, destination) {
+        return match ops.rename(previous, target) {
+            Ok(()) => {
+                let _ = fs::remove_dir_all(staging);
+                Applied::NotCommitted(format!(
+                    "Новая версия не установлена: {e}. Прежнее приложение возвращено на место."
+                ))
+            }
+            Err(restore) => Applied::Interrupted {
+                previous: previous.into(),
+                error: format!(
+                    "Новая версия не установлена ({e}), и прежнее приложение не удалось вернуть на место ({restore}). Оно сохранено без изменений: {}",
+                    previous.display()
+                ),
+            },
+        };
+    }
+    // Committed. The previous bundle stays beside the installation for manual recovery.
+    let warning = ops.record_previous(previous).err().map(|e| {
+        format!(
+            "Новая версия установлена, но запись о прежней версии не сохранена: {e}. Прежняя версия лежит в {}",
+            previous.display()
+        )
+    });
+    Applied::Committed {
+        destination: destination.into(),
+        previous: Some(previous.into()),
+        warning,
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct SystemBundle;
+#[cfg(target_os = "macos")]
+impl BundleOps for SystemBundle {
+    fn copy(&mut self, from: &Path, to: &Path) -> Result<(), String> {
+        let mut copy = Command::new("/usr/bin/ditto");
+        copy.arg(from).arg(to);
+        successful(&mut copy, Duration::from_secs(120))
+    }
+    fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+    fn record_previous(&mut self, previous: &Path) -> Result<(), String> {
+        atomic(
+            &root()?.join("previous-app.json"),
+            &serde_json::json!({ "path": previous }),
+        )
+    }
 }
 fn destination(p: &Plan) -> PathBuf {
     #[cfg(target_os = "macos")]
@@ -159,56 +288,74 @@ fn destination(p: &Plan) -> PathBuf {
     }
     p.target.clone()
 }
-fn apply(p: &Plan) -> Result<(), String> {
-    semver::Version::parse(&p.version).map_err(|e| e.to_string())?;
-    if p.parent == 0 || p.parent == std::process::id() {
-        return Err("Invalid parent process".into());
-    }
-    if !fs::canonicalize(&p.artifact)
-        .map_err(|e| e.to_string())?
-        .starts_with(fs::canonicalize(root()?).map_err(|e| e.to_string())?)
-        || tree_hash(&p.artifact)? != p.hash
-    {
-        return Err("Собранный пакет изменён".into());
-    }
-    wait_parent(p.parent)?;
-    let _lease = super::lease()?;
-    if tree_hash(&p.artifact)? != p.hash {
-        return Err("Пакет изменён после завершения приложения".into());
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if p.target.extension().is_none_or(|e| e != "app") || p.target.is_symlink() {
-            return Err("Invalid installed application".into());
+fn apply(p: &Plan) -> Applied {
+    let checked = (|| -> Result<fs::File, String> {
+        semver::Version::parse(&p.version).map_err(|e| e.to_string())?;
+        if p.parent == 0 || p.parent == std::process::id() {
+            return Err("Invalid parent process".into());
         }
-        let destination = destination(p);
-        if destination != p.target && destination.exists() {
-            return Err("Enki.app уже существует. Установка не изменяла приложения.".into());
+        if !fs::canonicalize(&p.artifact)
+            .map_err(|e| e.to_string())?
+            .starts_with(fs::canonicalize(root()?).map_err(|e| e.to_string())?)
+            || tree_hash(&p.artifact)? != p.hash
+        {
+            return Err("Собранный пакет изменён".into());
         }
-        let staging = p
-            .target
-            .with_file_name(format!(".Enki-update-{}.app", std::process::id()));
-        let previous = p
-            .target
-            .with_file_name(format!(".Enki-previous-{}.app", std::process::id()));
-        if staging.exists() || previous.exists() {
-            return Err("Installation staging already exists".into());
+        wait_parent(p.parent)?;
+        let lease = super::lease()?;
+        if tree_hash(&p.artifact)? != p.hash {
+            return Err("Пакет изменён после завершения приложения".into());
         }
-        let mut copy = Command::new("/usr/bin/ditto");
-        copy.arg(&p.artifact).arg(&staging);
-        successful(&mut copy, Duration::from_secs(120))?;
-        fs::rename(&p.target, &previous)
-            .map_err(|e| format!("Нет права заменить приложение: {e}"))?;
-        if let Err(e) = fs::rename(&staging, &destination) {
-            let _ = fs::rename(&previous, &p.target);
-            return Err(e.to_string());
-        }
-        // Previous .app is retained beside the installation for manual recovery.
-        atomic(
-            &root()?.join("previous-app.json"),
-            &serde_json::json!({"path":previous}),
-        )?;
+        Ok(lease)
+    })();
+    let _lease = match checked {
+        Ok(lease) => lease,
+        Err(e) => return Applied::NotCommitted(e),
+    };
+    replace(p)
+}
+#[cfg(target_os = "macos")]
+fn replace(p: &Plan) -> Applied {
+    if p.target.extension().is_none_or(|e| e != "app") || p.target.is_symlink() {
+        return Applied::NotCommitted("Invalid installed application".into());
     }
+    let destination = destination(p);
+    if destination != p.target && destination.exists() {
+        return Applied::NotCommitted(
+            "Enki.app уже существует. Установка не изменяла приложения.".into(),
+        );
+    }
+    let staging = p
+        .target
+        .with_file_name(format!(".Enki-update-{}.app", std::process::id()));
+    let previous = p
+        .target
+        .with_file_name(format!(".Enki-previous-{}.app", std::process::id()));
+    if staging.exists() || previous.exists() {
+        return Applied::NotCommitted("Installation staging already exists".into());
+    }
+    replace_bundle(
+        &mut SystemBundle,
+        &p.artifact,
+        &p.target,
+        &destination,
+        &staging,
+        &previous,
+    )
+}
+#[cfg(not(target_os = "macos"))]
+fn replace(p: &Plan) -> Applied {
+    match replace_package(p) {
+        Ok(()) => Applied::Committed {
+            destination: destination(p),
+            previous: None,
+            warning: None,
+        },
+        Err(e) => Applied::NotCommitted(e),
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn replace_package(p: &Plan) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let destination = p.target.parent().ok_or("Missing install directory")?;
@@ -219,16 +366,7 @@ fn apply(p: &Plan) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         if p.artifact.extension().is_some_and(|e| e == "AppImage") {
-            let staging = p.target.with_extension("update-partial");
-            if staging.exists() {
-                return Err("Installation staging already exists".into());
-            }
-            fs::copy(&p.artifact, &staging).map_err(|e| e.to_string())?;
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&staging, fs::Permissions::from_mode(0o755))
-                .map_err(|e| e.to_string())?;
-            fs::copy(&p.target, root()?.join("previous.AppImage")).map_err(|e| e.to_string())?;
-            fs::rename(staging, &p.target).map_err(|e| e.to_string())?;
+            replace_appimage(&p.artifact, &p.target, &root()?.join("previous.AppImage"))?;
         } else {
             let deb = p.artifact.extension().is_some_and(|e| e == "deb");
             if !deb && p.artifact.extension().is_none_or(|e| e != "rpm") {
@@ -242,6 +380,29 @@ fn apply(p: &Plan) -> Result<(), String> {
         }
     }
     Ok(())
+}
+/// Copy the new AppImage beside the installed one, keep a private copy of the
+/// installed one, then rename over it (the commit). A failure before the
+/// commit leaves the installed AppImage untouched and removes only the staging
+/// file this call created, so it can never block every later update.
+#[cfg(all(unix, any(target_os = "linux", test)))]
+fn replace_appimage(artifact: &Path, target: &Path, previous: &Path) -> Result<(), String> {
+    let staging = target.with_extension("update-partial");
+    if fs::symlink_metadata(&staging).is_ok() {
+        return Err("Installation staging already exists".into());
+    }
+    let result = (|| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::copy(artifact, &staging).map_err(|e| e.to_string())?;
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+        fs::copy(target, previous).map_err(|e| e.to_string())?;
+        fs::rename(&staging, target).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    result
 }
 fn successful(cmd: &mut Command, limit: Duration) -> Result<(), String> {
     let out = crate::process::output_with_timeout(cmd, limit, 65536)
@@ -276,8 +437,14 @@ fn wait_parent(pid: u32) -> Result<(), String> {
         fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
         fn CloseHandle(handle: *mut c_void) -> i32;
     }
+    const ERROR_INVALID_PARAMETER: i32 = 87;
     let handle = unsafe { OpenProcess(0x00100000, 0, pid) };
     if handle.is_null() {
+        // No process has this id any more: the parent has already exited. The
+        // update lease taken right after this wait is the second guard.
+        if std::io::Error::last_os_error().raw_os_error() == Some(ERROR_INVALID_PARAMETER) {
+            return Ok(());
+        }
         return Err("Cannot observe parent exit".into());
     }
     let result = unsafe { WaitForSingleObject(handle, 60000) };
@@ -329,6 +496,175 @@ mod tests {
             ..p
         };
         assert_eq!(destination(&bridge), bridge.target);
+    }
+    /// Real renames in an own temporary directory; one chosen step fails.
+    struct Faults {
+        fail: &'static str,
+        renames: usize,
+    }
+    impl BundleOps for Faults {
+        fn copy(&mut self, from: &Path, to: &Path) -> Result<(), String> {
+            if self.fail == "copy" {
+                fs::create_dir(to).unwrap();
+                return Err("copy failed".into());
+            }
+            fs::create_dir(to).map_err(|e| e.to_string())?;
+            fs::copy(from.join("id"), to.join("id")).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        fn rename(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+            self.renames += 1;
+            let step = match self.renames {
+                1 => "aside",
+                2 => "commit",
+                _ => "restore",
+            };
+            if self.fail == step || (self.fail == "commit+restore" && step != "aside") {
+                return Err(std::io::Error::other(format!("{step} failed")));
+            }
+            fs::rename(from, to)
+        }
+        fn record_previous(&mut self, _previous: &Path) -> Result<(), String> {
+            if self.fail == "record" {
+                Err("disk full".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+    type Outcome = (PathBuf, Applied, PathBuf, PathBuf, PathBuf);
+    fn bundle(fail: &'static str, rename_destination: bool) -> Outcome {
+        let dir = std::env::temp_dir().join(format!(
+            "enki-install-{fail}-{rename_destination}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("build/Enki.app")).unwrap();
+        fs::write(dir.join("build/Enki.app/id"), b"new").unwrap();
+        let name = if rename_destination {
+            "Arvela.app"
+        } else {
+            "Enki.app"
+        };
+        let target = dir.join(name);
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("id"), b"old").unwrap();
+        let destination = dir.join("Enki.app");
+        let staging = dir.join(".Enki-update-1.app");
+        let previous = dir.join(".Enki-previous-1.app");
+        let mut ops = Faults { fail, renames: 0 };
+        let artifact = dir.join("build/Enki.app");
+        let applied = replace_bundle(
+            &mut ops,
+            &artifact,
+            &target,
+            &destination,
+            &staging,
+            &previous,
+        );
+        (dir, applied, target, destination, previous)
+    }
+    fn id(path: &Path) -> Option<String> {
+        fs::read_to_string(path.join("id")).ok()
+    }
+    #[test]
+    fn every_replacement_phase_is_classified_and_reopens_the_bundle_that_exists() {
+        for rename_destination in [false, true] {
+            // Before the commit: nothing changed, the installed app reopens.
+            for fail in ["copy", "aside", "commit"] {
+                let (dir, applied, target, destination, _) = bundle(fail, rename_destination);
+                assert!(
+                    matches!(applied, Applied::NotCommitted(_)),
+                    "{fail}: {applied:?}"
+                );
+                assert!(!applied.installed());
+                assert_eq!(id(&target).as_deref(), Some("old"), "{fail}");
+                assert_eq!(applied.reopen_path(&target), target.as_path());
+                if rename_destination {
+                    assert!(!destination.exists(), "{fail}");
+                }
+                assert_eq!(applied.receipt("2.0.0")["phase"], "not_committed");
+                fs::remove_dir_all(dir).unwrap();
+            }
+            // Commit failed AND the old bundle could not be put back: it is intact
+            // at its hidden path, which is what is reopened; never "rolled back".
+            let (dir, applied, target, _, previous) = bundle("commit+restore", rename_destination);
+            assert!(
+                matches!(&applied, Applied::Interrupted { .. }),
+                "{applied:?}"
+            );
+            assert!(!target.exists());
+            assert_eq!(id(&previous).as_deref(), Some("old"));
+            assert_eq!(applied.reopen_path(&target), previous.as_path());
+            assert_eq!(applied.receipt("2.0.0")["phase"], "interrupted");
+            assert_eq!(applied.receipt("2.0.0")["installed"], false);
+            fs::remove_dir_all(dir).unwrap();
+            // Committed, previous-app record failed: installed with a warning; the
+            // NEW destination reopens and the old bytes stay at the previous path.
+            for fail in ["record", "none"] {
+                let (dir, applied, target, destination, previous) =
+                    bundle(fail, rename_destination);
+                assert!(applied.installed(), "{fail}: {applied:?}");
+                assert_eq!(id(&destination).as_deref(), Some("new"));
+                assert_eq!(id(&previous).as_deref(), Some("old"));
+                assert_eq!(applied.reopen_path(&target), destination.as_path());
+                let receipt = applied.receipt("2.0.0");
+                assert_eq!(receipt["phase"], "committed");
+                assert_eq!(receipt["installed"], true);
+                assert_eq!(receipt["previous"], previous.display().to_string());
+                assert_eq!(applied.error().is_some(), fail == "record");
+                if rename_destination {
+                    assert!(
+                        !target.exists(),
+                        "the legacy name was moved aside, not overwritten"
+                    );
+                }
+                fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_appimage_replacement_keeps_the_installed_file_and_never_blocks_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "enki-appimage-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(dir.join("build")).unwrap();
+        let artifact = dir.join("build/Enki.AppImage");
+        let target = dir.join("Enki.AppImage");
+        fs::write(&artifact, b"new").unwrap();
+        fs::write(&target, b"old").unwrap();
+        // The private previous copy cannot be written: nothing is committed.
+        let unwritable = dir.join("missing/previous.AppImage");
+        assert!(replace_appimage(&artifact, &target, &unwritable).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(
+            !target.with_extension("update-partial").exists(),
+            "own staging removed, so the next attempt is not refused"
+        );
+        // The retry commits: new bytes installed and executable, old ones kept.
+        let previous = dir.join("previous.AppImage");
+        replace_appimage(&artifact, &target, &previous).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(fs::read(&previous).unwrap(), b"old");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        // A foreign staging file is never removed or overwritten.
+        fs::write(target.with_extension("update-partial"), b"foreign").unwrap();
+        assert!(replace_appimage(&artifact, &target, &previous).is_err());
+        assert_eq!(
+            fs::read(target.with_extension("update-partial")).unwrap(),
+            b"foreign"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn artifact_hash_detects_post_build_tampering() {

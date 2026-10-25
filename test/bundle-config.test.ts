@@ -66,7 +66,26 @@ it("gives each reviewed variant exactly one bundle target set", () => {
 
 it("ships the reviewed Windows variant as a per-user NSIS installer", () => {
   expect(windows.bundle.windows.nsis.installMode).toBe("currentUser");
-  expect(pkg.scripts["build:windows"]).toBe("tauri build --bundles nsis");
+  expect(pkg.scripts["build:windows"]).toBe(
+    "npm run runtime:prepare -- --platform win32-x64 && tauri build --bundles nsis --config src-tauri/tauri.runtime.conf.json",
+  );
+});
+
+it("bundles the prepared agent runtime only through the runtime overlay", () => {
+  // The shared config stays buildable for `cargo test`; release builds add the
+  // verified artifact staged under target/ (outside the native fingerprint).
+  expect(base.bundle.resources).toBeUndefined();
+  const overlay = read("tauri.runtime.conf.json");
+  expect(overlay.bundle.resources).toEqual({ "target/enki-agent/current/": "agent-runtime/" });
+  for (const name of ["build:linux", "build:windows", "build:macos", "build:release:macos"]) {
+    expect(pkg.scripts[name]).toContain("runtime:prepare");
+    expect(pkg.scripts[name]).toContain("--config src-tauri/tauri.runtime.conf.json");
+  }
+});
+
+it("describes the product truthfully: one bundled runtime, no external engine", () => {
+  expect(base.bundle.shortDescription).not.toMatch(/OpenCode/);
+  expect(base.bundle.longDescription).not.toMatch(/independently installed/);
 });
 
 it("keeps one product version across package, Cargo and Tauri", () => {

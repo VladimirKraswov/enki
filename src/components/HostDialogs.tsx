@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { store, useAppState, errText } from "../state/store";
 import {
-  remoteKey,
-  setHostPassword,
+  DEFAULT_REMOTE_IDENTITY_PORT,
   sshAliases,
   validRemote,
 } from "../native/hosts";
@@ -43,9 +42,9 @@ export function HostDialogs() {
     open = s.ui.hostDialogOpen;
   const [name, setName] = useState(""),
     [target, setTarget] = useState(""),
-    [port, setPort] = useState("4096");
-  const [password, setPassword] = useState(""),
-    [aliases, setAliases] = useState<string[]>([]),
+    // Identity of a saved host (its workspace key), not a dialled port.
+    [port, setPort] = useState(DEFAULT_REMOTE_IDENTITY_PORT);
+  const [aliases, setAliases] = useState<string[]>([]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [path, setPath] = useState(""),
@@ -58,7 +57,7 @@ export function HostDialogs() {
       if (current) {
         setTarget(current.target);
         setName(current.name);
-        setPort(String(current.port));
+        setPort(current.port);
       }
       void sshAliases()
         .then(setAliases)
@@ -73,25 +72,27 @@ export function HostDialogs() {
   }, [s.ui.remoteFolderOpen]);
   const close = () => {
     store.setUi({ hostDialogOpen: false, remoteFolderOpen: false });
-    setPassword("");
   };
   if (!open && !s.ui.remoteFolderOpen) return null;
   const connect = async () => {
+    const trimmed = target.trim();
+    // Re-adding a saved target keeps its saved identity (and so its chats/queues).
+    const saved = s.prefs.remoteHosts?.filter((h) => h.target === trimmed) ?? [];
+    const identity = saved.some((h) => h.port === port) ? port : saved[0]?.port ?? DEFAULT_REMOTE_IDENTITY_PORT;
     const host = {
-      id: `ssh:${target.trim()}:${port}`,
-      name: name.trim() || target.trim(),
-      target: target.trim(),
-      port: Number(port),
+      id: `ssh:${trimmed}:${identity}`,
+      name: name.trim() || trimmed,
+      target: trimmed,
+      port: identity,
     };
     if (!validRemote(host)) {
-      setError("Введите SSH-алиас или user@host и порт от 1 до 65535.");
+      setError("Введите SSH-алиас или user@host.");
       return;
     }
     setBusy(true);
     setError("");
     try {
       store.saveRemoteHost(host);
-      if (password) setHostPassword(remoteKey(host), password);
       if (await store.connectHost(host.id)) close();
       else setError(store.state.connection.error ?? "Не удалось подключиться.");
     } catch (e) {
@@ -181,56 +182,34 @@ export function HostDialogs() {
                 <option key={x} value={x} />
               ))}
             </datalist>
-            <div className="row">
-              <label>
-                Название
-                <input
-                  placeholder="Например, домашний сервер"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  disabled={busy}
-                />
-              </label>
-              <label className="port-input">
-                Порт OpenCode
-                <input
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  disabled={busy}
-                />
-              </label>
-            </div>
+            <label>
+              Название
+              <input
+                placeholder="Например, домашний сервер"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={busy}
+              />
+            </label>
             <details className="connection-help">
-              <summary>Настройка сервера и пароль</summary>
+              <summary>Подготовка сервера</summary>
               <p>
-                На сервере должен быть установлен OpenCode и запущен его API.
-                Например:
+                На сервере (Linux x64) должна быть установлена среда выполнения
+                Enki: <code>~/.local/share/enki/runtime-dist/current</code>.
+                Её ставит и обновляет доверенный установщик из исходников Enki
+                по аутентифицированному манифесту: запускайте
+                <code>node scripts/runtime/install-remote-entry.mjs</code> — он
+                сначала проверяет Node.js сервера (нужен 22.13+) и ничего не
+                меняет на неподходящем (см. docs/REMOTE-RUNTIME.md).
               </p>
-              <code>
-                opencode serve --hostname 127.0.0.1 --port 4096 --cors
-                tauri://localhost --cors http://tauri.localhost
-              </code>
               <p>
-                Порт доступен приложению через SSH. Пароль ниже — от API
-                OpenCode, а не от SSH. Ключ сервера нужно один раз подтвердить
-                обычным входом ssh в терминале.
+                Enki сам запускает её по SSH и подключается через туннель к
+                локальному порту сервера; отдельный пароль или открытый порт
+                не нужны. Ключ сервера должен быть уже подтверждён в
+                ~/.ssh/known_hosts — один раз войдите через ssh в терминале.
+                Если среда на сервере недоступна, Enki сообщит об ошибке и не
+                переключится на этот компьютер.
               </p>
-              <label>
-                Пароль API OpenCode (если задан)
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={busy}
-                />
-              </label>
-              <small>
-                Только до закрытия приложения; не сохраняется на диск.
-              </small>
             </details>
             {error && (
               <p className="composer-error" role="alert">
@@ -302,14 +281,11 @@ export function HostDialogs() {
                   onClick={() => {
                     setTarget(h.target);
                     setName(h.name);
-                    setPort(String(h.port));
-                    setPassword("");
+                    setPort(h.port);
                   }}
                 >
                   {h.name}
-                  <small>
-                    {h.target}:{h.port}
-                  </small>
+                  <small>{h.target}</small>
                 </button>
                 <button
                   className="icon-btn"

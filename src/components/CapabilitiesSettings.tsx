@@ -2,23 +2,22 @@ import { SettingField } from "./SettingHelp";
 import { useEffect, useRef, useState } from "react";
 import { store, useAppState } from "../state/store";
 import { isLocalComputer } from "../state/computer";
-import { detectLocalOpenCode } from "../native/localServer";
 import { isNative } from "../native/platform";
 import {
   capabilityNative,
   invalidateCapabilities,
-  synchronizeSources,
 } from "../capabilities/integration";
 import {
-  piServerState,
+  runtimeServerState,
   serverName,
   validateServer,
   type Catalog,
-  type PiServerStatus,
   type Registry,
   type Scope,
   type SharedServer,
+  type Skill,
 } from "../capabilities/registry";
+import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
 const blankServer = (): SharedServer => ({
   id: "",
   name: "",
@@ -30,17 +29,32 @@ const blankServer = (): SharedServer => ({
   envKeys: [],
   bearer: false,
 });
-interface LoadedSkill {
-  name: string;
-  location?: string;
-  path?: string;
+/**
+ * What the runtime does with a catalog skill. Workers load only the explicit
+ * `skillPaths` of enabled registry sources (no ambient SDK discovery) and do
+ * not report which skills they loaded, so nothing here claims "found by agent".
+ */
+export function skillAgentState(skill: Pick<Skill, "managed" | "enabled" | "engines">): string {
+  if (!skill.engines.includes(RUNTIME_AGENT_ID)) return "Другой агент";
+  if (!skill.managed) return "Не загружается: каталог не подключён как источник";
+  if (!skill.enabled) return "Выключен источник; проверьте сессию";
+  return "Не проверено";
+}
+/** What actually happened to open chats after a confirmed registry commit. */
+export function registryNotice(refreshed: { reopened: number; pending: number } | null): string {
+  if (!refreshed)
+    return "Сохранено в реестре. Новые чаты этого компьютера получат изменения; уже открытые сохраняют прежний набор до переоткрытия.";
+  const parts = ["Сохранено в реестре. Новые чаты получат изменения сразу."];
+  if (refreshed.reopened) parts.push(`Открытых чатов обновлено: ${refreshed.reopened}.`);
+  if (refreshed.pending) parts.push(`Обновятся после завершения текущей работы: ${refreshed.pending}.`);
+  return parts.join(" ");
 }
 export function CapabilitiesSettings({
   onDirtyChange,
   onNavigate,
 }: {
   onDirtyChange?: (dirty: boolean) => void;
-  onNavigate?: (section: "browser" | "mcp" | "tools" | "pi") => void;
+  onNavigate?: (section: "browser" | "pi") => void;
 }) {
   const app = useAppState(),
     [scope, setScope] = useState<Scope>("global"),
@@ -54,12 +68,8 @@ export function CapabilitiesSettings({
     [args, setArgs] = useState("[]"),
     [env, setEnv] = useState(""),
     [token, setToken] = useState("");
-  const [openTools, setOpenTools] = useState<string[] | null>(null);
-  const [openSkills, setOpenSkills] = useState<LoadedSkill[] | null>(null),
-    [piSkills, setPiSkills] = useState<LoadedSkill[] | null>(null),
-    [mcp, setMcp] = useState<Record<string, { status?: string }>>({}),
-    [piStatuses, setPiStatuses] = useState<PiServerStatus[]>([]),
-    [piRunning, setPiRunning] = useState(false),
+  // MCP status comes from the worker's reports; skills see skillAgentState.
+  const [piRunning, setPiRunning] = useState(false),
     [probes, setProbes] = useState<Record<string, string[]>>({});
   const generation = useRef(0),
     local = isLocalComputer(app.prefs.endpoint, !!store.currentHost()),
@@ -78,12 +88,7 @@ export function CapabilitiesSettings({
     setError("");
     setBusy(true);
     setCatalog(null);
-    setOpenSkills(null);
-    setPiSkills(null);
-    setMcp({});
-    setPiStatuses([]);
     setPiRunning(false);
-    setOpenTools(null);
     try {
       const value = await capabilityNative<Catalog>("shared_catalog", {
         scope,
@@ -91,42 +96,12 @@ export function CapabilitiesSettings({
       });
       if (serial !== generation.current) return;
       setCatalog(value);
-      const results = await Promise.allSettled([
-        store.client.request<LoadedSkill[]>("GET", "/skill", {
-          query: { directory: app.directory },
-          timeoutMs: 10000,
-        }),
-        store.client.request<Record<string, { status?: string }>>(
-          "GET",
-          "/mcp",
-          { query: { directory: app.directory }, timeoutMs: 10000 },
-        ),
-        app.activeSessionId && app.directory && store.engineIdFor() === "pi"
-          ? store.pi().loadedSkillCommands(app.activeSessionId)
-          : Promise.resolve(null),
-        app.activeSessionId && app.directory && store.engineIdFor() === "pi"
-          ? capabilityNative<{
-              servers: PiServerStatus[];
-              notRunning?: boolean;
-            }>("pi_shared_inventory", {
-              directory: app.directory,
-              sessionId: app.activeSessionId,
-            })
-          : Promise.resolve(null),
-        store.client.request<string[]>("GET", "/experimental/tool/ids", {
-          query: { directory: app.directory },
-          timeoutMs: 10000,
-        }),
-      ]);
-      if (serial !== generation.current) return;
-      if (results[0].status === "fulfilled") setOpenSkills(results[0].value);
-      if (results[1].status === "fulfilled") setMcp(results[1].value);
-      if (results[4].status === "fulfilled" && Array.isArray(results[4].value))
-        setOpenTools(results[4].value.filter((v) => typeof v === "string"));
-      if (results[2].status === "fulfilled") setPiSkills(results[2].value);
-      if (results[3].status === "fulfilled" && results[3].value) {
-        setPiStatuses(results[3].value.servers);
-        setPiRunning(!results[3].value.notRunning);
+      const backend = store.maybeBackend(), sessionId = app.activeSessionId;
+      if (backend && app.directory && sessionId) {
+        // Live workers of this folder; the MCP state itself arrives as worker reports.
+        const report = await backend.client.extensions(app.directory).catch(() => null);
+        if (serial !== generation.current) return;
+        setPiRunning(!!report?.sessions.some((entry) => entry.sessionID === sessionId));
       }
     } catch {
       if (serial === generation.current)
@@ -170,7 +145,7 @@ export function CapabilitiesSettings({
     setError("");
     setNotice("");
     try {
-      let saved = await capabilityNative<Catalog>("shared_save", {
+      const saved = await capabilityNative<Catalog>("shared_save", {
         scope,
         directory,
         expected: catalog.content,
@@ -178,25 +153,14 @@ export function CapabilitiesSettings({
       });
       if (serial !== generation.current) return;
       setCatalog(saved);
-      setMcp({});
       invalidateCapabilities();
-      // A missing OpenCode never blocks Pi. Configuration is synchronized once an
-      // installed OpenCode is present; live status is checked separately.
-      if (
-        app.connection.phase === "connected" ||
-        (await detectLocalOpenCode(app.prefs.localOpenCodeProgram))
-      ) {
-        const next = await synchronizeSources(saved, scope, directory);
-        saved = next.catalog;
-        if (serial !== generation.current) return;
-        setCatalog(saved);
-        if (app.connection.phase === "connected" && app.directory)
-          await store.configureSharedTools(app.directory);
-      }
+      // The commit is confirmed: ask THIS computer's runtime to refresh (idle
+      // chats reopen, busy ones after their current work; nothing is replayed).
+      const refreshed = app.connection.phase === "connected"
+        ? await store.capabilitiesCommitted(scope === "global" ? null : directory ?? null).catch(() => null)
+        : null;
       if (serial !== generation.current) return;
-      setNotice(
-        "Сохранено. Новые сессии Pi получат изменения; уже открытые переоткройте. Статус OpenCode обновите кнопкой проверки.",
-      );
+      setNotice(registryNotice(refreshed));
       setSourceId("");
       setSourcePath("");
       setServer(blankServer());
@@ -225,46 +189,7 @@ export function CapabilitiesSettings({
         ...catalog.registry.sources.map((s) => ({ ...s, inherited: false })),
       ]
     : [];
-  const loaded = (
-    path: string,
-    skills: LoadedSkill[] | null,
-    supported: boolean,
-    enabled: boolean,
-  ) => {
-    if (skills?.some((s) => (s.location ?? s.path) === path))
-      return enabled ? "Обнаружен агентом" : "Обнаружен; источник выключен";
-    if (!supported) return "Другой агент";
-    if (!enabled) return "Выключен источник; проверьте сессию";
-    return skills === null ? "Не проверено" : "Не подтверждено";
-  };
-  const skills = catalog ? [...catalog.skills] : [];
-  for (const found of openSkills ?? []) {
-    const path = found.location ?? found.path;
-    if (path && !skills.some((s) => s.path === path))
-      skills.push({
-        name: found.name,
-        description: "Обнаружен OpenCode API",
-        path,
-        source: "opencode",
-        managed: false,
-        enabled: true,
-        engines: ["opencode"],
-        error: null,
-      });
-  }
-  for (const found of piSkills ?? []) {
-    if (found.path && !skills.some((s) => s.path === found.path))
-      skills.push({
-        name: found.name.replace(/^skill:/, ""),
-        description: "Обнаружен в открытой сессии Pi",
-        path: found.path,
-        source: "pi",
-        managed: false,
-        enabled: true,
-        engines: ["pi"],
-        error: null,
-      });
-  }
+  const skills = catalog?.skills ?? [];
   const sourceFolder = async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
@@ -297,9 +222,8 @@ export function CapabilitiesSettings({
 
       {!local && (
         <p role="status">
-          Общий каталог настраивается на этом компьютере. Для SSH используйте
-          настройки подключённого OpenCode; локальный Pi к удалённому проекту не
-          подключается.
+          Общий каталог настраивается на этом компьютере. Среда выполнения на
+          SSH-хосте не получает навыки и MCP этого компьютера.
         </p>
       )}
       {!isNative() && (
@@ -478,22 +402,7 @@ export function CapabilitiesSettings({
                   ) : (
                     <div className="capability-statuses">
                       <span>
-                        OpenCode:{" "}
-                        {loaded(
-                          s.path,
-                          openSkills,
-                          s.engines.includes("opencode"),
-                          s.enabled,
-                        )}
-                      </span>
-                      <span>
-                        Pi:{" "}
-                        {loaded(
-                          s.path,
-                          piSkills,
-                          s.engines.includes("pi"),
-                          s.enabled,
-                        )}
+                        Агент: {skillAgentState(s)}
                       </span>
                     </div>
                   )}
@@ -537,16 +446,7 @@ export function CapabilitiesSettings({
                   </div>
                   <code>{s.kind === "http" ? s.url : s.command}</code>
                   <div className="capability-statuses">
-                    <span>
-                      OpenCode:{" "}
-                      {!s.enabled
-                        ? "Выключено"
-                        : mcp[serverName(s.id)]?.status === "connected"
-                          ? "Подключено"
-                          : (mcp[serverName(s.id)]?.status ??
-                            "Не подтверждено")}
-                    </span>
-                    <span>Pi: {piServerState(s, piStatuses, piRunning)}</span>
+                    <span>Агент: {runtimeServerState(s, store.mcpServerStatuses(app.activeSessionId), piRunning)}</span>
                   </div>
                   <div className="settings-actions">
                     <button
@@ -822,36 +722,10 @@ export function CapabilitiesSettings({
                 </button>
               </article>
               <article className="capability-skill">
-                <b>Инструменты OpenCode</b>
-
-                {openTools === null ? (
-                  <span>Не проверено</span>
-                ) : (
-                  <details>
-                    <summary>Обнаружено {openTools.length}</summary>
-                    <ul>
-                      {openTools.map((t) => (
-                        <li key={t}>
-                          <code>{t}</code>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-                <div className="settings-actions">
-                  <button className="btn" onClick={() => onNavigate?.("mcp")}>
-                    MCP OpenCode
-                  </button>
-                  <button className="btn" onClick={() => onNavigate?.("tools")}>
-                    Разрешения OpenCode
-                  </button>
-                </div>
-              </article>
-              <article className="capability-skill">
-                <b>Инструменты Pi</b>
+                <b>Инструменты агента</b>
 
                 <button className="btn" onClick={() => onNavigate?.("pi")}>
-                  Настроить Pi
+                  Настроить агента
                 </button>
               </article>
             </div>
@@ -862,35 +736,14 @@ export function CapabilitiesSettings({
               disabled={!editable}
               onClick={() =>
                 void act(async () => {
+                  // A check only re-reads state; it is not a commit, so no worker refresh.
                   invalidateCapabilities();
                   if (app.directory) await store.configureSharedTools();
-                  else await synchronizeSources(catalog, scope, directory);
                   await refresh();
                 })
               }
             >
-              Повторно подключить OpenCode
-            </button>
-            <button
-              className="btn"
-              disabled={
-                !editable ||
-                !app.activeSessionId ||
-                store.engineIdFor() !== "pi"
-              }
-              onClick={() =>
-                void act(async () => {
-                  await store.pi().closeSession(app.activeSessionId!);
-                  setPiStatuses([]);
-                  setPiSkills(null);
-                  setPiRunning(false);
-                  setNotice(
-                    "Процесс текущей сессии Pi закрыт. История сохранена; следующее сообщение запустит Pi с новым набором.",
-                  );
-                })
-              }
-            >
-              Переоткрыть текущую Pi
+              Проверить подключения
             </button>
           </div>
         </>

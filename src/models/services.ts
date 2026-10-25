@@ -1,7 +1,35 @@
 import { systemCredentials, type CredentialStore } from "./credentials";
-import { ApiError, ConnectionError, isAllowedBaseUrl, OpenCodeClient } from "../api/client";
+import { ApiError, ConnectionError, isAllowedBaseUrl } from "../api/http";
 import { publicSources, resolveService, type ModelSource } from "./routing";
 import type { HubModelServices } from "./hub";
+
+/** Minimal loopback JSON client for a model-control service (SSH-forwarded). */
+class ServiceClient {
+  headers: Record<string, string> = {};
+  constructor(private readonly origin: string, private readonly timeoutMs: number) {}
+  async request<T>(method: "GET" | "POST", path: string, opts: { body?: unknown } = {}): Promise<T> {
+    if (!isAllowedBaseUrl(`${this.origin}/`)) throw new ConnectionError("Сервис модели должен быть loopback-адресом.");
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(`${this.origin}${path}`, {
+        method, signal: ctrl.signal, cache: "no-store",
+        headers: { ...this.headers, ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}) },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        let detail = text.slice(0, 400);
+        try { const parsed = JSON.parse(text) as { message?: unknown }; if (typeof parsed.message === "string") detail = parsed.message.slice(0, 400); } catch { /* plain */ }
+        throw new ApiError(res.status, detail);
+      }
+      return await res.json() as T;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ConnectionError("Нет соединения с сервисом модели.");
+    } finally { clearTimeout(timer); }
+  }
+}
 
 /** Persisted routing contains no credential and no model-name heuristics. */
 export interface ModelService {
@@ -125,7 +153,6 @@ export class ModelServices {
     this.hub = hub;
     return hub.subscribe(() => this.emit());
   }
-  observeActivity() { this.hub?.observeActivity(); }
   hubRoutes() { return this.hub?.configuredRoutes() ?? []; }
   async refreshHub() { await this.hub?.refresh(); }
   private catalogs = new Map<string, ServiceModel[]>();
@@ -248,7 +275,7 @@ export class ModelServices {
     this.emit();
   }
   private client(service: ModelService) {
-    const client = new OpenCodeClient(service.endpoint, 5000);
+    const client = new ServiceClient(service.endpoint, 5000);
     const key = this.keys.get(service.endpoint);
     if (key) client.headers = { Authorization: `Bearer ${key}` };
     return client;
@@ -265,6 +292,10 @@ export class ModelServices {
     if (this.hub?.route(providerID, modelID)) return this.hub.status(providerID, modelID, context, agent)?.error;
     const service = this.route(providerID, modelID);
     return service ? this.value.errors[service.id] : undefined;
+  }
+  /** Hub-coordinated model: the runtime must hold a whole-turn Hub lease to run it. */
+  hubManaged(providerID: string, modelID: string): boolean {
+    return !!this.hub?.route(providerID, modelID);
   }
   manages(providerID: string, modelID: string): boolean {
     if (this.hub?.route(providerID, modelID)) return true;
@@ -372,20 +403,23 @@ export class ModelServices {
       throw failure;
     }
   }
-  async ensure(
-    providerID: string,
-    modelID: string,
-    agent: string,
-    options?: {owner?: string; signal?: AbortSignal; context?: string},
-  ): Promise<void> {
+  /**
+   * Local (non-Hub) model service only, right before an actual send to it.
+   * Hub-coordinated models are never leased here: the Enki Runtime discovers
+   * Hub routes and holds the whole-turn lease itself (no UI execution lease).
+   */
+  /** Readiness of a local model service; a Hub-routed model is the runtime's (no UI lease). */
+  ensure(providerID: string, modelID: string, agent: string, options?: {signal?: AbortSignal}): Promise<void> {
+    return this.ensureLocal(providerID, modelID, agent, options);
+  }
+  async ensureLocal(providerID: string, modelID: string, agent: string, options?: {signal?: AbortSignal}): Promise<void> {
     await this.hubInitialization;
     options?.signal?.throwIfAborted();
-    if (this.hub) {
-      await this.hub.refresh().catch(error => {
-        if (this.hub?.route(providerID, modelID) || this.hub?.configured() && this.route(providerID, modelID, agent)) throw error;
-      });
-      if (this.hub.route(providerID, modelID)) return this.hub.ensure(providerID, modelID, agent, options?.owner, options?.signal, options?.context ?? options?.owner);
-    }
+    if (this.hub?.route(providerID, modelID)) return;
+    return this.ensureService(providerID, modelID, agent);
+  }
+
+  private async ensureService(providerID: string, modelID: string, agent: string): Promise<void> {
     const resolved = resolveService(this.services, this.sources, providerID, modelID, agent);
     if (resolved.error) throw new Error(resolved.error);
     const service = resolved.service;
@@ -406,7 +440,7 @@ export class ModelServices {
       // issuing a competing select. A failed first switch does not authorize us.
       await flight.promise.catch(() => {});
       if (gen !== this.generation) throw new Error("Настройки сервиса изменились; отправка отменена.");
-      return this.ensure(providerID, modelID, agent);
+      return this.ensureService(providerID, modelID, agent);
     }
     const promise = this.prepare(service, modelID, target, agent, gen);
     this.flights.set(service.endpoint, { model: target, promise });
@@ -416,11 +450,6 @@ export class ModelServices {
       if (this.flights.get(service.endpoint)?.promise === promise)
         this.flights.delete(service.endpoint);
     }
-  }
-  /** Reserve the ready model for the whole native agent turn, not just its first
-   * HTTP response. Called at the last dispatch boundary after file preparation. */
-  async reserve(providerID: string, modelID: string, agent: string, owner: string, signal?: AbortSignal) {
-    if (this.hub?.route(providerID, modelID)) await this.hub.ensure(providerID, modelID, agent, owner, signal);
   }
   private publish(service: ModelService, state: SwitchStatus) {
     this.emit({ states: { ...this.value.states, ...Object.fromEntries(this.services

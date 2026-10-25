@@ -33,13 +33,16 @@ fn get(url: &str) -> Result<String, String> {
     if !status.is_success() {
         return Err(format!("Ответ сервера цен: HTTP {}", status.as_u16()));
     }
-    let body = response
-        .text()
+    // Read at most one byte past the limit: an oversized answer is refused
+    // without first being buffered whole.
+    const LIMIT: u64 = 4 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(response, LIMIT + 1), &mut bytes)
         .map_err(|_| "Тело ответа цен не читается".to_string())?;
-    if body.len() > 4 * 1024 * 1024 {
+    if bytes.len() as u64 > LIMIT {
         return Err("Ответ сервера цен слишком большой".into());
     }
-    Ok(body)
+    String::from_utf8(bytes).map_err(|_| "Тело ответа цен не читается".to_string())
 }
 
 /// USD prices per 1M tokens, verified against the official docs page on

@@ -47,14 +47,6 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../resources/shared/package-lock.json"),
     ),
     (
-        "execution-feedback.mjs",
-        include_str!("../resources/browser/execution-feedback.mjs"),
-    ),
-    (
-        "access-policy.mjs",
-        include_str!("../resources/browser/access-policy.mjs"),
-    ),
-    (
         "registry.mjs",
         include_str!("../resources/shared/registry.mjs"),
     ),
@@ -91,10 +83,6 @@ const FILES: &[(&str, &str)] = &[
     (
         "project-map.mjs",
         include_str!("../resources/shared/project-map.mjs"),
-    ),
-    (
-        "pi-extension.ts",
-        include_str!("../resources/shared/pi-extension.ts"),
     ),
 ];
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -155,8 +143,6 @@ pub struct Document {
     pub skills: Vec<Skill>,
     pub runtime_ready: bool,
     pub command: String,
-    #[serde(flatten)]
-    pub plugins: crate::agent_plugins::Catalog,
     pub scope_directory: Option<String>,
     pub source_health: BTreeMap<String, bool>,
     pub scan_limited: bool,
@@ -190,9 +176,9 @@ fn valid_key(value: &str) -> bool {
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()))
 }
 pub fn root() -> Result<PathBuf, String> {
-    // Match the browser's existing Windows profile-root policy: MSIX OpenCode
-    // and the normal Desktop must see the same registry/runtime, outside
-    // LOCALAPPDATA virtualization. The Mac/Linux data path is unchanged.
+    // Match the browser's existing Windows profile-root policy: the registry
+    // stays outside LOCALAPPDATA virtualization, so packaged and unpackaged
+    // builds see the same data. The Mac/Linux data path is unchanged.
     #[cfg(windows)]
     return Ok(crate::browser::root_dir()?
         .parent()
@@ -410,29 +396,30 @@ fn document(scope: &str, directory: Option<&str>) -> Result<Document, String> {
                 source: &source.id,
                 managed: true,
                 enabled: source.enabled,
-                engines: &["opencode", "pi"],
+                engines: &["pi"],
             },
             &mut skills,
             &mut budget,
             0,
         );
     }
-    let home = crate::paths::user_home()?;
-    for (p, engines) in [
-        (home.join(".agents/skills"), vec!["opencode", "pi"]),
-        (home.join(".pi/agent/skills"), vec!["pi"]),
-        (
-            crate::paths::opencode_config_dir()?.join("skills"),
-            vec!["opencode"],
-        ),
-    ] {
+    // Informational only: the runtime loads just the explicit `skillPaths` of
+    // enabled registry sources (`runtime_scope`; no ambient SDK discovery), and
+    // the UI marks these unmanaged finds "not loaded" so the owner can add the
+    // directory as a source. An explicit profile never inspects the owner's
+    // `~/.agents` or `~/.pi/agent` (see `paths::discovery_home`).
+    let home = crate::paths::discovery_home()?;
+    for p in home
+        .iter()
+        .flat_map(|home| [home.join(".agents/skills"), home.join(".pi/agent/skills")])
+    {
         scan(
             &p,
             &SkillSource {
                 source: "automatic",
                 managed: false,
                 enabled: true,
-                engines: &engines,
+                engines: &["pi"],
             },
             &mut skills,
             &mut budget,
@@ -440,18 +427,15 @@ fn document(scope: &str, directory: Option<&str>) -> Result<Document, String> {
         );
     }
     if let Some(dir) = directory {
-        for (suffix, engines) in [
-            (".agents/skills", vec!["opencode", "pi"]),
-            (".pi/skills", vec!["pi"]),
-            (".opencode/skills", vec!["opencode"]),
-        ] {
+        // Project-local resources load only for trusted projects.
+        for suffix in [".agents/skills", ".pi/skills"] {
             scan(
                 &Path::new(dir).join(suffix),
                 &SkillSource {
                     source: "automatic",
                     managed: false,
                     enabled: true,
-                    engines: &engines,
+                    engines: &["pi"],
                 },
                 &mut skills,
                 &mut budget,
@@ -472,7 +456,6 @@ fn document(scope: &str, directory: Option<&str>) -> Result<Document, String> {
             .map_err(|_| "Путь приложения недоступен")?
             .display()
             .to_string(),
-        plugins: crate::agent_plugins::ensure()?,
         scope_directory,
         source_health: effective
             .sources
@@ -487,53 +470,6 @@ fn document(scope: &str, directory: Option<&str>) -> Result<Document, String> {
         scan_limited: budget == 0,
     })
 }
-fn ensure_access_policy(root: &Path) -> Result<(), String> {
-    private(root)?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(root.join("install.lock"))
-        .map_err(|_| "Блокировка недоступна")?;
-    lock.try_lock_exclusive()
-        .map_err(|_| "Обновление инструментов уже выполняется")?;
-    for (name, content) in [
-        (
-            "execution-feedback.mjs",
-            include_str!("../resources/browser/execution-feedback.mjs"),
-        ),
-        (
-            "access-policy.mjs",
-            include_str!("../resources/browser/access-policy.mjs"),
-        ),
-    ] {
-        let target = root.join(name);
-        if let Ok(meta) = fs::symlink_metadata(&target) {
-            if !meta.is_file() || meta.file_type().is_symlink() {
-                return Err("Политика доступа повреждена".into());
-            }
-        }
-        if fs::read_to_string(&target).ok().as_deref() != Some(content) {
-            let temp = root.join(format!(
-                "{name}-{}.tmp",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|_| "Часы недоступны")?
-                    .as_nanos()
-            ));
-            use std::io::Write;
-            fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temp)
-                .and_then(|mut file| file.write_all(content.as_bytes()))
-                .map_err(|_| "Политика доступа не сохранена")?;
-            fs::rename(&temp, &target).map_err(|_| "Политика доступа не обновлена")?;
-        }
-    }
-    Ok(())
-}
 #[tauri::command]
 pub async fn shared_catalog(
     state: tauri::State<'_, SharedRuntime>,
@@ -544,7 +480,7 @@ pub async fn shared_catalog(
     main_window(&window)?;
     let runtime = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_access_policy(&root()?)?;
+        private(&root()?)?;
         let path = root()?.join("runtime");
         // Refresh only an already installed pinned runtime. First installation remains explicit.
         let sdk =
@@ -760,7 +696,12 @@ fn run_install(command: &mut Command, cancel: &AtomicBool) -> Result<(), String>
         std::thread::sleep(Duration::from_millis(40));
     }
 }
-pub fn pi_support(directory: &Path) -> Result<(String, Vec<String>, Option<PathBuf>), String> {
+/// Answer to the runtime's `capabilities.prepare` broker request for one
+/// project: registry key/root, enabled skill roots, shared MCP readiness, the
+/// Enki executable that serves `--shared-mcp`/`--browser-mcp`, the managed
+/// browser and the LSP server list. Shape: `CapabilitiesScope` in
+/// resources/agent/src/control/broker.ts. Nothing here starts a process.
+pub fn runtime_scope(directory: &Path) -> Result<Value, String> {
     let (key, _) = key_for("project", directory.to_str())?;
     let root = root()?;
     authoring::ensure(&root)?;
@@ -768,31 +709,42 @@ pub fn pi_support(directory: &Path) -> Result<(String, Vec<String>, Option<PathB
     schedules::ensure(&root)?;
     image_generation::ensure(&root)?;
     let registry = effective(&root, &key)?;
-    let skills = registry
+    let skills: Vec<String> = registry
         .sources
-        .into_iter()
-        .filter(|s| s.enabled && Path::new(&s.path).is_dir())
-        .map(|s| s.path)
+        .iter()
+        .filter(|s| s.enabled && Path::new(&s.path).is_dir() && !Path::new(&s.path).is_symlink())
+        .map(|s| s.path.clone())
         .collect();
-    let extension = if registry.servers.iter().any(|s| s.enabled) {
-        if !runtime_ready() {
-            return Err("Установите общие MCP-инструменты в настройках Enki".into());
-        }
-        Some(root.join("runtime/pi-extension.ts"))
-    } else {
-        None
-    };
-    Ok((key, skills, extension))
+    let servers = registry.servers.iter().any(|s| s.enabled);
+    let ready = runtime_ready();
+    let browser_skills = crate::browser::installed_skills();
+    let lsp = crate::lsp::config_path().ok().filter(|p| p.is_file());
+    Ok(serde_json::json!({
+        "key": key,
+        "root": root,
+        "skillPaths": skills,
+        "mcp": servers && ready,
+        "mcpUnavailable": (servers && !ready)
+            .then_some("Включены MCP-подключения, но общие MCP-инструменты не установлены. Установите их в настройках Enki."),
+        "executable": std::env::current_exe().map_err(|_| "Путь Enki недоступен")?,
+        "browser": browser_skills.is_some(),
+        "browserSkillPath": browser_skills,
+        // Explicitly enabled computer use on this execution host (null otherwise).
+        "computerSkillPath": crate::computer::enabled_skill_path(),
+        "lspConfig": lsp,
+    }))
 }
-fn credential(key: &str, id: &str) -> Result<keyring::Entry, String> {
+/// Shared MCP credential account `{scopeKey}/{serverId}`, as shipped.
+pub(crate) fn credential_account(key: &str, id: &str) -> Result<String, String> {
     if !valid_key(key) || !self::id(id) {
         return Err("Некорректное подключение".into());
     }
-    keyring::Entry::new(
-        "dev.local.opencodedesktop.shared-mcp",
-        &format!("{key}/{id}"),
-    )
-    .map_err(|_| "Связка ключей недоступна".into())
+    Ok(format!("{key}/{id}"))
+}
+pub(crate) fn credential(key: &str, id: &str) -> Result<keyring::Entry, String> {
+    let account = credential_account(key, id)?;
+    keyring::Entry::new(&crate::paths::SHARED_MCP_SECRETS.service()?, &account)
+        .map_err(|_| "Связка ключей недоступна".into())
 }
 #[tauri::command]
 pub async fn shared_mcp_key(
@@ -944,38 +896,13 @@ pub fn mcp_main() -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
-    fn access_policy_installs_its_feedback_dependency_without_shared_runtime() {
-        let root = std::env::temp_dir().join(format!(
-            "enki-policy-feedback-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        ensure_access_policy(&root).unwrap();
-        ensure_access_policy(&root).unwrap();
-        assert_eq!(
-            fs::read_to_string(root.join("execution-feedback.mjs")).unwrap(),
-            include_str!("../resources/browser/execution-feedback.mjs")
-        );
-        assert_eq!(
-            fs::read_to_string(root.join("access-policy.mjs")).unwrap(),
-            include_str!("../resources/browser/access-policy.mjs")
-        );
-        #[cfg(unix)]
-        {
-            let helper = root.join("execution-feedback.mjs");
-            fs::remove_file(&helper).unwrap();
-            fs::write(root.join("foreign.mjs"), "foreign").unwrap();
-            std::os::unix::fs::symlink(root.join("foreign.mjs"), helper).unwrap();
-            assert!(ensure_access_policy(&root).is_err());
-            assert_eq!(
-                fs::read_to_string(root.join("foreign.mjs")).unwrap(),
-                "foreign"
-            );
+    fn shared_runtime_ships_no_agent_engine_plugins() {
+        // Agent-side gates and bridges are bundled into the Enki Runtime; the
+        // shared MCP runtime only carries the registry and proxy scripts.
+        for (name, _) in FILES {
+            assert!(!name.ends_with(".ts"), "{name}");
+            assert_ne!(*name, "access-policy.mjs");
         }
-        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn validates_scope_and_no_shell_or_secret_url() {
@@ -1025,7 +952,7 @@ mod tests {
                 source: "demo",
                 managed: true,
                 enabled: true,
-                engines: &["opencode", "pi"],
+                engines: &["pi"],
             },
             &mut out,
             &mut 20,
@@ -1044,7 +971,7 @@ mod tests {
                 source: "demo",
                 managed: true,
                 enabled: true,
-                engines: &["opencode", "pi"],
+                engines: &["pi"],
             },
             &mut again,
             &mut 20,

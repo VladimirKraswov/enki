@@ -5,6 +5,9 @@ import { taskScheduler } from "../schedules/tasks";
 import { attachmentScope } from "../attachments/drafts";
 import { focusComposer, requestComposerFiles } from "../attachments/composerBridge";
 import type { Session, SessionStatus } from "../api/types";
+import { sessionOf } from "../agent/runtime/backend";
+import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
+import type { EngineId } from "../state/engines";
 import { ScheduleSection } from "./ScheduleSection";
 import { TaskDiagnostics } from "./TaskDiagnostics";
 import { OutcomeSection } from "./OutcomeSection";
@@ -27,7 +30,10 @@ export function ContextPanel() {
   return <ContextContents key={JSON.stringify([server, s.prefs.endpoint, directory, sid, engine])} server={server} sid={sid} directory={directory} engine={engine} />;
 }
 
-function ContextContents({ server, sid, directory, engine }: { server: string; sid: string | null; directory: string | null; engine: string }) {
+// Result cards persist the historical agent tag (OutcomeScope "pi" | "opencode");
+// every chat runs on the one runtime, whose persisted tag is RUNTIME_AGENT_ID.
+// `engine` only keys the remount above.
+function ContextContents({ server, sid, directory }: { server: string; sid: string | null; directory: string | null; engine: EngineId }) {
   const s = useAppState(), panel = useRef<HTMLElement>(null);
   const scheduler = taskScheduler();
   const chat = sid ? s.chat.sessions[sid] : undefined;
@@ -78,7 +84,7 @@ function ContextContents({ server, sid, directory, engine }: { server: string; s
     </div>
     {!sid && <p className="context-note">Откройте чат.</p>}
     {sid && <TaskDiagnostics chat={chat}/>}
-    {sid && (engine === "opencode" || engine === "pi") && <OutcomeSection scope={{server,directory:directory??"",sessionID:sid,engine}} requests={(chat?.messageOrder??[]).filter(id=>chat?.messages[id]?.role==="user").map(id=>({id,label:safeLabel((chat?.partsByMessage[id]??[]).map(p=>chat?.parts[p]).filter(p=>p?.type==="text"&&!p.synthetic).map(p=>p?.text??"").join(" "),100)}))} onOpen={jump} onPropose={card=>setProposed({...card})}/>}
+    {sid && <OutcomeSection scope={{server,directory:directory??"",sessionID:sid,engine:RUNTIME_AGENT_ID}} requests={(chat?.messageOrder??[]).filter(id=>chat?.messages[id]?.role==="user").map(id=>({id,label:safeLabel((chat?.partsByMessage[id]??[]).map(p=>chat?.parts[p]).filter(p=>p?.type==="text"&&!p.synthetic).map(p=>p?.text??"").join(" "),100)}))} onOpen={jump} onPropose={card=>setProposed({...card})}/>}
     <MemorySection server={server} directory={directory} proposed={proposed}/>
     <ProjectMapSection server={server} directory={directory}/>
     {sid && <section aria-labelledby="context-skill-title">
@@ -90,7 +96,7 @@ function ContextContents({ server, sid, directory, engine }: { server: string; s
     <FileSection id="results" title="Результаты" files={context.results} empty="Результатов пока нет."
       action={{ label: "Подготовить запрос на создание результата", disabled: !sid, run: draftResult }}
       icon="file" describe={resultOrigin} onOpen={jump} />
-    <ChildrenSection opencode={engine === "opencode"} sid={sid} directory={directory} connected={s.connection.phase === "connected"} runs={runs} />
+    <ChildrenSection sid={sid} directory={directory} connected={s.connection.phase === "connected"} runs={runs} />
     <FileSection id="sources" title="Источники" files={context.sources} empty="Источников пока нет."
       action={{ label: "Добавить источник в черновик", disabled: !sid || !!s.ui.sending, run: addSource }}
       icon="folder" describe={f => f.mime ? `Вложение · ${safeLabel(f.mime, 60)}` : "Вложение"} onOpen={jump} />
@@ -141,21 +147,24 @@ const runLabel: Record<SubagentRun["status"], string> = {
   pending: "запускается", running: "выполняется", completed: "вернул ответ", error: "вызов завершился ошибкой",
 };
 
-/** Real OpenCode children. Only children a `task` call reported are called subagents; the rest may be forks. */
-function ChildrenSection({ opencode, sid, directory, connected, runs }: {
-  opencode: boolean; sid: string | null; directory: string | null; connected: boolean; runs: Map<string, SubagentRun>;
+/**
+ * Child sessions the runtime lists (GET /sessions/:id/children). Only children a
+ * `task` call reported are called subagents; the rest may be forks.
+ */
+function ChildrenSection({ sid, directory, connected, runs }: {
+  sid: string | null; directory: string | null; connected: boolean; runs: Map<string, SubagentRun>;
 }) {
-  const { children, statuses, error, loading } = useChildSessions(opencode && connected ? sid : null, directory);
+  const { children, statuses, error, loading } = useChildSessions(connected ? sid : null, directory);
   const [all, setAll] = useState(false);
   const list = children ?? [];
   const shown = all ? list : list.slice(0, PREVIEW);
   return <section aria-labelledby="context-children-title" aria-busy={loading || undefined}>
     <div className="context-section-title">
-      <h3 id="context-children-title">Субагенты и ветки{opencode && ` · ${children ? children.length : "…"}`}</h3>
+      <h3 id="context-children-title">Субагенты и ветки{sid && ` · ${children ? children.length : "…"}`}</h3>
       {loading && <span className="tool-spinner" role="status" aria-label="Загрузка"/>}
     </div>
-    {!opencode ? <p className="context-note">Pi не предоставляет список дочерних сессий.</p>
-      : !connected && !children ? <p className="context-note">Список появится после подключения к OpenCode.</p>
+    {!sid ? null
+      : !connected && !children ? <p className="context-note">Список появится после подключения к среде выполнения.</p>
       : error ? <p className="context-error" role="alert">{error}</p>
       : children && !children.length && <p className="context-note">Дочерних сессий пока нет</p>}
     {list.length > 0 && <ul className="context-list" id="context-children-list">{shown.map(child => {
@@ -179,10 +188,10 @@ function useChildSessions(sid: string | null, directory: string | null) {
   const [children, setChildren] = useState<Session[] | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
-  const client = store.client;
+  const backend = store.maybeBackend();
   useEffect(() => {
     setChildren(null); setStatuses({}); setError("");
-    if (!sid || !directory) return;
+    if (!sid || !directory || !backend) return;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const next = () => { if (!abort.signal.aborted) timer = setTimeout(() => void read(false), CHILD_POLL_MS); };
@@ -191,7 +200,10 @@ function useChildSessions(sid: string | null, directory: string | null) {
       if (!initial && document.hidden) { next(); return; }
       setLoading(true);
       try {
-        const [list, status] = await Promise.all([client.sessionChildren(sid, directory, abort.signal), client.sessionStatuses(directory, abort.signal)]);
+        const [list, status] = await Promise.all([
+          backend.client.children(sid, directory, abort.signal).then(items => items.map(sessionOf)),
+          backend.sessionStatuses(directory, abort.signal),
+        ]);
         if (abort.signal.aborted) return;
         setChildren(list.filter(c => c.parentID === sid && c.directory === directory && !c.time?.archived));
         setStatuses(status); setError("");
@@ -203,6 +215,6 @@ function useChildSessions(sid: string | null, directory: string | null) {
     };
     void read(true);
     return () => { abort.abort(); clearTimeout(timer); };
-  }, [sid, directory, client]);
+  }, [sid, directory, backend]);
   return { children, statuses, error, loading };
 }

@@ -5,8 +5,8 @@ import {store,useAppState} from '../state/store';
 import {makeBackup,restoreBackup,type BackupData} from '../operations/backups';
 import {maintenance} from '../operations/maintenance';
 import {agentsRunning,updates,useUpdates} from '../updates/runtime';
+import {BUILD_STAGE_TEXT as stages} from '../updates/controller';
 import {version} from '../../package.json';
-const stages:Record<string,string>={preparing:'Проверка инфраструктуры и исходников',dependencies:'Установка зависимостей сборки',compiling:'Сборка приложения',ready:'Приложение собрано',error:'Сборка остановлена'};
 export function UpdateSettings(){
   useAppState();const u=useUpdates(),running=agentsRunning(),compiling=updates.compiling();
   const [busy,setBusy]=useState(''),[notice,setNotice]=useState('');

@@ -31,7 +31,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 24
+          # Exact pinned runtime interpreter (audited by `npm run sdk:check`).
+          node-version: 24.22.1
           cache: npm
       - name: Linux native dependencies
         if: matrix.platform == 'linux'
@@ -52,6 +53,16 @@ jobs:
           key: desktop-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: desktop-${{ runner.os }}-${{ runner.arch }}-
       - run: npm ci
+      - name: SDK/Node contract synchronized (fails on any single pin/hash drift)
+        run: npm run sdk:check
+      - name: Enki Runtime (Pi SDK) dependencies from the reviewed lockfile
+        run: npm ci --prefix src-tauri/resources/agent --ignore-scripts
+      - name: Enki Runtime native PTY module
+        run: npm rebuild --prefix src-tauri/resources/agent node-pty
+      - run: npm --prefix src-tauri/resources/agent run typecheck
+      - name: Enki Runtime Vitest + every guarded real-SDK/legacy *.node.ts suite (pinned Node)
+        run: npm run test:runtime
+      - run: npm run test:runtime-artifact
       - run: npm run test:releases
       - run: npm run check:architecture
       - run: npm test -- --maxWorkers=2
@@ -60,17 +71,63 @@ jobs:
       - run: node --test src-tauri/resources/browser/test/evaluate-result.test.mjs
       - run: npm run eval:check
       - run: python -m unittest discover -s services/hub/tests
+      # Same ASR gate as release:local (stdlib only; inference engine and ffmpeg are fixtures).
+      - run: python -m unittest discover -s services/asr/tests
       - run: python -m unittest discover -s services/strata -p 'test_*.py'
       - run: python -m unittest discover -s services/v100 -p 'test_*.py'
+      # Bundled skill scripts and the tunnel supervisor run on every platform;
+      # stdlib only, own temp files and loopback fixtures, no external network.
+      # bash (-e): every script's exit status counts, not only the last one.
+      - name: Script helper regressions
+        shell: bash
+        run: |
+          python scripts/test-shared-skills.py
+          python scripts/test-skill-catalog.py
+          python scripts/test-download-transfer.py
+          python scripts/test-model-tunnel-supervisor.py
+      - name: Windows installation selection (pure fixtures, no registry)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: ./scripts/test-windows-install-selection.ps1
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      # Standalone bootstrap runner (same audited process.rs/build_job.rs):
+      # fmt/clippy/tests incl. the Windows Job, suspended-resume, descendant,
+      # unread-stderr pipe and NTFS directory-flush cases on the windows job.
+      - run: cargo fmt --manifest-path src-tauri/build-runner/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path src-tauri/build-runner/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/build-runner/Cargo.toml
+      # The SAME bootstrap runtime:prepare performs (no installed Enki needed);
+      # its receipt binds the live protocol tests to the exact compiled bytes.
+      - name: Bootstrap trusted native build runner from this checkout
+        shell: bash
+        run: |
+          node scripts/runtime/build-runner.mjs --out "$RUNNER_TEMP/enki-build-runner" > "$RUNNER_TEMP/build-runner.json"
+          node -e "const r=require(process.argv[1]);require('fs').appendFileSync(process.env.GITHUB_ENV,'ENKI_TEST_NATIVE_RUNNER='+r.path+'\nENKI_TEST_NATIVE_RUNNER_SHA256='+r.sha256+'\n')" "$RUNNER_TEMP/build-runner.json"
+      - name: Native runner live protocol checks
+        run: node --test scripts/runtime/native-port.test.mjs scripts/runtime/artifact.test.mjs scripts/runtime/prepare.test.mjs
       - name: Verify isolated Debian rename
         if: matrix.platform == 'linux'
         run: python3 scripts/test-package-migration.py
       - name: Build platform package
+        if: matrix.platform != 'windows'
         run: npm run build:${{ matrix.platform }}
+      # Windows builds through the exact public command an OLD 0.2 installed
+      # builder runs for the first source update (no runtime:prepare stage, no
+      # runtime config): the source-owned `npm run tauri` entry must prepare,
+      # verify and bundle the agent runtime itself. bash keeps both `--` intact.
+      - name: Build Windows package through the old first-update entry
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: npm run tauri -- build --bundles nsis --ci -- --locked
+      - name: Old-entry build carries the exact verified prepared runtime
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: >-
+          node -e "const p=require('node:path');import(require('node:url').pathToFileURL(p.resolve('scripts/runtime/artifact.mjs')).href).then(a=>{const m=a.sha256File(p.resolve(process.argv[1],'runtime-manifest.json'));const e=a.verifyArtifact(p.resolve(process.argv[2]),{manifestSha256:m});if(e.length){console.error(e.slice(0,20).join('\n'));process.exit(1)}console.log('target agent-runtime resource equals the verified prepared runtime')})"
+          src-tauri/target/enki-agent/current src-tauri/target/release/agent-runtime
       - run: npm run check:bundle
       - name: Verify signed Mac permissions
         if: matrix.platform == 'macos'

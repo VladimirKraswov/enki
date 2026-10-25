@@ -1,237 +1,135 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
+import type { Terminal } from "@xterm/xterm";
+import { SseDecoder } from "../api/sse";
+import type { PtyClosingDTO, PtyDTO, RuntimeClient } from "../agent/runtime/client";
 import { store, useAppState, errText } from "../state/store";
-import type { OpenCodeClient } from "../api/client";
-import type { PtyInfo } from "../api/types";
+import { createXterm, terminalTheme } from "./xtermHost";
 
-type Status = "idle" | "connecting" | "open" | "closed" | "error";
-
-// Development-only observability for the WS/PTY wire protocol (stripped from prod builds).
-interface TermDebug {
-  framesIn: number;
-  bytesIn: number;
-  textFrames: number;
-  headerFrames: number;
-  cursor: number;
-  bytesSent: number;
-  wsState: string;
-  ptyId: string;
-  errors: string[];
-  term?: Terminal;
-}
-const termDebug: TermDebug | null = import.meta.env.DEV
-  ? {
-      framesIn: 0,
-      bytesIn: 0,
-      textFrames: 0,
-      headerFrames: 0,
-      cursor: -1,
-      bytesSent: 0,
-      wsState: "",
-      ptyId: "",
-      errors: [],
-    }
-  : null;
-if (import.meta.env.DEV)
-  (window as unknown as Record<string, unknown>).__ocTermDebug = termDebug;
+type Status = "idle" | "connecting" | "open" | "closed" | "exited" | "error";
 
 /** macOS resolves /tmp and similar symlinks; compare real paths. */
 function samePath(a: string | undefined, b: string): boolean {
   if (!a) return false;
-  const norm = (p: string) =>
-    p.replace(/^\/private(?=\/)/, "").replace(/\/+$/, "");
+  const norm = (p: string) => p.replace(/^\/private(?=\/)/, "").replace(/\/+$/, "");
   return norm(a) === norm(b);
 }
 
-/** Reads current theme colors so the terminal matches light/dark UI. */
-function terminalTheme() {
-  const cs = getComputedStyle(document.documentElement);
-  const bg = cs.getPropertyValue("--panel").trim() || "#1e1e1e";
-  const fg = cs.getPropertyValue("--text").trim() || "#d4d4d4";
-  return { background: bg, foreground: fg, cursorCellBackground: fg };
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
+/**
+ * A shell owned by the Enki Runtime (`/pty`), streamed over authenticated SSE
+ * with a resumable character cursor. Detaching (tab switch, reload) keeps the
+ * shell running; only "Завершить" kills it. A running shell blocks updates
+ * until it is closed — quiet output is never treated as idle.
+ */
 export function TerminalPanel() {
   const s = useAppState();
-  const client: OpenCodeClient = store.client;
   const dir = s.directory;
+  const client: RuntimeClient | null = s.connection.phase === "connected" ? store.client : null;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const ptyRef = useRef<PtyInfo | null>(null);
+  const refitRef = useRef<() => boolean>(() => false);
+  const ptyRef = useRef<PtyDTO | null>(null);
+  const streamRef = useRef<AbortController | null>(null);
+  const cursorRef = useRef(0);
+  const inputRef = useRef<Promise<void>>(Promise.resolve());
   const genRef = useRef(0);
   const resizeTimer = useRef<number | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [title, setTitle] = useState<string>("Terminal");
+  const [title, setTitle] = useState("Терминал");
+
+  const detach = () => { streamRef.current?.abort(); streamRef.current = null; };
 
   const pushSize = () => {
-    const term = termRef.current;
-    const pty = ptyRef.current;
-    if (!term || !pty || !dir) return;
+    const term = termRef.current, pty = ptyRef.current;
+    if (!term || !pty || !dir || !client) return;
     if (resizeTimer.current) window.clearTimeout(resizeTimer.current);
     resizeTimer.current = window.setTimeout(() => {
-      void client
-        .ptyUpdate(pty.id, dir, { size: { rows: term.rows, cols: term.cols } })
-        .catch(() => undefined);
+      void client.ptyUpdate(pty.id, dir, { size: { rows: term.rows, cols: term.cols } }).catch(() => undefined);
     }, 150);
   };
 
-  const detachSocket = () => {
-    const ws = wsRef.current;
-    wsRef.current = null;
-    if (resizeTimer.current) {
-      window.clearTimeout(resizeTimer.current);
-      resizeTimer.current = null;
-    }
-    if (ws) {
-      ws.onclose = null;
-      ws.onopen = null;
-      ws.onerror = null;
-      ws.onmessage = null;
-      if (ws.readyState < 2) ws.close();
-    }
-  };
-
-  const attach = async (pty: PtyInfo, gen: number) => {
-    ptyRef.current = pty;
-    setTitle(pty.title || "Terminal");
-    const term = termRef.current;
-    if (!term || !dir) return;
+  const follow = async (pty: PtyDTO, gen: number) => {
+    if (!client || !dir) return;
+    detach();
+    const abort = new AbortController();
+    streamRef.current = abort;
     setStatus("connecting");
-    setError(null);
-    const { token } = await client.ptyConnectToken(pty.id, dir);
-    if (gen !== genRef.current) return;
-    let opened = false;
-    const ws = new WebSocket(
-      client.ptySocketUrl(pty.id, dir, token || undefined),
-    );
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
-    if (termDebug) {
-      termDebug.framesIn = 0;
-      termDebug.bytesIn = 0;
-      termDebug.headerFrames = 0;
-      termDebug.textFrames = 0;
-      termDebug.cursor = -1;
-      termDebug.bytesSent = 0;
-      termDebug.errors = [];
-      termDebug.ptyId = pty.id;
-      termDebug.term = term;
-    }
-    ws.onopen = () => {
-      if (termDebug) termDebug.wsState = "open";
-      if (gen !== genRef.current) return void ws.close();
-      opened = true;
+    const open = () => fetch(client.ptyStreamUrl(pty.id, dir, cursorRef.current), { headers: { ...client.authorization(), Accept: "text/event-stream" }, signal: abort.signal, cache: "no-store" });
+    try {
+      let response = await open();
+      if (response.status === 401) { await response.body?.cancel(); await client.reconnect(); response = await open(); }
+      if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error(`Среда выполнения отклонила поток терминала (HTTP ${response.status}).`); }
+      if (gen !== genRef.current) { abort.abort(); return; }
       setStatus("open");
-      term.focus();
-      // PTY only starts rendering once its size is set (verified against 1.18.18):
-      void client
-        .ptyUpdate(pty.id, dir, { size: { rows: term.rows, cols: term.cols } })
-        .catch((e) => termDebug?.errors.push(`ptyUpdate: ${errText(e)}`));
-    };
-    ws.onmessage = (ev) => {
-      if (gen !== genRef.current) return;
-      // Wire protocol verified against OpenCode 1.18.18 (isolated WS probe, 2026-09-22):
-      // PTY stdout arrives as WebSocket TEXT frames; binary frames starting with 0x00 carry
-      // JSON control messages ({"cursor":N}). Writing every other byte sequence verbatim
-      // keeps future frame types visible instead of silently dropping output.
-      if (typeof ev.data === "string") {
-        if (termDebug) {
-          termDebug.framesIn += 1;
-          termDebug.bytesIn += ev.data.length;
-          termDebug.textFrames += 1;
-        }
-        term.write(ev.data);
-        return;
+      pushSize();
+      const reader = response.body.getReader(), decoder = new TextDecoder(), frames = new SseDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || gen !== genRef.current) break;
+        frames.push(decoder.decode(value, { stream: true }), data => {
+          const term = termRef.current;
+          let message: { type?: unknown; cursor?: unknown; reset?: unknown; data?: unknown };
+          try { message = JSON.parse(data) as typeof message; } catch { return true; }
+          if (message.type === "exit") { setStatus("exited"); return false; }
+          if (message.type !== "data" || typeof message.data !== "string" || !term) return true;
+          if (message.reset === true) term.reset();
+          term.write(decodeBase64(message.data));
+          if (typeof message.cursor === "number") cursorRef.current = message.cursor;
+          return gen === genRef.current;
+        });
       }
-      const b = new Uint8Array(ev.data as ArrayBuffer);
-      if (termDebug) {
-        termDebug.framesIn += 1;
-        termDebug.bytesIn += b.byteLength;
-      }
-      if (b.length === 0) return;
-      if (b[0] === 0) {
-        try {
-          const parsed = JSON.parse(
-            new TextDecoder().decode(b.subarray(1)),
-          ) as { cursor?: unknown };
-          if (parsed && typeof parsed.cursor === "number") {
-            if (termDebug) {
-              termDebug.headerFrames += 1;
-              termDebug.cursor = parsed.cursor;
-            }
-            return;
-          }
-        } catch {
-          /* not a control frame — render raw */
-        }
-      }
-      term.write(b);
-    };
-    ws.onerror = () => {
-      if (termDebug) termDebug.errors.push("ws error");
-      if (gen === genRef.current) setStatus("error");
-    };
-    ws.onclose = () => {
-      if (gen !== genRef.current) return;
-      wsRef.current = null;
-      if (!opened) {
-        // HTTP ticket validation succeeded, but the stream itself failed.
-        setStatus("error");
-        setError(
-          "The OpenCode server refused the terminal connection: the WebSocket stream did not open.",
-        );
-        return;
-      }
-      setStatus((prev) => (prev === "error" ? "error" : "closed"));
-    };
+      if (gen === genRef.current) setStatus(previous => previous === "exited" ? "exited" : "closed");
+    } catch (e) {
+      if (abort.signal.aborted || gen !== genRef.current) return;
+      setStatus("error");
+      setError(errText(e));
+    } finally {
+      if (streamRef.current === abort) streamRef.current = null;
+    }
   };
 
   const start = async (createNew: boolean) => {
     const gen = ++genRef.current;
-    detachSocket();
+    detach();
     setError(null);
-    if (!dir) {
+    if (!dir || !client) {
       setStatus("error");
-      setError("Начните чат или откройте терминал снова для подготовки рабочей папки.");
+      setError(dir ? "Нет связи со средой выполнения Enki." : "Начните чат или откройте терминал снова для подготовки рабочей папки.");
       return;
     }
     const term = termRef.current;
     if (!term) return;
     setStatus("connecting");
     try {
-      fitRef.current?.fit();
-      term.reset();
-      let pty: PtyInfo | null = null;
-      // Ownership rule: only reuse a shell this app created for this project — never hijack
-      // a foreign PTY that happens to exist on the server (R6).
+      refitRef.current();
+      let pty: PtyDTO | null = null;
+      // Ownership: only reuse a shell this app created for this project.
       const ownedId = store.state.prefs.ptyIds[dir];
       if (!createNew && ownedId) {
         try {
           const info = await client.ptyGet(ownedId, dir);
           if (info.status === "running" && samePath(info.cwd, dir)) pty = info;
           else store.setPtyId(dir, null);
-        } catch {
-          store.setPtyId(dir, null); // recorded shell no longer exists
-        }
+        } catch { store.setPtyId(dir, null); }
         if (gen !== genRef.current) return;
       }
       if (!pty) {
-        pty = await client.ptyCreate(
-          { cwd: dir, title: "Enki" },
-          dir,
-        );
-        if (gen !== genRef.current) {
-          await client.ptyKill(pty.id, dir);
-          return;
-        }
+        term.reset();
+        cursorRef.current = 0;
+        pty = await client.ptyCreate(dir, "Enki", { cols: term.cols, rows: term.rows });
+        if (gen !== genRef.current) { await client.ptyKill(pty.id, dir); return; }
         store.setPtyId(dir, pty.id);
-      }
-      await attach(pty, gen);
+      } else if (ptyRef.current?.id !== pty.id) { term.reset(); cursorRef.current = 0; }
+      ptyRef.current = pty;
+      setTitle(pty.title || "Терминал");
+      await follow(pty, gen);
     } catch (e) {
       if (gen !== genRef.current) return;
       setStatus("error");
@@ -242,136 +140,120 @@ export function TerminalPanel() {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const term = new Terminal({
-      convertEol: false,
-      fontFamily: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
-      fontSize: 12.5,
-      theme: terminalTheme(),
-      scrollback: 5000,
-      allowProposedApi: false,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(el);
-    fit.fit();
-    termRef.current = term;
-    fitRef.current = fit;
-    term.onData((data) => {
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        const bytes = new TextEncoder().encode(data);
-        ws.send(bytes);
-        if (termDebug) termDebug.bytesSent += bytes.byteLength;
-      } else {
-        term.write(
-          "\r\n\x1b[31m[terminal detached — press Reconnect]\x1b[0m\r\n",
-        );
+    const xterm = createXterm(el);
+    termRef.current = xterm.term;
+    refitRef.current = xterm.refit;
+    // Keystrokes are delivered in order; a failed write is shown, never replayed.
+    const data = xterm.term.onData(value => {
+      const pty = ptyRef.current;
+      if (!pty || !dir || !client || streamRef.current === null) {
+        xterm.term.write("\r\n\x1b[31m[терминал отключён — нажмите «Переподключить»]\x1b[0m\r\n");
+        return;
       }
+      inputRef.current = inputRef.current.then(() => client.ptyInput(pty.id, dir, value))
+        .catch(e => { xterm.term.write(`\r\n\x1b[31m[ввод не доставлен: ${errText(e)}]\x1b[0m\r\n`); });
     });
-    term.onResize(pushSize);
-    const ro = new ResizeObserver(() => {
-      try {
-        fit.fit();
-      } catch {
-        /* container hidden */
-      }
-    });
-    ro.observe(el);
+    const resized = xterm.term.onResize(pushSize);
+    const observer = new ResizeObserver(() => { xterm.refit(); });
+    observer.observe(el);
     void start(false);
     return () => {
       genRef.current++;
-      ro.disconnect();
-      detachSocket();
-      term.dispose();
+      observer.disconnect();
+      data.dispose(); resized.dispose();
+      detach();
+      if (resizeTimer.current) window.clearTimeout(resizeTimer.current);
+      xterm.dispose();
       termRef.current = null;
-      fitRef.current = null;
+      refitRef.current = () => false;
       ptyRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir, client]);
 
-  // keep terminal colors in sync with theme switches
+  // keep terminal colors in sync with theme switches (CSS variables update one frame later)
   useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    // applyTheme runs in the store; wait one frame so CSS variables are updated
-    const t = setTimeout(() => {
-      term.options.theme = terminalTheme();
-    }, 0);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => { if (termRef.current) termRef.current.options.theme = terminalTheme(); }, 0);
+    return () => clearTimeout(timer);
   }, [s.prefs.theme]);
 
   const kill = async () => {
     const pty = ptyRef.current;
-    if (!pty || !dir) return;
+    if (!pty || !dir || !client) return;
     genRef.current++;
-    detachSocket();
+    detach();
     const gen = genRef.current;
     try {
+      // Returns at once: the runtime sends one signal and tracks a bounded close.
       await client.ptyKill(pty.id, dir);
       if (gen !== genRef.current || client !== store.client) return;
       store.setPtyId(dir, null);
       ptyRef.current = null;
       setStatus("closed");
-      termRef.current?.write("\r\n[terminal closed]\r\n");
+      termRef.current?.write("\r\n[сигнал завершения отправлен]\r\n");
+      void refreshClosing();
     } catch (e) {
-      store.setUi({ toast: `Could not close terminal: ${errText(e)}` });
+      store.setUi({ toast: `Не удалось закрыть терминал: ${errText(e)}` });
     }
   };
 
+  // Closed shells whose cleanup the runtime cannot confirm (descendants may
+  // survive SIGHUP). Shown with an explicit detach; never reported as idle.
+  const [closing, setClosing] = useState<PtyClosingDTO[]>([]);
+  const refreshClosing = async () => {
+    if (!dir || !client) { setClosing([]); return; }
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const list = await client.ptyClosing(dir).catch(() => null);
+      if (!list || dir !== store.state.directory) return;
+      setClosing(list);
+      if (!list.some(item => item.state === "closing")) return;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  };
+  useEffect(() => { void refreshClosing(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [dir, client]);
+  const detachClosed = async (id: string) => {
+    if (!dir || !client) return;
+    try {
+      await client.ptyDetach(id, dir);
+      store.setUi({ toast: "Оболочка отсоединена. Enki больше её не отслеживает; очистка фоновых процессов не подтверждена." });
+    } catch (e) { store.setUi({ toast: `Не удалось отсоединить: ${errText(e)}` }); }
+    void refreshClosing();
+  };
+
+  const label = { open: "подключён", connecting: "подключение…", closed: "отключён", exited: "оболочка завершилась", error: "ошибка", idle: "ожидание" }[status];
   return (
     <div className="term-wrap">
       <div className="term-toolbar">
-        <span className="term-title" title={dir ?? ""}>
-          {title}
-        </span>
-        <span
-          className={`status-dot ${status === "open" ? "ok" : status === "connecting" ? "warn" : status === "idle" ? "" : "bad"}`}
-          aria-label={`Terminal ${status}`}
-        />
-        <span className="term-status">
-          {status === "open"
-            ? "connected"
-            : status === "connecting"
-              ? "connecting…"
-              : status === "closed"
-                ? "disconnected"
-                : status === "error"
-                  ? "error"
-                  : "idle"}
-        </span>
+        <span className="term-title" title={dir ?? ""}>{title}</span>
+        <span className={`status-dot ${status === "open" ? "ok" : status === "connecting" ? "warn" : status === "idle" ? "" : "bad"}`} aria-label={`Терминал: ${label}`} />
+        <span className="term-status">{label}</span>
         <span style={{ flex: 1 }} />
-        {status !== "open" && (
-          <button
-            className="btn small"
-            onClick={() => void start(false)}
-            aria-label="Reconnect terminal"
-          >
-            Reconnect
+        {status !== "open" && status !== "connecting" && (
+          <button className="btn small" onClick={() => void start(status === "exited")} aria-label="Переподключить терминал">
+            {status === "exited" ? "Новая оболочка" : "Переподключить"}
           </button>
         )}
-
-        <button
-          className="btn small ghost"
-          onClick={() => void kill()}
-          aria-label="Close terminal shell"
-          title="Kill this shell (terminates the process)"
-        >
-          Kill
+        <button className="btn small ghost" onClick={() => void kill()} aria-label="Завершить оболочку"
+          title="Завершить процесс оболочки. Пока оболочка запущена, обновление Enki ожидает её закрытия.">
+          Завершить
         </button>
-        <button
-          className="btn small ghost"
-          onClick={() => store.setLayout({ bottomOpen: false })}
-          aria-label="Hide terminal panel"
-        >
+        <button className="btn small ghost" onClick={() => store.setLayout({ bottomOpen: false })} aria-label="Скрыть панель терминала"
+          title="Скрыть панель. Оболочка продолжит работать.">
           ✕
         </button>
       </div>
-      {status === "error" && error && (
-        <div className="panel-note" role="alert">
-          {error}
+      {status === "error" && error && <div className="panel-note" role="alert">{error}</div>}
+      {closing.map(item => (
+        <div key={item.id} className="panel-note" role="status">
+          {item.state === "closing" ? "Терминал закрывается…" : item.detail}
+          {item.state === "cleanup-unknown" && (
+            <button className="btn small ghost" onClick={() => void detachClosed(item.id)}
+              title="Enki перестанет отслеживать эту оболочку. Процессы не завершаются и их очистка не подтверждается.">
+              Отсоединить
+            </button>
+          )}
         </div>
-      )}
+      ))}
       <div ref={containerRef} className="term-host" />
     </div>
   );

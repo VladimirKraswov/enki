@@ -14,17 +14,13 @@ const IN_PROGRESS: BrowserSetup["phase"][] = ["checking", "installing", "configu
 
 function setupSummary(setup: BrowserSetup, enabled: boolean): string {
   switch (setup.phase) {
-    case "checking": return "Проверка установленных агентов…";
+    case "checking": return "Проверка инструментария браузера…";
     case "installing": return "Установка Playwright и Chromium выполняется в фоне…";
-    case "configuring": return "Подключение инструментов к агентам…";
+    case "configuring": return "Подключение инструментов к среде выполнения…";
     case "ready": return "Инструменты готовы";
     case "error": return "Настройка не завершена";
     case "disabled": return "Управление браузером выключено";
-    default:
-      if (!enabled) return "Управление браузером выключено";
-      return setup.openCode.includes("пропущен") && setup.pi.includes("пропущен")
-        ? "OpenCode и Pi не найдены; установите агента и повторите проверку"
-        : "Настройка при запуске приложения";
+    default: return enabled ? "Настройка при запуске приложения" : "Управление браузером выключено";
   }
 }
 
@@ -62,7 +58,7 @@ export function BrowserSettings() {
   return <>
 
     {!native && <p role="status">Откройте установленное приложение, чтобы настроить браузер.</p>}
-    {!local && <p role="status">Инструменты браузера подключаются к локальному OpenCode и Pi. Для настройки выберите «Этот компьютер».</p>}
+    {!local && <p role="status">Управляемый браузер работает только со средой выполнения на этом компьютере. Для настройки выберите «Этот компьютер».</p>}
     <section className="setting-group" aria-label="Настройка браузера"><h2>Подключение</h2><div className="setting-card">
       <div className="setting-row"><div className="setting-label"><span>Браузер агента</span><SettingHelp topic="browser.enabled" title="Браузер агента"/></div><div className="setting-control"><label className="switch-label"><input type="checkbox" aria-label="Браузер агента" checked={enabled} disabled={!native || !local || busy} onChange={event => store.setBrowserSettings({ enabled: event.target.checked })}/><span>{enabled ? "Включён" : "Выключен"}</span></label></div></div>
       <div className="setting-row"><div className="setting-label"><label htmlFor="browser-mode">Режим работы</label><SettingHelp topic="browser.mode" title="Режим работы"/></div><div className="setting-control"><select id="browser-mode" value={app.prefs.browser?.mode ?? "fast"} disabled={!native || !local || !enabled || busy || configuring} onChange={event => {
@@ -71,9 +67,8 @@ export function BrowserSettings() {
         void browserNative("browser_input", { action: "mode", args: { mode } }).then(() => store.setBrowserSettings({ mode })).catch(e => setError(message(e))).finally(() => setBusy(false));
       }}><option value="fast">Быстрый</option><option value="human">Полная эмуляция</option></select></div></div>
       <div className="setting-row"><div className="setting-label"><span>Инструментарий</span></div><div className="setting-control"><span>{setup.phase === "installing" ? "Установка Playwright и Chromium…" : status?.installed ? `Playwright MCP ${status.version ?? ""}` : "Ещё не установлен"}</span></div></div>
-      <div className="setting-row"><div className="setting-label"><span>OpenCode</span></div><div className="setting-control"><span>{setup.openCode}</span></div></div>
-      <div className="setting-row"><div className="setting-label"><span>Pi</span></div><div className="setting-control"><span>{setup.pi}</span></div></div>
-      <div className="setting-row"><div className="setting-label"><span>Разрешения на действия</span><SettingHelp topic="browser.permissions" title="Разрешения на действия"/></div><div className="setting-control"><span>Настройки OpenCode / Pi</span></div></div>
+      <div className="setting-row"><div className="setting-label"><span>Агент</span></div><div className="setting-control"><span>{setup.agent}</span></div></div>
+      <div className="setting-row"><div className="setting-label"><span>Разрешения на действия</span><SettingHelp topic="browser.permissions" title="Разрешения на действия"/></div><div className="setting-control"><span>Доступ чата в Enki</span></div></div>
       <div className="settings-actions"><span className="settings-muted" role="status">{setupSummary(setup, enabled)}</span><button className="btn" disabled={!native || !local || busy || configuring} onClick={() => { setError(""); void store.configureBrowser(true); }}>Настроить и проверить</button></div>
     </div></section>
     <BrowserEnvironmentSettings disabled={!native || !local || busy || configuring} running={!!status?.running}/>

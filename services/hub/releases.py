@@ -5,13 +5,18 @@ Both complete UI and source snapshots are required so every OS can update.
 """
 import base64
 import hashlib
+import importlib.util
 import io
 import json
-import os
 import re
-import secrets
 import shutil
 import zipfile
+from pathlib import Path
+
+# Loaded by file location like every Hub module (server.py, release_signer.py, tests).
+_durable_spec = importlib.util.spec_from_file_location('enki_hub_durable', Path(__file__).with_name('durable.py'))
+durable = importlib.util.module_from_spec(_durable_spec)
+_durable_spec.loader.exec_module(durable)
 
 MAX_UPLOAD = 64 * 1024 * 1024
 MAX_PAYLOAD = 24 * 1024 * 1024
@@ -56,20 +61,7 @@ class Releases:
         return json.loads(path.read_bytes())
 
     def atomic(self, path, value):
-        temporary = path.with_name('.' + secrets.token_hex(12) + '.tmp')
-        raw = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
-        try:
-            with temporary.open('xb') as output:
-                os.chmod(temporary, 0o600)
-                output.write(raw)
-                output.flush()
-                os.fsync(output.fileno())
-            temporary.replace(path)
-            descriptor=os.open(path.parent,os.O_RDONLY)
-            try:os.fsync(descriptor)
-            finally:os.close(descriptor)
-        finally:
-            temporary.unlink(missing_ok=True)
+        durable.publish(path, json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode())
 
     def validate_unsigned(self, payload, kind):
         try:
@@ -236,19 +228,31 @@ class Releases:
                 if shutil.disk_usage(self.root).free < 256 * 1024 * 1024 + sum(a['bytes'] * 2 for a in artifacts.values()):
                     self.error('На сервере недостаточно места для обновления.', 507)
                 # Write immutable packages before atomically exposing the head.
+                # An uncertain artifact write is safe to repeat: identical
+                # hash-addressed bytes are accepted again, different ones refused.
                 for kind, artifact in artifacts.items():
                     file = self.root / (artifact['digest'] + '.json')
                     existing = self.read(file)
                     if existing is not None and existing != data[kind]:
                         self.error('Пакет с этим хешем уже существует.', 409)
                     if existing is None:
-                        self.atomic(file, data[kind])
+                        try:
+                            self.atomic(file, data[kind])
+                        except durable.PublicationUncertain:
+                            self.error('Пакет записан, но его сохранность на диске не подтверждена. Канал не изменён; повторите ту же публикацию.', 503)
                 try:
                     config=json.loads(base64.b64decode(source['files']['src-tauri/tauri.conf.json'],validate=True))
                 except (ValueError,TypeError,KeyError):config={}
-                if config.get('productName') == 'Arvela':
-                    self.atomic(self.root / ('legacy-' + channel + '.json'), head)
-                self.atomic(self.root / (channel + '.json'), head)
+                try:
+                    if config.get('productName') == 'Arvela':
+                        self.atomic(self.root / ('legacy-' + channel + '.json'), head)
+                    self.atomic(self.root / (channel + '.json'), head)
+                except durable.PublicationUncertain:
+                    # The new head may already be served. Never claim the old
+                    # release was kept; the publisher reconciles by reading the
+                    # channel head and both envelopes, not by re-POSTing blindly.
+                    self.error('Новая версия канала, возможно, уже опубликована, но её сохранность на диске не подтверждена. '
+                               'Проверьте канал и загрузки пакетов перед любым повтором.', 503)
                 try:self.collect()
                 except OSError:pass
                 return head

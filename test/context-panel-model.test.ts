@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { linkedPath, projectFile, safeLabel, sessionContext, subagentRuns } from "../src/state/taskContext";
+import { linkedPath, projectFile, safeLabel, sessionContext, sessionSources, subagentRuns } from "../src/state/taskContext";
 import { emptySessionChat } from "../src/state/chatReducer";
 it("uses actual source attachments and completed outputs, deduplicates paths and ignores incomplete writes", () => {
  const chat=emptySessionChat(); chat.messageOrder=["u","a"];
@@ -12,6 +12,8 @@ it("uses actual source attachments and completed outputs, deduplicates paths and
  r:{id:"r",messageID:"a",sessionID:"s",type:"tool",tool:"write",state:{status:"running",input:{filePath:"/project/pending.txt"}}},
  x:{id:"x",messageID:"a",sessionID:"s",type:"file",filename:"assistant.json"}};
  const context=sessionContext(chat);expect(context.sources.map(x=>x.name)).toEqual(["source.pdf"]);expect(context.results.map(x=>x.path)).toEqual(["/project/report.md"]);
+ // The attachment viewer's user-only projection is exactly the same source list.
+ expect(sessionSources(chat)).toEqual(context.sources);expect(sessionSources()).toEqual([]);
 });
 it("never previews traversal, sibling directories or unrelated absolute files through the project API",()=>{
  expect(projectFile("../private/key","/project")).toBeNull();expect(projectFile("/project-other/key","/project")).toBeNull();

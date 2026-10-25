@@ -1,48 +1,44 @@
-// Registry of available agent backends.
+// The single agent backend: the bundled Enki Runtime (Pi SDK).
 //
-// OpenCode is registered here and is the default. Adding another agent runtime
-// means implementing `AgentBackend` and registering its descriptor — no change to
-// the store, components or preference schema. Nothing else is implemented today;
-// `listBackendDescriptors()` returning a single entry is the honest current state.
+// There is no engine catalogue any more. A workspace is either the runtime on
+// this computer or the runtime installed on an SSH host; both are reached through
+// `RuntimeBackend`. A remote target never falls back to the local runtime: the
+// caller gets the remote failure and decides what to show.
 
-import type { AgentBackend, AgentBackendDescriptor } from "./backend";
-import { openCodeDescriptor } from "./opencode";
+import { remoteKey, type RemoteHost } from "../native/hosts";
+import { RuntimeBackend } from "./runtime/backend";
+import type { RuntimeConnection } from "./runtime/client";
+import { localConnection, remoteConnection } from "./runtime/connection";
+import { LOCAL_WORKSPACE, RUNTIME_AGENT_ID } from "./runtime/ids";
 
-export const DEFAULT_BACKEND_ID = openCodeDescriptor.id;
+export const DEFAULT_BACKEND_ID = RUNTIME_AGENT_ID;
 
-const descriptors = new Map<string, AgentBackendDescriptor>([
-  [openCodeDescriptor.id, openCodeDescriptor],
-]);
+export type RuntimeTarget =
+  | { kind: "local" }
+  | { kind: "remote"; host: RemoteHost };
 
-export function registerBackendDescriptor(
-  descriptor: AgentBackendDescriptor,
-): void {
-  descriptors.set(descriptor.id, descriptor);
+/** Stable workspace identity used for preference scoping and request guards. */
+export function workspaceKey(target: RuntimeTarget): string {
+  return target.kind === "local" ? LOCAL_WORKSPACE : remoteKey(target.host);
 }
 
-export function listBackendDescriptors(): AgentBackendDescriptor[] {
-  return [...descriptors.values()];
-}
-
-/** Exact lookup. Returns undefined so a caller can refuse instead of guessing. */
-export function findBackendDescriptor(
-  id?: string | null,
-): AgentBackendDescriptor | undefined {
-  return id ? descriptors.get(id) : undefined;
+function connector(target: RuntimeTarget): () => Promise<RuntimeConnection> {
+  if (target.kind === "local") return localConnection;
+  const host = target.host;
+  return () => remoteConnection(host);
 }
 
 /**
- * Lenient lookup for start-up, where the app must end up with *some* backend.
- * Never use it to re-create an already active backend: falling back there would
- * silently move a live workspace onto a different agent runtime.
+ * Connects to the runtime of `target`. The same connector refreshes a rotated
+ * token or a restarted runtime, so a remote backend only ever re-resolves the
+ * same remote host.
  */
-export function backendDescriptor(id?: string | null): AgentBackendDescriptor {
-  return findBackendDescriptor(id) ?? descriptors.get(DEFAULT_BACKEND_ID)!;
+export async function connectRuntime(target: RuntimeTarget): Promise<RuntimeBackend> {
+  const connect = connector(target);
+  return new RuntimeBackend(await connect(), connect, workspaceKey(target));
 }
 
-export function createBackend(
-  id: string | null | undefined,
-  endpoint: string,
-): AgentBackend {
-  return backendDescriptor(id).create(endpoint);
+/** Exact lookup kept for persisted ids: only the runtime id is known. */
+export function isKnownBackend(id?: string | null): boolean {
+  return id === RUNTIME_AGENT_ID;
 }

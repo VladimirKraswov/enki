@@ -4,6 +4,7 @@ mod build;
 pub mod install;
 mod packet;
 use assets::HotAssets;
+pub(crate) use build::WITHHELD_ENV as PUBLISHER_SECRET_ENV;
 use packet::{Envelope, FINGERPRINT};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -369,7 +370,7 @@ pub async fn hub_update(
             }
             // Native maintenance gate blocks new native-owned actions throughout
             // the authoritative idle check, backup and installer handoff.
-            let _maintenance = crate::updates::Maintenance::acquire()?;
+            let _maintenance = crate::updates::Maintenance::acquire(&app).await?;
             crate::updates::idle(&app).await?;
             let data = data.ok_or("Нет резервной копии состояния")?;
             tauri::async_runtime::spawn_blocking(move || crate::updates::backup(&data))
@@ -379,11 +380,25 @@ pub async fn hub_update(
                 return Err("Подключение Hub изменилось. Установка отменена.".into());
             }
             let plan = state.build.prepared(&c.digest)?;
-            // Do not carry a child engine's TCC attribution into a moved old bundle.
-            tauri::async_runtime::spawn_blocking(crate::local_server::stop_owned_idle)
-                .await
-                .map_err(|e| e.to_string())??;
+            // Stop our own idle runtime (checkpoint, no replay) before the old
+            // bundle moves, so no child keeps the previous bundle's attribution.
+            let supervisor = app
+                .state::<crate::runtime::RuntimeSupervisor>()
+                .inner()
+                .clone();
+            let stopping = supervisor.clone();
+            // Checked drain + reap while native and runtime fences are held. An
+            // error keeps ownership; dropping `_maintenance` then ends the fence
+            // on the still-owned runtime (or reports it), never replaying work.
+            tauri::async_runtime::spawn_blocking(move || {
+                stopping.shutdown_checked(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            // launch() returns Err only before the helper process started:
+            // proven cancellation, so the fences are released by Drop.
             install::launch(plan)?;
+            supervisor.retire();
             std::mem::forget(_maintenance);
             // Exact owned agents have been checked idle. Exit preserves all
             // durable data; the external helper waits for this process to exit.

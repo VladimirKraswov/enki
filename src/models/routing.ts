@@ -1,4 +1,4 @@
-import { isAllowedBaseUrl } from "../api/client";
+import { isAllowedBaseUrl } from "../api/http";
 import type { ModelService } from "./services";
 
 /** Only public routing fields, never a provider's headers or API credential. */

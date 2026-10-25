@@ -1,9 +1,8 @@
 // IO layer for the shared Hub model catalog: fetch/publish over the Hub command
-// and apply to the two engine configuration files through their native CAS writers.
+// and apply to the single Enki Runtime's models.json through its CAS endpoint.
 
 import { capabilityNative } from "../capabilities/integration";
 import {
-  mergeOpencodeProviders,
   mergePiModels,
   planCatalog,
   type HubCatalog,
@@ -33,51 +32,56 @@ export interface ApplyReport {
   removed: string[];
 }
 
-/** Writes the effective catalog into opencode.jsonc and Pi models.json, then
- * returns the applied provider ids so the caller can persist them as `applied`. */
+/**
+ * models.json WAS committed, but the runtime could not re-read it cleanly. Not a
+ * success; still, the written providers are now Enki-owned, so the caller must
+ * record `appliedPi` or a later catalog removal could never remove them.
+ */
+export class CatalogRefreshError extends Error {
+  readonly appliedPi: string[];
+  constructor(message: string, appliedPi: string[]) { super(message); this.appliedPi = appliedPi; }
+}
+
+/** The single runtime's model configuration API (RuntimeClient). */
+export interface RuntimeModelsPort {
+  configStatus(): Promise<{ state: "none" | "ready" | "shadowed" | "blocked" }>;
+  modelsConfig(): Promise<{ path: string; content: string; readOnly?: boolean }>;
+  saveModelsConfig(expected: string, content: string): Promise<unknown>;
+  refreshProviders(): Promise<{ errors: string[] }>;
+}
+
+/**
+ * Writes the effective catalog into the ONE runtime's models.json through its
+ * CAS endpoint and refreshes the runtime catalog. There is no per-engine
+ * OpenCode/Pi writer any more. Refused (nothing written, no false "applied"):
+ * - a remote runtime: its configuration and credentials are server-owned, and
+ *   loopback catalog endpoints would point at the wrong machine;
+ * - an active imported Pi generation (ready/blocked): writing the owner file
+ *   would shadow it and drop its header/key bindings; no merge exists yet.
+ */
 export async function applyCatalog(
   catalog: HubCatalog,
   prefs: HubModelsPrefs,
-  onOpencodeApplied?: (appliedOpencode: string[]) => void,
+  runtime: { client: RuntimeModelsPort; remote: boolean },
 ): Promise<{ report: ApplyReport; appliedOpencode: string[]; appliedPi: string[] }> {
   if (!prefs.enabled) throw new Error("Применение каталога выключено на этом устройстве.");
+  if (runtime.remote) throw new Error("Каталог Hub применяется только к среде выполнения этого компьютера. Настройки моделей удалённого сервера не изменены.");
   const plan = planCatalog(catalog, prefs);
-  const { invoke } = await import("@tauri-apps/api/core");
-  const oc = await invoke<{ content: string }>("read_opencode_config", {
-    scope: "global",
-    directory: null,
-  });
-  const pi = await invoke<{ content: string }>("read_pi_models");
-  const ocMerge = mergeOpencodeProviders(oc.content, plan.opencode, plan.removeOpencode);
-  const piMerge = mergePiModels(pi.content, plan.pi, plan.removePi);
-  // Validate both before either write. CAS still guards each file against an
-  // external edit; after a partial write persist ownership for a safe retry.
-  if (ocMerge.error) throw new Error(ocMerge.error);
+  const status = await runtime.client.configStatus();
+  const current = await runtime.client.modelsConfig();
+  if (status.state === "ready" || status.state === "blocked" || current.readOnly)
+    throw new Error("Активны импортированные настройки моделей Pi. Объединение каталога Hub с ними пока не поддерживается, поэтому изменения не внесены.");
+  const piMerge = mergePiModels(current.content, plan.pi, plan.removePi);
   if (piMerge.error) throw new Error(piMerge.error);
-  if (ocMerge.changed)
-    await invoke("write_opencode_config", {
-      scope: "global",
-      directory: null,
-      expected: oc.content,
-      content: ocMerge.text,
-    });
-  onOpencodeApplied?.(Object.keys(plan.opencode));
-  if (piMerge.changed) {
-    try {
-      await invoke("write_pi_models", { expected: pi.content, content: piMerge.text });
-    } catch (error) {
-      throw new Error(`Настройки OpenCode применены; Pi не обновлён. Повторите применение после проверки models.json. ${String(error)}`);
-    }
-  }
+  // CAS: an edit made elsewhere since the read is refused by the runtime (409).
+  if (piMerge.changed) await runtime.client.saveModelsConfig(current.content, piMerge.text);
+  const appliedPi = Object.keys(plan.pi);
+  const refreshed = await runtime.client.refreshProviders().catch((error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }));
+  if (refreshed.errors.length)
+    throw new CatalogRefreshError(`Каталог записан, но среда выполнения сообщила об ошибках при перечитывании моделей: ${refreshed.errors.join("; ")}`, appliedPi);
   return {
-    report: {
-      opencodeChanged: ocMerge.changed,
-      piChanged: piMerge.changed,
-      added: [...new Set([...ocMerge.added, ...piMerge.added])],
-      replaced: [...new Set([...ocMerge.replaced, ...piMerge.replaced])],
-      removed: [...new Set([...ocMerge.removed, ...piMerge.removed])],
-    },
-    appliedOpencode: Object.keys(plan.opencode),
-    appliedPi: Object.keys(plan.pi),
+    report: { opencodeChanged: false, piChanged: piMerge.changed, added: piMerge.added, replaced: piMerge.replaced, removed: piMerge.removed },
+    appliedOpencode: [],
+    appliedPi,
   };
 }

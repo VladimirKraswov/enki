@@ -21,6 +21,16 @@ export function stripSession(params) {
   return { session: identity === undefined ? undefined : browserSession(identity), params: clean,
     ...(access === 'full' ? { access: 'full' } : {}) };
 }
+/** The session a full daemon may release: never the selected chat, an open
+ * browser, a running composition or a request in flight; oldest use first. */
+export function evictableSession(sessions, selectedKey) {
+  let candidate;
+  for (const owned of sessions) {
+    if (owned.key === selectedKey || owned.busy || owned.context || owned.composition) continue;
+    if (!candidate || owned.lastUsed < candidate.lastUsed) candidate = owned;
+  }
+  return candidate;
+}
 export function sessionKey(directory, value) {
   const identity = browserSession(value);
   return JSON.stringify([directory, identity.engine, identity.sessionID]);

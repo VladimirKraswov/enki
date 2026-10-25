@@ -10,8 +10,14 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
+const COMMAND = "/Applications/Enki.app/Contents/MacOS/enki";
+// Per-session options replace the former process-wide environment variables,
+// so one runtime can host sessions with different access scopes.
+let command: string | undefined = COMMAND;
+let access: "full" | "project" = "project";
 function setup(overrides: Partial<BrowserConnection> = {}, loadOverride?: BrowserLoader) {
-  vi.stubEnv("OCDESKTOP_BROWSER_COMMAND", "/Applications/OpenCode Desktop.app/Contents/MacOS/opencode-desktop");
+  command = COMMAND;
+  access = "project";
   const events: Record<string, (...args: any[]) => any> = {};
   const tools = new Map<string, any>();
   const pi = { on: vi.fn((event, handler) => { events[event] = handler; }), registerTool: vi.fn(tool => { tools.set(tool.name, tool); }) };
@@ -23,7 +29,7 @@ function setup(overrides: Partial<BrowserConnection> = {}, loadOverride?: Browse
     close: vi.fn(async () => {}), ...overrides,
   };
   const load = vi.fn(loadOverride ?? (async () => connection));
-  attachBrowser(pi as any, load);
+  attachBrowser(pi as any, { command: () => command, access: () => access }, load);
   const ready = async () => {
     events.session_start({ type: "session_start" }, ctx);
     await vi.waitFor(() => expect(pi.registerTool).toHaveBeenCalled());
@@ -31,7 +37,7 @@ function setup(overrides: Partial<BrowserConnection> = {}, loadOverride?: Browse
   };
   return { events, pi, ctx, connection, load, tools, ready };
 }
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); });
 
 it("factory discovery registers lifecycle callbacks without starting a transport", () => {
   const fixture = setup();
@@ -46,7 +52,7 @@ it("uses exact official schemas, safe names and existing approval policy", async
     { ...official, name: "../browser_admin" }, { ...official, name: "shell" },
     { ...official, name: "browser_invalid", inputSchema: { type: "array" } }, official] })) });
   const tool = await fixture.ready();
-  expect(fixture.load).toHaveBeenCalledWith(process.env.OCDESKTOP_BROWSER_COMMAND, fixture.ctx.cwd);
+  expect(fixture.load).toHaveBeenCalledWith(COMMAND, fixture.ctx.cwd);
   expect([...fixture.tools.keys()]).toEqual(["desktop_browser_browser_navigate"]);
   expect(tool.parameters).toBe(schema);
   expect(tool.executionMode).toBe("sequential");
@@ -67,7 +73,11 @@ it("preserves text, images and structured results and passes bounded abort optio
   expect(fixture.connection.callTool).toHaveBeenCalledWith({ name: official.name, arguments: params, _meta: { arvelaAccess: "project", arvelaSession: { engine: "pi", sessionID: "pi_test" } } }, { signal: abort.signal, timeout: 90000 });
   expect(response.content.slice(0, 2)).toEqual(result.content);
   expect(response.content[2].text).toContain('"page":"fixture"');
-  expect(response.details.mcp).toBe(result);
+  // The screenshot reaches the model exactly once, through response.content;
+  // persisted details are a bounded summary (no second copy of the image).
+  expect(response.content[1]).toEqual({ type: "image", data: "aW1hZ2U=", mimeType: "image/png" });
+  expect(response.details.mcp).toEqual({ isError: false, blocks: ["text", "image"], structuredContent: result.structuredContent });
+  expect(JSON.stringify(response.details)).not.toContain("aW1hZ2U=");
   await fixture.events.session_shutdown();
 });
 
@@ -87,7 +97,7 @@ it("does not block session startup or register fake tools when the gateway is un
 
 it("rejects missing/relative native commands before creating a transport", async () => {
   const fixture = setup();
-  vi.stubEnv("OCDESKTOP_BROWSER_COMMAND", "opencode-desktop");
+  command = "enki";
   fixture.events.session_start({}, fixture.ctx);
   await vi.waitFor(() => expect(fixture.ctx.ui.notify).toHaveBeenCalledOnce());
   expect(fixture.load).not.toHaveBeenCalled();
@@ -190,8 +200,14 @@ it("passes argument/preparation recovery details to Pi without hiding them behin
   }
 });
 it('does not accept model-supplied browser ownership or full access', async () => {
-  vi.stubEnv('OCDESKTOP_PI_TOOL_POLICY','ask');
   const f=setup(),tool=await f.ready();
   await tool.execute('forged',{url:'https://example.com',__arvelaAccess:'full',__arvelaSession:{engine:'pi',sessionID:'other'}});
   expect(f.connection.callTool).toHaveBeenCalledWith({name:official.name,arguments:{url:'https://example.com'},_meta:{arvelaAccess:'project',arvelaSession:{engine:'pi',sessionID:'pi_test'}}},expect.anything());
+});
+it('full access comes only from the session access mode, evaluated per call', async () => {
+  const f=setup(),tool=await f.ready();
+  access='full';
+  await tool.execute('full',{url:'https://example.com'});
+  expect(f.connection.callTool).toHaveBeenLastCalledWith({name:official.name,arguments:{url:'https://example.com'},_meta:{arvelaAccess:'full',arvelaSession:{engine:'pi',sessionID:'pi_test'}}},expect.anything());
+  await f.events.session_shutdown();
 });

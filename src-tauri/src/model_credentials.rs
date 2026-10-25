@@ -15,10 +15,15 @@ fn origin(endpoint: &str) -> Result<String, String> {
     }
     Ok(url.origin().ascii_serialization())
 }
+/// Account is the normalized loopback origin, unchanged from shipped builds.
+pub(crate) fn account(endpoint: &str) -> Result<String, String> {
+    origin(endpoint)
+}
 fn access(endpoint: &str, action: &str, value: Option<String>) -> Result<Option<String>, String> {
-    let endpoint = origin(endpoint)?;
+    let endpoint = account(endpoint)?;
+    let service = crate::paths::MODEL_CONTROL_SECRETS.service()?;
     let _guard = ACCESS.lock().map_err(|_| "Credential store lock failed")?;
-    let entry = keyring::Entry::new("dev.local.opencodedesktop.model-control", &endpoint)
+    let entry = keyring::Entry::new(&service, &endpoint)
         .map_err(|_| "System credential store unavailable")?;
     match action {
         "get" => match entry.get_password() {
@@ -44,10 +49,15 @@ fn access(endpoint: &str, action: &str, value: Option<String>) -> Result<Option<
 }
 #[tauri::command]
 pub async fn model_service_key(
+    window: tauri::WebviewWindow,
     endpoint: String,
     action: String,
     value: Option<String>,
 ) -> Result<Option<String>, String> {
+    // The key is returned to the WebView: only the main window may ask.
+    if window.label() != "main" {
+        return Err("Main window only".into());
+    }
     tauri::async_runtime::spawn_blocking(move || access(&endpoint, &action, value))
         .await
         .map_err(|_| "Credential operation failed")?

@@ -15,6 +15,7 @@ export function initialState(prefs: Prefs): AppState {
       lastEventAt: 0,
       endpoint: prefs.endpoint,
     },
+    runtime: null,
     projects: [],
     directory: prefs.selectedDirectory,
     sessions: [],
@@ -34,7 +35,7 @@ export function initialState(prefs: Prefs): AppState {
     configModel: null,
     compaction: {},
     agents: [],
-    piHealth: null,
+    queues: {},
     olderExhausted: {},
     historyCursors: {},
     ui: {
@@ -57,8 +58,8 @@ export function initialState(prefs: Prefs): AppState {
       confirmDelete: null,
       handoffSource: null,
       toast: null,
-      piDialog: null,
-      engineSwitch: null,
+      agentDialog: null,
+      extensionStatus: {},
     },
     rev: 0,
   };

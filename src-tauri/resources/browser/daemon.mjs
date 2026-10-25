@@ -2,7 +2,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { normalizeEnvironment, environmentOptions } from './preferences.mjs';
 import { applyUserAgentClientHints, stealthInitScript, stealthUserAgent } from './stealth.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { sessionKey } from './session.mjs';
+import { evictableSession, sessionKey } from './session.mjs';
 // A private lifecycle/transport bridge. Browser behavior is implemented by
 // Microsoft's unmodified Playwright MCP; the trusted panel projects pixels.
 import fs from 'node:fs/promises';
@@ -38,15 +38,26 @@ let environment = normalizeEnvironment();
 try { environment = normalizeEnvironment(JSON.parse(await fs.readFile(path.join(root, 'preferences.json'), 'utf8'))); } catch {}
 let defaultMode = 'fast';
 try { const mode = JSON.parse(await fs.readFile(path.join(root, 'interaction.json'), 'utf8')).mode; if (['fast', 'human'].includes(mode)) defaultMode = mode; } catch {}
+// Bounded per-chat sessions. At the bound only a provably idle session is
+// released: not the selected chat, no open browser, no composition and no
+// request in flight. Its persistent profile stays on disk under its own key,
+// so the same chat later reopens the same isolated profile.
 function ownedSession(key, scope = null) {
   if (!sessions.has(key)) {
-    if (sessions.size >= 32) throw new Error('Restart browser service to release older sessions');
-    const owned = { key, scope, context: undefined, connections: new Map(), frameFlight: undefined, composition: undefined, serial: createToolQueue() };
+    if (sessions.size >= 32) {
+      const idle = evictableSession(sessions.values(), selectedKey);
+      if (!idle) throw new Error('Restart browser service to release older sessions');
+      sessions.delete(idle.key);
+      for (const { client, official } of idle.connections.values()) { void client.close().catch(() => {}); void official.close().catch(() => {}); }
+    }
+    const owned = { key, scope, context: undefined, connections: new Map(), frameFlight: undefined, composition: undefined, serial: createToolQueue(), busy: 0, lastUsed: 0 };
     owned.view = createView(() => getContext(owned));
     owned.view.setMode(defaultMode);
     sessions.set(key, owned);
   }
-  return sessions.get(key);
+  const owned = sessions.get(key);
+  owned.lastUsed = Date.now();
+  return owned;
 }
 const currentSession = () => sessionContext.getStore();
 const metrics = createMetrics();
@@ -263,7 +274,8 @@ const server = http.createServer(async (req, res) => {
       key = sessionKey(directory, request.session); scope = { directory, ...request.session };
     } else key = 'legacy';
     const owned = ownedSession(key, scope);
-    return await sessionContext.run(owned, async () => {
+    owned.busy++;
+    try { return await sessionContext.run(owned, async () => {
     // Signal interruption immediately, even if the manual request waits in the queue.
     if (request.owner === 'user' || ['desktop/mode', 'desktop/resize', 'desktop/type', 'desktop/reload', 'desktop/forward', 'desktop/click', 'desktop/drag', 'desktop/wheel', 'desktop/key', 'desktop/copy'].includes(request.method)) currentSession().view.interrupt(false);
     else if (request.method === 'tools/call') currentSession().view.interrupt(false);
@@ -373,7 +385,7 @@ const server = http.createServer(async (req, res) => {
       return {isError:true,content:[{type:'text',text:beganExecution ? 'Browser call cancelled or timed out (including setup). Input may have been delivered. Inspect the current page before continuing; never replay it blindly.' : 'Browser call timed out or was cancelled while queued. This request sent no input. Inspect the current page before continuing.'}],structuredContent:{desktopBrowserRecovery:true,reason:'deadline',uncertainLastAction:beganExecution,noReplay:true}};
     });
     reply(res, 200, { result });
-    });
+    }); } finally { owned.busy--; }
   } catch {
     // Tool payloads and error details can contain passwords/page content. Never
     // write them to process logs or native errors. MCP tool errors stay in results.

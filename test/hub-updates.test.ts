@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {UpdateController,type NativeStatus,type Transport} from '../src/updates/controller';
+import {ACTIVE_BUILD_STAGES,BUILD_STAGE_TEXT,UpdateController,type NativeStatus,type Transport} from '../src/updates/controller';
 const native:NativeStatus={nativeVersion:'1.0.0',nativeFingerprint:'a'.repeat(64),hot:{uiVersion:'1.0.0',activeDigest:null,pending:false,lastError:null},build:{stage:'ready'}};
 function fixture(kind:'hot'|'source'='hot'){
  const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind}:action==='status'?native:{});
@@ -26,6 +26,24 @@ it('a previous channel cannot be restored into the newly selected channel',async
  const call=vi.fn(async()=>({...native,release:{available:true,version:'1.0.1',kind:'source',channel:'stable'},downloaded:true}));const c=new UpdateController(call as Transport,async()=>{});
  c.setChannel('preview');await c.refresh();expect(c.snapshot().release).toBeNull();expect(c.snapshot().downloaded).toBe(false);
  c.setChannel('stable');await c.refresh();expect(c.snapshot().release?.version).toBe('1.0.1');expect(c.snapshot().downloaded).toBe(true);
+});
+it('every active native build phase, including runtime preparation, is cancellable once and blocks channel changes; the release is kept',async()=>{
+ let stage='runtime';
+ const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind:'source',channel:'stable',digest:'c'.repeat(64)}:action==='status'?{...native,build:{stage,version:'1.0.1'}}:{});
+ const c=new UpdateController(call as Transport,async()=>{});await c.check();await c.download();
+ for(const active of ACTIVE_BUILD_STAGES){stage=active;await c.refresh();expect(c.compiling()).toBe(true);expect(BUILD_STAGE_TEXT[active]).toBeTruthy();c.setChannel('preview');expect(c.snapshot().channel).toBe('stable');}
+ expect(BUILD_STAGE_TEXT.runtime).toMatch(/среды выполнения/);
+ stage='runtime';await c.refresh();await c.cancel();
+ expect(call.mock.calls.filter(([action])=>action==='cancel')).toHaveLength(1);
+ stage='error';await c.refresh();expect(c.compiling()).toBe(false);
+ expect(c.snapshot().release?.version).toBe('1.0.1');expect(c.snapshot().downloaded).toBe(true);
+});
+it('the UI stage contract names exactly the active stages the native builder reports',async()=>{
+ const {readFileSync}=await import('node:fs');
+ const source=readFileSync(new URL('../src-tauri/src/hub_updates/build.rs',import.meta.url),'utf8');
+ const loop=[...source.matchAll(/\(\s*"([a-z]+)",\s*(?:vec!\[|runtime_args\(\)|build_args\(\))/g)].map(m=>m[1]);
+ const started=[...source.matchAll(/json!\(\{"stage":"([a-z]+)","version"/g)].map(m=>m[1]);
+ expect([...started,...loop]).toEqual([...ACTIVE_BUILD_STAGES]);
 });
 it('a built artifact belongs only to the exact checked release',async()=>{
  const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind:'source',digest:'b'.repeat(64)}:{...native,build:{stage:'ready',digest:'a'.repeat(64)}});

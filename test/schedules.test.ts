@@ -1,125 +1,192 @@
+// The window keeps only a mirror of the runtime-owned scheduler
+// (src/schedules/tasks.ts). Due times, busy/permission waits, durable dispatch,
+// ambiguous-delivery pauses, corrupt rows, request-key dedup and restart
+// recovery moved to the runtime: src-tauri/resources/agent/test/scheduler-unit.test.ts
+// and test/integration/schedules.test.ts. Here: the mirror never dispatches,
+// forwards edits exactly, survives disconnects and migrates old records once.
 import { afterEach, expect, it, vi } from "vitest";
-import { DISPATCH_LIMIT_MS, PREFLIGHT_MS, ScheduleBlocked, TaskScheduler, parseTasks, type ScheduledTask } from "../src/schedules/tasks";
-const task = { server: "local", directory: "/project", sessionID: "s", engine: "opencode", title: "CI", prompt: "Проверь CI", minutes: 15, model: { providerID: "p", modelID: "m", variant: "medium" } };
-const storage = () => { let value: string | null = null; return { getItem: () => value, setItem: (_: string, v: string) => { value = v; } }; };
-it("runs only the original server at the interval and never catches up missed ticks", async () => {
- const scheduler = new TaskScheduler(storage()); scheduler.add(task, 0);
- const dispatch = vi.fn(async () => ({ kind: "sent" as const }));
- await scheduler.tick("remote", dispatch, 99999999); expect(dispatch).not.toHaveBeenCalled();
- await scheduler.tick("local", dispatch, 99999999); expect(dispatch).toHaveBeenCalledTimes(1);
- await scheduler.tick("local", dispatch, Date.now()); expect(dispatch).toHaveBeenCalledTimes(1);
- expect(scheduler.snapshot()[0].model.variant).toBe("medium");
-});
-it("waits for busy/permission state without backlog, then sends once", async () => {
- const scheduler = new TaskScheduler(storage());scheduler.add(task, 0);
- const busy=vi.fn(async()=>({kind:"waiting" as const,detail:"Агент занят"}));
- await scheduler.tick("local",busy,900000);await scheduler.tick("local",busy,900001);expect(busy).toHaveBeenCalledTimes(1);
- expect(scheduler.snapshot()[0].state).toBe("waiting");
- const send=vi.fn(async()=>({kind:"sent" as const}));await scheduler.tick("local",send,915000);expect(send).toHaveBeenCalledTimes(1);
-});
-it("serializes ticks and persists dispatch before the network side effect",async()=>{
- const db=storage(),scheduler=new TaskScheduler(db);scheduler.add(task,0);
- let resolve!:(value:{kind:"sent"})=>void;
- const dispatch=vi.fn(()=>new Promise<{kind:"sent"}>(r=>{resolve=r;}));
- const pending=scheduler.tick("local",dispatch,900000);await scheduler.tick("local",dispatch,900000);
- expect(dispatch).toHaveBeenCalledTimes(1);expect(JSON.parse(db.getItem()!)[0].state).toBe("dispatching");
- scheduler.remove(scheduler.snapshot()[0].id);expect(scheduler.snapshot()).toHaveLength(1);
- resolve({kind:"sent"});await pending;
-});
-it("pauses ambiguous delivery, including a restart during dispatch; never stores error bodies",async()=>{
- const db=storage(),scheduler=new TaskScheduler(db);scheduler.add(task,0);
- const dispatch=vi.fn(async()=>{throw new Error("secret-token");});await scheduler.tick("local",dispatch,900000);await scheduler.tick("local",dispatch,99999999);
- expect(dispatch).toHaveBeenCalledTimes(1);expect(scheduler.snapshot()[0].enabled).toBe(false);expect(db.getItem()).not.toContain("secret-token");
- const crashed:ScheduledTask={...scheduler.snapshot()[0],enabled:true,state:"dispatching"};db.setItem("",JSON.stringify([crashed]));
- const restored=new TaskScheduler(db);expect(restored.snapshot()[0].enabled).toBe(false);
- await restored.tick("local",dispatch,Date.now()+99999999);expect(dispatch).toHaveBeenCalledTimes(1);
-});
-it("rejects corrupted/unbounded schedules and stops when durable storage fails",async()=>{
- const db=storage();db.setItem("",JSON.stringify([{...task,id:"bad",enabled:true,nextAt:1,state:"ready",minutes:0}]));
- const scheduler=new TaskScheduler(db);expect(scheduler.snapshot()).toHaveLength(0);
- expect(()=>scheduler.add({...task,prompt:" ".repeat(5)})).toThrow();
- const fail=new TaskScheduler({getItem:()=>null,setItem:()=>{throw new Error("disk");}});expect(()=>fail.add(task)).toThrow();
-});
-it("retains tasks across relaunch, postpones stale intervals and allows explicit pause/resume/delete",()=>{
- const db=storage(),scheduler=new TaskScheduler(db),t=scheduler.add(task,0);
- const restored=new TaskScheduler(db);expect(restored.snapshot()[0].nextAt).toBeGreaterThan(Date.now());
- restored.toggle(t.id);expect(restored.snapshot()[0].enabled).toBe(false);restored.toggle(t.id);expect(restored.snapshot()[0].enabled).toBe(true);
- restored.remove(t.id);expect(new TaskScheduler(db).snapshot()).toHaveLength(0);
+import type { ScheduleDTO } from "../src-tauri/resources/agent/src/protocol";
+import type { CutoverBatch, CutoverReceiptDTO } from "../src/agent/runtime/client";
+import { STORAGE_FAILED, TASK_LIMIT, TaskScheduler } from "../src/schedules/tasks";
+import { RuntimeReply, runtimeFixture } from "./helpers/runtime-fixture";
+
+const model = { providerID: "p", modelID: "m", variant: "medium" };
+const dto = (id: string, extra: Partial<ScheduleDTO> = {}): ScheduleDTO => ({ id, directory: "/project", sessionID: "s", title: "CI", prompt: "Проверь CI",
+  minutes: 15, mode: "repeat", model, enabled: true, nextAt: 900000, state: "ready", ...extra });
+const input = { server: "local", directory: "/project", sessionID: "s", engine: "pi", title: "CI", prompt: "Проверь CI", minutes: 15, model };
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+/** Bind and wait for the initial list, so it cannot later overwrite observed events. */
+async function connect(fx: ReturnType<typeof runtimeFixture>, server = "local"): Promise<TaskScheduler> {
+  const scheduler = new TaskScheduler();
+  scheduler.attach(null, server);
+  scheduler.attach(fx.backend, server);
+  await vi.waitFor(() => expect(scheduler.status().storage).toBe("ok"));
+  return scheduler;
+}
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it("mirrors the runtime list with its server and saved model, and never dispatches or ticks itself", async () => {
+  const fx = runtimeFixture();
+  fx.on("GET", "/schedules", () => ({ tasks: [dto("t1")] }));
+  const scheduler = new TaskScheduler();
+  scheduler.attach(fx.backend, "local");
+  await vi.waitFor(() => expect(scheduler.snapshot()).toHaveLength(1));
+  expect(scheduler.snapshot()).toEqual([expect.objectContaining({ id: "t1", server: "local", engine: "pi", model, state: "ready" })]);
+  expect(scheduler.status().storage).toBe("ok");
+  vi.useFakeTimers();
+  await vi.advanceTimersByTimeAsync(24 * 3600_000);
+  expect(fx.calls.map(c => `${c.method} ${c.path}`)).toEqual(["GET /schedules"]);
 });
 
-// A real keyed store, so backups and leases do not collide with the schedule itself.
-const KEY = "ocdesktop.scheduled-prompts.v1", LEASE = "ocdesktop.scheduled-prompts.lease.v1";
-const keyed = () => {
- const m = new Map<string, string>(); let failing = false;
- return { m, fail: (value: boolean) => { failing = value; }, getItem: (k: string) => m.get(k) ?? null,
-  setItem: (k: string, v: string) => { if (failing) throw new Error("disk full"); m.set(k, v); } };
-};
-const untilAbort = (_: ScheduledTask, signal: AbortSignal) =>
- new Promise<{ kind: "cancelled" }>(resolve => signal.addEventListener("abort", () => resolve({ kind: "cancelled" })));
-afterEach(() => { vi.useRealTimers(); });
+it("applies schedule events by id and ignores malformed ones", () => {
+  const scheduler = new TaskScheduler(), seen = vi.fn();
+  scheduler.subscribe(seen);
+  scheduler.observe({ type: "schedule.updated", properties: { task: dto("a") } });
+  scheduler.observe({ type: "schedule.updated", properties: { task: dto("b") } });
+  scheduler.observe({ type: "schedule.updated", properties: { task: dto("a", { state: "waiting", detail: "Ожидает вашего ответа в чате" }) } });
+  scheduler.observe({ type: "schedule.updated", properties: { task: { title: "no id" } } });
+  scheduler.observe({ type: "schedule.removed", properties: { id: 7 } });
+  expect(scheduler.snapshot().map(t => [t.id, t.state, t.detail])).toEqual([["a", "waiting", "Ожидает вашего ответа в чате"], ["b", "ready", undefined]]);
+  scheduler.observe({ type: "schedule.removed", properties: { id: "a" } });
+  expect(scheduler.snapshot().map(t => t.id)).toEqual(["b"]);
+  expect(seen).toHaveBeenCalledTimes(4);
+});
 
-it("a send whose outcome cannot be stored is never treated as due again", async () => {
- const db = keyed(), scheduler = new TaskScheduler(db); scheduler.add(task, 0);
- const dispatch = vi.fn(async () => { db.fail(true); return { kind: "sent" as const }; });
- await expect(scheduler.tick("local", dispatch, 900000)).rejects.toThrow();
- expect(scheduler.snapshot()[0].state).toBe("sent"); expect(scheduler.status().storage).toBe("unavailable");
- db.fail(false);
- await scheduler.tick("local", dispatch, Date.now() + 99999999); expect(dispatch).toHaveBeenCalledOnce();
- expect(() => scheduler.add(task)).toThrow();
+it("forwards a new timer exactly, with its saved model and request key, and shows the runtime's record", async () => {
+  const fx = runtimeFixture();
+  fx.on("POST", "/schedules", c => dto("srv-1", { ...(c.body as object), enabled: true, nextAt: 5, state: "ready" }));
+  const scheduler = await connect(fx);
+  const task = await scheduler.add({ ...input, mode: "once", runAt: 123, requestKey: "ci-watch" });
+  expect(fx.made("POST", "/schedules")[0].body).toEqual({ directory: "/project", sessionID: "s", title: "CI", prompt: "Проверь CI", minutes: 15, mode: "once", runAt: 123, requestKey: "ci-watch", model });
+  expect(task).toMatchObject({ id: "srv-1", model });
+  expect(scheduler.snapshot().map(t => t.id)).toEqual(["srv-1"]);
+  await scheduler.add(input);
+  expect(fx.made("POST", "/schedules")[1].body).toMatchObject({ mode: "repeat" });
+  expect(fx.made("POST", "/schedules")[1].body).not.toHaveProperty("requestKey");
+  expect(fx.made("POST", "/commands")).toHaveLength(0);
 });
-it("a definite refusal pauses with the app's own explanation instead of 'uncertain delivery'", async () => {
- const scheduler = new TaskScheduler(keyed()); scheduler.add(task, 0);
- await scheduler.tick("local", async () => { throw new ScheduleBlocked("Чат удалён"); }, 900000);
- expect(scheduler.snapshot()[0]).toMatchObject({ enabled: false, state: "error", detail: "Чат удалён" });
+
+it("a runtime refusal (duplicate key with another payload, limit) surfaces and records nothing", async () => {
+  const fx = runtimeFixture();
+  fx.on("POST", "/schedules", () => { throw new RuntimeReply(409, { message: "Этот ключ таймера уже использован с другими параметрами." }); });
+  const scheduler = await connect(fx);
+  await expect(scheduler.add({ ...input, requestKey: "k" })).rejects.toMatchObject({ status: 409, detail: expect.stringContaining("ключ") });
+  expect(scheduler.snapshot()).toEqual([]);
+  for (let i = 0; i < TASK_LIMIT; i++) scheduler.observe({ type: "schedule.updated", properties: { task: dto(`t${i}`, { requestKey: `k${i}` }) } });
+  await expect(scheduler.add(input)).rejects.toThrow(String(TASK_LIMIT));
+  expect(fx.made("POST", "/schedules")).toHaveLength(1);
+  // A retried create of an existing key is the runtime's idempotent case, not a new task.
+  fx.on("POST", "/schedules", () => dto("t3", { requestKey: "k3" }));
+  await expect(scheduler.add({ ...input, requestKey: "k3" })).resolves.toMatchObject({ id: "t3" });
 });
-it("pausing during the pre-send check withdraws it without sending or retrying", async () => {
- const scheduler = new TaskScheduler(keyed()), t = scheduler.add(task, 0);
- let seen: AbortSignal | undefined;
- const dispatch = vi.fn((x: ScheduledTask, signal: AbortSignal) => { seen = signal; return untilAbort(x, signal); });
- const pending = scheduler.tick("local", dispatch, 900000);
- expect(scheduler.status().flight).toBe(t.id);
- scheduler.toggle(t.id); expect(scheduler.status().pending[t.id]).toBe("pause"); expect(seen?.aborted).toBe(true);
- await pending;
- expect(scheduler.snapshot()[0]).toMatchObject({ enabled: false, state: "ready" });
- expect(scheduler.status().flight).toBeNull(); expect(scheduler.status().pending).toEqual({});
- await scheduler.tick("local", dispatch, Date.now() + 99999999); expect(dispatch).toHaveBeenCalledOnce();
+
+it("pause and delete are explicit runtime edits; the pending marker clears even when they fail", async () => {
+  const fx = runtimeFixture();
+  let release!: () => void;
+  fx.on("PATCH", "/schedules/:id", c => new Promise(resolve => { release = () => resolve(dto(c.params.id, { enabled: (c.body as { enabled: boolean }).enabled })); }));
+  fx.on("DELETE", "/schedules/:id", () => { throw new RuntimeReply(409, { message: "Таймер сейчас отправляет запрос; повторите через несколько секунд." }); });
+  const scheduler = await connect(fx);
+  scheduler.observe({ type: "schedule.updated", properties: { task: dto("t1") } });
+  const pausing = scheduler.toggle("t1");
+  await flush();
+  expect(scheduler.status().pending).toEqual({ t1: "pause" });
+  expect(fx.made("PATCH", "/schedules/:id")[0]).toMatchObject({ path: "/schedules/t1", body: { enabled: false } });
+  release();
+  await pausing;
+  expect(scheduler.snapshot()[0].enabled).toBe(false);
+  expect(scheduler.status().pending).toEqual({});
+  await expect(scheduler.remove("t1")).rejects.toMatchObject({ status: 409 });
+  expect(scheduler.snapshot().map(t => t.id)).toEqual(["t1"]);
+  expect(scheduler.status().pending).toEqual({});
+  await scheduler.toggle("unknown");
+  expect(fx.made("PATCH", "/schedules/:id")).toHaveLength(1);
 });
-it("a check that never answers is withdrawn and retried later; a send that never answers pauses", async () => {
- vi.useFakeTimers();
- const scheduler = new TaskScheduler(keyed()); scheduler.add(task, 0);
- const checking = scheduler.tick("local", untilAbort, 900000);
- await vi.advanceTimersByTimeAsync(PREFLIGHT_MS); await checking;
- expect(scheduler.snapshot()[0]).toMatchObject({ enabled: true, state: "waiting" });
- const hung = scheduler.tick("local", () => new Promise(() => {}), 960000);
- await vi.advanceTimersByTimeAsync(DISPATCH_LIMIT_MS); await hung;
- expect(scheduler.snapshot()[0]).toMatchObject({ enabled: false, state: "error" }); expect(scheduler.status().flight).toBeNull();
+
+it("while disconnected nothing is invented: edits fail with the runtime explanation and no request is made", async () => {
+  const fx = runtimeFixture();
+  const scheduler = new TaskScheduler();
+  scheduler.attach(null, "local");
+  expect(scheduler.status().storage).toBe("unavailable");
+  await expect(scheduler.add(input)).rejects.toThrow(STORAGE_FAILED);
+  expect(fx.calls).toEqual([]);
+  // A failed refresh keeps the last known mirror instead of showing an empty list.
+  scheduler.attach(fx.backend, "local");
+  await vi.waitFor(() => expect(scheduler.status().storage).toBe("ok"));
+  scheduler.observe({ type: "schedule.updated", properties: { task: dto("t1") } });
+  fx.on("GET", "/schedules", () => { throw new RuntimeReply(503); });
+  await scheduler.refresh();
+  expect(scheduler.status().storage).toBe("unavailable");
+  expect(scheduler.snapshot().map(t => t.id)).toEqual(["t1"]);
 });
-it("unreadable stored data is reported and kept in a backup instead of being overwritten", () => {
- const db = keyed(); db.m.set(KEY, "{not json");
- const scheduler = new TaskScheduler(db); expect(scheduler.status().skipped).toBe(1);
- scheduler.add(task, 0);
- expect(db.m.get(`${KEY}.unreadable`)).toBe("{not json"); expect(parseTasks(db.m.get(KEY)!).tasks).toHaveLength(1);
+
+it("moves old window-owned timers into the runtime once; in-flight or failed ones arrive paused and the old record stays as backup", async () => {
+  const KEY = "ocdesktop.scheduled-prompts.v1";
+  const old = (id: string, extra: Record<string, unknown> = {}) => ({ ...input, id, enabled: true, nextAt: 1, state: "ready", ...extra });
+  const raw = JSON.stringify([old("ready"), old("flight", { state: "dispatching" }), old("failed", { state: "error" }), old("off", { enabled: false }),
+    old("future", { mode: "once", runAt: Date.now() + 3600_000 }), old("past", { mode: "once", runAt: 1 }),
+    old("remote", { server: "ssh:box" }), old("gone", { sessionID: "deleted" })]);
+  const values = new Map([[KEY, raw]]);
+  const storage = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v); } };
+  // The runtime cutover journal (POST /migrations/cutover) publishes each record
+  // atomically in its final state: in-flight/failed/paused/missed arrive disabled
+  // (agent test/cutover.test.ts "…paused intent…"); an unmappable chat is quarantined.
+  const fx = runtimeFixture();
+  const journal = new Map<string, CutoverReceiptDTO>();
+  fx.on("POST", "/migrations/cutover", c => {
+    const batch = c.body as CutoverBatch;
+    return { receipts: batch.items.map(item => {
+      const known = journal.get(item.legacyId); if (known) return known;
+      const gone = item.session.id === "deleted";
+      const receipt: CutoverReceiptDTO = { id: `cut-${item.legacyId}`, legacyId: item.legacyId, kind: "timer", workspace: batch.workspace, state: gone ? "quarantined" : "accepted",
+        sessionID: gone ? null : "s", itemID: gone ? null : `srv-${item.legacyId}`, code: gone ? "source_not_imported" : null, reason: null, retryable: true, updatedAt: 1 };
+      journal.set(item.legacyId, receipt); return receipt;
+    }) };
+  });
+  const scheduler = await connect(fx);
+  const scope = { installation: "inst-0001", workspace: "enki-runtime:local", servers: ["local"] };
+  // Seven records of this workspace are submitted; six are accepted and the
+  // seventh ("gone": its chat was never imported) is quarantined, not counted.
+  const first = await scheduler.migrateLegacy(storage, fx.backend, scope);
+  expect(first).toMatchObject({ accepted: 6, pending: 0, invalid: 0 });
+  expect(first.quarantined).toEqual([expect.objectContaining({ legacyId: "gone", kind: "timer", state: "quarantined", sessionID: null, itemID: null, code: "source_not_imported", retryable: true })]);
+  // Durable intent: the runtime journal holds an accepted receipt for every other record.
+  expect([...journal.values()].filter(r => r.state === "accepted").map(r => r.legacyId)).toEqual(["ready", "flight", "failed", "off", "future", "past"]);
+  const [batch] = fx.made("POST", "/migrations/cutover").map(c => c.body as CutoverBatch);
+  // Only this workspace's records; every one with its own model and timing intent verbatim.
+  expect(batch.items.map(i => i.legacyId)).toEqual(["ready", "flight", "failed", "off", "future", "past", "gone"]);
+  expect(batch.items.every(i => JSON.stringify(i.timer?.model) === JSON.stringify(model))).toBe(true);
+  expect(batch.items.map(i => [i.timer?.state, i.timer?.enabled])).toEqual([["ready", true], ["dispatching", true], ["error", true], ["ready", false], ["ready", true], ["ready", true], ["ready", true]]);
+  expect(batch.items[4].timer).toMatchObject({ mode: "once", runAt: expect.any(Number) });
+  expect(batch.items[5].timer).toMatchObject({ mode: "once", runAt: 1 });
+  // The backup keeps exactly what the runtime has not accepted, plus the other workspace's record.
+  expect((JSON.parse(values.get(KEY)!) as Array<{ id: string }>).map(t => t.id)).toEqual(["remote", "gone"]);
+  expect(fx.made("POST", "/schedules")).toHaveLength(0);
+  expect(fx.made("POST", "/commands")).toHaveLength(0);
+  // Idempotent: a retry resubmits only the unaccepted record under its id and creates nothing new.
+  expect(await scheduler.migrateLegacy(storage, fx.backend, scope)).toMatchObject({ accepted: 0, quarantined: [expect.objectContaining({ legacyId: "gone" })] });
+  expect(fx.made("POST", "/migrations/cutover")[1].body).toMatchObject({ items: [expect.objectContaining({ legacyId: "gone" })] });
+  expect(journal.size).toBe(7);
+  // Unreadable or inaccessible old data is left alone.
+  values.set(KEY, "{not json");
+  expect(await scheduler.migrateLegacy(storage, fx.backend, scope)).toMatchObject({ accepted: 0, invalid: 1 });
+  expect(values.get(KEY)).toBe("{not json");
+  expect(await scheduler.migrateLegacy({ getItem: () => { throw new Error("denied"); }, setItem: () => {} }, fx.backend, scope)).toMatchObject({ accepted: 0 });
+  expect(fx.made("POST", "/migrations/cutover")).toHaveLength(2);
 });
-it("drops duplicate ids and unknown fields from stored entries", () => {
- const entry = { ...task, id: "a", enabled: true, nextAt: 1, state: "ready", injected: "<script>" };
- const { tasks, skipped } = parseTasks(JSON.stringify([entry, { ...entry, title: "dup" }]));
- expect(skipped).toBe(1); expect(tasks[0]).not.toHaveProperty("injected"); expect(tasks[0].title).toBe("CI");
-});
-it("two windows sharing a profile never dispatch the same due task twice and see each other's edits", async () => {
- const db = keyed(), a = new TaskScheduler(db, { owner: "a" }), b = new TaskScheduler(db, { owner: "b" });
- a.add(task, 0); b.refresh(); expect(b.snapshot()).toHaveLength(1);
- const sendA = vi.fn(async () => ({ kind: "sent" as const })), sendB = vi.fn(async () => ({ kind: "sent" as const }));
- await Promise.all([a.tick("local", sendA, 900000), b.tick("local", sendB, 900000)]);
- expect(sendA.mock.calls.length + sendB.mock.calls.length).toBe(1);
- b.remove(b.snapshot()[0].id); await a.tick("local", sendA, Date.now() + 99999999);
- expect(sendA.mock.calls.length + sendB.mock.calls.length).toBe(1); expect(a.snapshot()).toHaveLength(0);
-});
-it("a 'dispatching' record left by a closed window is paused for review, never resent", async () => {
- const db = keyed(), a = new TaskScheduler(db, { owner: "a" }); a.add(task, 0);
- const stored = JSON.parse(db.m.get(KEY)!); stored[0].state = "dispatching"; db.m.set(KEY, JSON.stringify(stored));
- db.m.set(LEASE, JSON.stringify({ owner: "a", until: Date.now() + 60000 }));
- const b = new TaskScheduler(db, { owner: "b" }); expect(b.snapshot()[0].state).toBe("dispatching"); // a may still be sending
- const send = vi.fn(async () => ({ kind: "sent" as const }));
- await b.tick("local", send, Date.now() + 120000); // a's lease lapsed without renewal
- expect(send).not.toHaveBeenCalled(); expect(b.snapshot()[0]).toMatchObject({ enabled: false, state: "error" });
+
+it("a late list from the previous runtime cannot overwrite the current one", async () => {
+  const old = runtimeFixture({ connection: { endpoint: "http://127.0.0.1:43001" } });
+  let answerOld!: () => void;
+  old.on("GET", "/schedules", () => new Promise(resolve => { answerOld = () => resolve({ tasks: [dto("old")] }); }));
+  const scheduler = new TaskScheduler();
+  scheduler.attach(old.backend, "a");
+  await flush();
+  const current = runtimeFixture({ connection: { endpoint: "http://127.0.0.1:43002" } });
+  current.on("GET", "/schedules", () => ({ tasks: [dto("new")] }));
+  scheduler.attach(current.backend, "b");
+  await vi.waitFor(() => expect(scheduler.snapshot().map(t => t.id)).toEqual(["new"]));
+  answerOld();
+  for (let i = 0; i < 10; i++) await flush();
+  expect(scheduler.snapshot().map(t => [t.id, t.server])).toEqual([["new", "b"]]);
+  expect(old.made("GET", "/schedules")).toHaveLength(1);
 });

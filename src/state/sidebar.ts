@@ -1,4 +1,14 @@
 import type { Session } from "../api/types";
+import type { ConnectionState } from "./types";
+
+/** The runtime event stream is the only live status source: a "running" chat or
+ * project is confirmed only while the runtime-wide stream is open and the
+ * project's status could be read. Otherwise the UI shows "?" (not confirmed). */
+export function liveStatusConfirmed(connection: Pick<ConnectionState, "phase" | "streamState" | "globalStreamState" | "statusError">,
+  directory: string, currentDirectory: string | null): boolean {
+  return connection.phase === "connected" && !(directory === currentDirectory && connection.statusError)
+    && (connection.globalStreamState ?? connection.streamState) === "open";
+}
 
 export interface SidebarList {
   sessions: Session[];

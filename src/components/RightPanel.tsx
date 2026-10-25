@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FileEntry, SessionDiffFile } from "../api/types";
-import { store, useAppState, errText } from "../state/store";
-import { OpenCodeClient } from "../api/client";
+import { store, useAppSelector, errText } from "../state/store";
+import type { AppState } from "../state/types";
+import type { RuntimeClient } from "../agent/runtime/client";
 import { sessionPatchFiles } from "../state/chatReducer";
 import { looksBinary, unifiedDiffLines } from "../util/diff";
 import { isAbsoluteLocalPath, normalizeLocalPath, pathDirname, pathIsWithin } from "../util/paths";
@@ -10,7 +11,7 @@ import { isAbsoluteLocalPath, normalizeLocalPath, pathDirname, pathIsWithin } fr
 function GeneratedDiff({ before, after }: { before?: string; after?: string }) {
   const lines = useMemo(() => unifiedDiffLines(before, after), [before, after]);
   if (lines.length === 0)
-    return <div className="panel-note">No textual changes.</div>;
+    return <div className="panel-note">Текстовых изменений нет.</div>;
   return <DiffView patch={lines.join("\n")} />;
 }
 
@@ -39,32 +40,37 @@ function DiffView({ patch }: { patch: string }) {
         </div>
       ))}
       {patch.split("\n").length > 4000 && (
-        <div className="diff-line">… diff truncated …</div>
+        <div className="diff-line">… изменения показаны не полностью …</div>
       )}
     </div>
   );
 }
 
+// Narrow subscriptions: streamed deltas of the chat must not re-render or rescan the panel.
+const changesSnapshot = (s: AppState) => {
+  const id = s.activeSessionId;
+  return { directory: s.directory, activeSessionId: id,
+    bump: id ? (s.chat.sessionPatched[id] ?? 0) : 0, patches: id ? (s.chat.sessions[id]?.patchRevision ?? 0) : 0 };
+};
+const filesSnapshot = (s: AppState) => ({ directory: s.directory });
+const panelSnapshot = (s: AppState) => ({ layout: s.prefs.layout, directory: s.directory, activeSessionId: s.activeSessionId, endpoint: s.connection.endpoint });
+
 function ChangesTab() {
-  const s = useAppState();
+  const s = useAppSelector(changesSnapshot);
   const [files, setFiles] = useState<SessionDiffFile[] | null>(null);
   const [source, setSource] = useState<"session" | "worktree">("session");
-  const engineId = store.engineIdFor();
-  const effectiveSource = engineId === "pi" ? "worktree" : source;
+  // The runtime serves both: per-session edits (/sessions/:id/diff) and Git worktree diff.
+  const effectiveSource = s.activeSessionId ? source : "worktree";
   const [open, setOpen] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  const client: OpenCodeClient = store.client;
+  const client: RuntimeClient = store.client;
   const requestGen = useRef(0);
   const openGen = useRef(0);
-  const bump = s.activeSessionId
-    ? (s.chat.sessionPatched[s.activeSessionId] ?? 0)
-    : 0;
+  const bump = s.bump;
   // After a reload the history (patch parts) can arrive after the first diff fetch; reload once they show up.
-  const patchCount = s.activeSessionId
-    ? sessionPatchFiles(s.chat.sessions[s.activeSessionId]).length
-    : 0;
+  const patchCount = s.patches;
 
   /** Expanding a patch-part-only file: content is not in the stream, so fetch it on demand. */
   const toggle = async (f: SessionDiffFile) => {
@@ -158,13 +164,13 @@ function ChangesTab() {
   return (
     <>
       <div className="panel-toolbar">
-        {engineId !== "pi" && <button
+        <button
           className={`panel-tab${effectiveSource === "session" ? " on" : ""}`}
           disabled={!s.activeSessionId}
           onClick={() => setSource("session")}
         >
           Эта задача
-        </button>}
+        </button>
         <button
           className={`panel-tab${effectiveSource === "worktree" ? " on" : ""}`}
           onClick={() => setSource("worktree")}
@@ -174,12 +180,12 @@ function ChangesTab() {
         <button
           className="btn small ghost"
           onClick={() => void load()}
-          aria-label="Refresh diff"
+          aria-label="Обновить изменения"
         >
           ↻
         </button>
       </div>
-      {loading && !files && <div className="panel-note">Loading diff…</div>}
+      {loading && !files && <div className="panel-note">Загрузка изменений…</div>}
       {error && (
         <div className="panel-note" role="alert">
           {error}
@@ -188,8 +194,8 @@ function ChangesTab() {
       {files && files.length === 0 && (
         <div className="panel-note">
           {effectiveSource === "session"
-            ? "No file changes recorded for this session yet."
-            : "No changes in the working tree versus HEAD."}
+            ? "В этой задаче пока нет изменений файлов."
+            : "В рабочей копии нет изменений относительно HEAD."}
         </div>
       )}
       {files?.map((f) => {
@@ -231,7 +237,7 @@ function ChangesTab() {
               ) : f.patch ? (
                 <DiffView patch={f.patch} />
               ) : looksBinary(f.before, f.after) ? (
-                <div className="panel-note">Binary file — no text preview.</div>
+                <div className="panel-note">Двоичный файл — текстового просмотра нет.</div>
               ) : f.before !== undefined || f.after !== undefined ? (
                 <GeneratedDiff before={f.before} after={f.after} />
               ) : openError ? (
@@ -240,7 +246,7 @@ function ChangesTab() {
                 </div>
               ) : (
                 <div className="panel-note">
-                  No patch text available for this change.
+                  Текст изменений недоступен.
                 </div>
               ))}
           </div>
@@ -251,8 +257,8 @@ function ChangesTab() {
 }
 
 function FilesTab() {
-  const s = useAppState();
-  const client: OpenCodeClient = store.client;
+  const s = useAppSelector(filesSnapshot);
+  const client: RuntimeClient = store.client;
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
   const [file, setFile] = useState<{
@@ -314,7 +320,7 @@ function FilesTab() {
       } else {
         setFile({
           path: entry.path,
-          content: "(binary or image file — not shown)",
+          content: "(двоичный файл или изображение — не показывается)",
           truncated: false,
         });
       }
@@ -339,7 +345,7 @@ function FilesTab() {
                 void loadDir(path);
               }}
             >
-              ← Back
+              ← Назад
             </button>
             <span className="crumbs" title={file.path}>
               {file.path}
@@ -351,7 +357,7 @@ function FilesTab() {
               <button
                 className="btn small ghost"
                 onClick={() => void loadDir(parent)}
-                aria-label="Parent directory"
+                aria-label="Родительская папка"
               >
                 ↑
               </button>
@@ -362,14 +368,14 @@ function FilesTab() {
             <button
               className="btn small ghost"
               onClick={() => void loadDir(path)}
-              aria-label="Refresh listing"
+              aria-label="Обновить список файлов"
             >
               ↻
             </button>
           </>
         )}
       </div>
-      {loading && <div className="panel-note">Loading…</div>}
+      {loading && <div className="panel-note">Загрузка…</div>}
       {error && (
         <div className="panel-note" role="alert">
           {error}{" "}
@@ -377,7 +383,7 @@ function FilesTab() {
             className="btn small ghost"
             onClick={() => void loadDir(path)}
           >
-            Retry
+            Повторить
           </button>
         </div>
       )}
@@ -393,7 +399,7 @@ function FilesTab() {
               </div>
             ))}
           {file.truncated && (
-            <div className="panel-note">File preview truncated.</div>
+            <div className="panel-note">Показано начало файла.</div>
           )}
         </div>
       ) : (
@@ -427,13 +433,13 @@ function FilesTab() {
 }
 
 export function RightPanel() {
-  const s = useAppState();
-  const layout = s.prefs.layout;
+  const s = useAppSelector(panelSnapshot);
+  const layout = s.layout;
   return (
     <aside
       className="right-panel"
       style={{ width: layout.rightWidth }}
-      aria-label="Review and files"
+      aria-label="Изменения и файлы"
     >
       <div className="panel-tabs">
         <button
@@ -452,7 +458,7 @@ export function RightPanel() {
         <button
           className="btn small ghost"
           onClick={() => store.setLayout({ rightOpen: false })}
-          aria-label="Close panel"
+          aria-label="Закрыть панель"
         >
           ✕
         </button>
@@ -464,10 +470,10 @@ export function RightPanel() {
           </div>
         ) : layout.rightTab === "changes" ? (
           <ChangesTab
-            key={`${s.connection.endpoint}:${s.directory}:${s.activeSessionId}`}
+            key={`${s.endpoint}:${s.directory}:${s.activeSessionId}`}
           />
         ) : (
-          <FilesTab key={`${s.connection.endpoint}:${s.directory}`} />
+          <FilesTab key={`${s.endpoint}:${s.directory}`} />
         )}
       </div>
     </aside>

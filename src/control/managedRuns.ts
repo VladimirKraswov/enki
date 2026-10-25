@@ -1,6 +1,6 @@
 // Durable state for explicitly managed long-running agent tasks.
 //
-// OpenCode owns the transcript and execution. Desktop persists only the small
+// The Enki Runtime owns the transcript and execution. Desktop persists only the small
 // supervision contract needed to survive a UI restart: where the task lives,
 // its completion marker and bounded recovery counters. No prompt, tool output,
 // credential or permission answer is copied into this store.

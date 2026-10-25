@@ -89,4 +89,6 @@ The HTTP user cannot read that key; uploaded code is never executed. Recheck
 revocation/CAS before exposing head. Keys grant app release authority, not other
 admin APIs. Signatures remain verified by clients; private key is now held by a
 trusted online signer. Deploy device_updates.py/release_signer.py with server.py
-and releases.py, plus deploy/enki-release-signer.service/install-signer.sh.
+and releases.py, model_catalog.py and durable.py (crash-durable file publication
+used by releases and the model catalog: POSIX directory fsync, Windows
+MoveFileExW write-through), plus deploy/enki-release-signer.service/install-signer.sh.

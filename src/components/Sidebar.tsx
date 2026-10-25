@@ -17,6 +17,7 @@ import { Icon } from "./Icon";
 import { pathBasename } from "../util/paths";
 import { isNative } from "../native/platform";
 import { WORKSHOP_TITLE } from "../workshop/workspace";
+import { liveStatusConfirmed } from "../state/sidebar";
 export const pickFolder = pickProjectFolder;
 
 function ActivityMark({ id, directory, pending = false }: { id: string; directory: string; pending?: boolean }) {
@@ -25,8 +26,8 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   const timers=activeTimers(tasks,id);
   const status = store.activityStatus(id);
   if (status?.type === "busy" || status?.type === "retry") {
-    const connection = store.state.connection;
-    if (!store.isPiSession(id) && ((directory === store.state.directory && !!connection.statusError) || connection.phase !== "connected" || (connection.globalStreamState ?? connection.streamState) !== "open"))
+    // Same rule as the project mark: while the stream is down, "running" is not confirmed.
+    if (!liveStatusConfirmed(store.state.connection, directory, store.state.directory))
       return <span className="pending-dot" role="status" aria-label="Нет свежего статуса задачи" title="Нет связи: выполнение пока не подтверждено">?</span>;
     return <SessionSpinner/>;
   }
@@ -45,7 +46,7 @@ function ProjectTimerMark({ directory }: { directory: string }) {
 
 const sidebarSnapshot = (s: import('../state/types').AppState) => ({
   prefs:s.prefs, connection:s.connection, directory:s.directory, activeSessionId:s.activeSessionId,
-  piHealth:s.piHealth, projects:s.projects, projectSessionLists:s.projectSessionLists,
+  projects:s.projects, projectSessionLists:s.projectSessionLists,
   recentSessionList:s.recentSessionList, sessions:s.sessions, archivedSessions:s.archivedSessions,
   activityStatuses:s.activityStatuses,
   pending:Object.keys(s.chat.permissions).join('|')+';'+Object.keys(s.chat.questions).join('|'),
@@ -73,19 +74,19 @@ export function Sidebar() {
   const [openingWorkshop, setOpeningWorkshop] = useState(false);
   const expandedKey = JSON.stringify(dirs.filter((dir) => store.isProjectExpanded(dir)));
   const hostKey = s.prefs.workspaceKey ?? s.prefs.endpoint;
-  const localPi = (s.prefs.activeHost ?? "local") === "local" && Boolean(s.piHealth?.install.installed);
+  // Every chat list comes from the connected runtime; there is no separate local agent catalogue.
   useEffect(() => {
     if (isNative() && (s.prefs.activeHost ?? "local") === "local" && s.connection.phase === "connected" && !s.prefs.workshop)
       void store.ensureWorkshop().catch(() => {});
   }, [s.connection.phase, hostKey, s.prefs.workshop]);
   useEffect(() => {
-    if (s.connection.phase === "connected" || localPi) void store.loadRecentSessions(archived);
-  }, [s.connection.phase, hostKey, archived, localPi]);
+    if (s.connection.phase === "connected") void store.loadRecentSessions(archived);
+  }, [s.connection.phase, hostKey, archived]);
   useEffect(() => {
-    if (s.connection.phase === "connected" || localPi) {
+    if (s.connection.phase === "connected") {
       for (const dir of JSON.parse(expandedKey) as string[]) void store.loadProjectSessions(dir);
     }
-  }, [s.connection.phase, hostKey, expandedKey, localPi]);
+  }, [s.connection.phase, hostKey, expandedKey]);
   useEffect(() => { setMenu(null); setRename(null); setShownByProject({}); setRecentCount(8); }, [hostKey]);
   const row = (sess: Session, prefix: string, recent = false) => {
     if (store.isWorkshopSession(sess)) return null;
@@ -224,7 +225,7 @@ export function Sidebar() {
                 <Icon name="folder" size={17} />
                 <span className="project-name">{name}</span>
                 {!expanded && <ProjectTimerMark directory={dir}/>}
-                {!expanded && store.hasRunningInDirectory(dir) && (s.prefs.projectEngine?.[dir] === "pi" || s.connection.phase === "connected" && !(dir === s.directory && s.connection.statusError) && (s.connection.globalStreamState ?? s.connection.streamState) === "open"
+                {!expanded && store.hasRunningInDirectory(dir) && (liveStatusConfirmed(s.connection, dir, s.directory)
                   ? <SessionSpinner label="В проекте выполняется задача"/>
                   : <span className="pending-dot" role="status" aria-label="Нет свежего статуса проекта">?</span>)}
                 {!expanded && store.hasUnreadInDirectory(dir) && <span className="unread-dot" role="status" aria-label="Есть непрочитанные результаты" />}

@@ -7,6 +7,7 @@ import {scheduleCommand} from "../schedules/control";
 
 import type { PermissionRequest, QuestionRequest } from "../api/types";
 import type { EngineId } from "../state/engines";
+import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
 import { store } from "../state/store";
 import { isNative } from "../native/platform";
 import { installAgentControlMcp } from "./install";
@@ -29,7 +30,7 @@ type Params = Record<string, unknown>;
 
 const MAX_MALFORMED_TOOL_RECOVERIES = 2;
 const TOOL_RECOVERY_PROMPT =
-  "Системное восстановление: предыдущий ответ завершился без выполнения, потому что вызов инструмента был выведен как обычный текст. Повтори тот же шаг сейчас через настоящий встроенный инструмент OpenCode с корректными структурированными аргументами, затем продолжи исходную задачу. Не описывай XML-теги и не завершай работу до проверки результата.";
+  "Системное восстановление: предыдущий ответ завершился без выполнения, потому что вызов инструмента был выведен как обычный текст. Повтори тот же шаг сейчас через настоящий встроенный инструмент агента с корректными структурированными аргументами, затем продолжи исходную задачу. Не описывай XML-теги и не завершай работу до проверки результата.";
 
 const COMPLETION_MARKER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_CHECKPOINT_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/ -]{1,240}$/;
@@ -71,11 +72,17 @@ function boolean(params: Params, name: string, fallback: boolean): boolean {
   return value;
 }
 
+/**
+ * The bundled runtime (tag "pi") executes every chat. A request naming the
+ * retired OpenCode engine is refused before anything is selected or sent, so
+ * an automation caller is never silently served by a different engine.
+ */
 function engine(params: Params, required = false): EngineId | undefined {
   const id = text(params, "engine", required);
   if (id === undefined) return undefined;
-  if (id !== "opencode" && id !== "pi")
-    throw new Error("engine must be opencode or pi");
+  if (id === "opencode")
+    throw new Error("engine opencode is retired: every chat runs in the bundled Enki runtime (engine \"pi\" or omit it). Nothing was sent.");
+  if (id !== RUNTIME_AGENT_ID) throw new Error(`engine must be "${RUNTIME_AGENT_ID}" or omitted`);
   return id;
 }
 
@@ -181,19 +188,9 @@ function configure(params: Params): void {
 async function send(params: Params) {
   const directory = text(params, "directory")!;
   const sessionId = text(params, "session_id", false);
-  const requestedEngine = engine(params);
+  engine(params); // only the runtime tag (or none) is accepted, before any selection
   await selectSession(directory, sessionId);
-  if (!sessionId) {
-    await store.selectSession(null);
-    if (requestedEngine) store.setSessionEngine(null, requestedEngine);
-  } else if (
-    requestedEngine &&
-    store.engineIdFor(sessionId, directory) !== requestedEngine
-  ) {
-    throw new Error(
-      "an existing chat cannot change engines; create a new chat or use the existing engine",
-    );
-  }
+  if (!sessionId) await store.selectSession(null);
   configure(params);
   const completionMarker = text(params, "completion_marker", false) ?? null;
   if (completionMarker && !COMPLETION_MARKER.test(completionMarker))
@@ -282,6 +279,10 @@ function waitForStateChange(
           status: runStatus,
           error: store.state.chat.sessions[sessionId].lastError,
         });
+      } else if (!running && store.state.chat.sessions[sessionId]?.lastOutcome?.state === "failed") {
+        // Idle is delivery, not success: e.g. an unrecovered output-limit stop.
+        const outcome = store.state.chat.sessions[sessionId].lastOutcome!;
+        finish({ outcome: "failed", status: runStatus, error: outcome.error, reason: outcome.reason });
       } else if (!running) {
         finish({ outcome: "idle", status: runStatus });
       } else if (Date.now() >= deadline) {
@@ -541,7 +542,7 @@ async function waitUntilSettled(
         outcome: "recovery_failed",
         status: activeStatus(sessionId),
         recoveryKind,
-        error: store.state.ui.sendError ?? "OpenCode rejected the recovery prompt",
+        error: store.state.ui.sendError ?? "the Enki runtime did not accept the recovery prompt",
       };
     }
     if (Date.now() >= deadline) {
@@ -662,10 +663,9 @@ async function execute(method: string, raw: unknown): Promise<unknown> {
     }
     case "new_chat": {
       const directory = text(params, "directory")!;
+      engine(params); // refuse a retired engine before changing the visible selection
       await selectDirectory(directory);
       await store.selectSession(null);
-      const requestedEngine = engine(params);
-      if (requestedEngine) store.setSessionEngine(null, requestedEngine);
       return status();
     }
     case "configure":

@@ -1,27 +1,69 @@
 import { SettingHelp } from "./SettingHelp";
-// Pi's own settings section. Deliberately separate from the OpenCode sections:
-// nothing here is shared, and no OpenCode setting applies to Pi.
-//
-// Everything shown is read back from the running Pi CLI (`--version`,
-// `get_available_models`, `get_commands`, `get_state`), so the screen cannot
-// claim a capability the installed engine does not have. Credentials are never
-// displayed or stored by this app — Pi owns its own authentication.
-
-import { useEffect, useState, type ReactNode } from "react";
-import { store, useAppState } from "../state/store";
-import { PI_CAPABILITIES } from "../agent/pi/backend";
-import { piAvailability } from "../state/engines";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { store, useAppState, errText } from "../state/store";
+import { RUNTIME_CAPABILITIES } from "../agent/runtime/backend";
+import type { ConfigStatusDTO, PackageStatusDTO, ResourcePathStatusDTO, ResourceStatusDTO, RuntimeSettingsDTO } from "../agent/runtime/client";
+import type { CapabilitiesDTO, ModelRef } from "../../src-tauri/resources/agent/src/protocol";
 import { isAbsoluteLocalPath } from "../util/paths";
 
-function Row({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: ReactNode;
+/** Sanitized import state (no paths/values) in owner language. */
+export function configSummary(status: ConfigStatusDTO | null, defaults: { model: ModelRef | null; code: string | null } | null): string {
+  if (!status) return "Состояние неизвестно";
+  if (status.pendingRestart) return "Перенесено · применится после перезапуска Enki";
+  const state = status.state === "ready" ? "Перенесено и действует" : status.state === "shadowed" ? "Перенесено, но перекрыто собственными настройками Enki"
+    : status.state === "blocked" ? `Перенос заблокирован${status.code ? ` (${status.code})` : ""}` : "Не переносились";
+  const model = defaults?.model ? ` · модель по умолчанию: ${defaults.model.providerID}/${defaults.model.modelID}`
+    : defaults?.code ? " · модель по умолчанию недоступна в каталоге" : "";
+  return state + model;
+}
+export function configImportError(error: unknown): string {
+  const text = errText(error);
+  if (/CONFIG_SOURCE_UNCONFIGURED/.test(text)) return "Для этого профиля Enki не задан каталог прежних настроек Pi; ничего не прочитано.";
+  if (/CONFIG_NATIVE_UNAVAILABLE/.test(text)) return "Перенос доступен только для Enki на этом компьютере с хранилищем ключей; файл auth.json не используется.";
+  return text;
+}
+const DEFERRED: Record<string, string> = { extensions: "расширения", skills: "навыки", prompts: "шаблоны", themes: "темы", packages: "пакеты" };
+/** `/settings/skills` → owner-language name of the not-activated imported key. */
+export function deferredLabel(pointer: string): string {
+  const key = pointer.split("/").filter(Boolean).pop() ?? pointer;
+  return DEFERRED[key] ?? key;
+}
+function missing(status: ResourcePathStatusDTO[] | undefined, path: string): ReactNode {
+  return status?.some((item) => item.path === path && !item.present) ? <b> · не найден, не загружается</b> : null;
+}
+/** What the runtime actually loads from one local package, and why not the rest. */
+export function packageSummary(status: PackageStatusDTO | undefined): string {
+  if (!status) return "состояние неизвестно";
+  if (!status.present) return "не найден, не загружается";
+  const parts = [["расширений", status.extensions], ["навыков", status.skills], ["шаблонов", status.prompts], ["тем", status.themes]] as const;
+  const loaded = parts.filter(([, count]) => count > 0).map(([label, count]) => `${label}: ${count}`);
+  return loaded.length ? loaded.join(", ") : "ресурсов не загружено";
+}
+function PackageDetails({ status }: { status?: PackageStatusDTO }) {
+  return <>
+    <small> · {packageSummary(status)}</small>
+    {!!status?.diagnostics.length && <ul className="handoff-note" aria-label="Диагностика пакета">
+      {status.diagnostics.map((line) => <li key={line}>{line}</li>)}</ul>}
+  </>;
+}
+function ExplicitPaths({ title, description, placeholder, paths, status, disabled, onChange, detail }: {
+  title: string; description: string; placeholder: string; paths: string[]; status?: ResourcePathStatusDTO[]; disabled: boolean; onChange(paths: string[]): void;
+  /** Extra per-path status (local packages); default: only "missing". */
+  detail?(path: string): ReactNode;
 }) {
+  const [value, setValue] = useState("");
+  const path = value.trim();
+  return <>
+    <Row title={title} description={description}>
+      <input aria-label={title} spellCheck={false} placeholder={placeholder} value={value} onChange={(e) => setValue(e.target.value)} />
+      <button className="btn" disabled={disabled || !isAbsoluteLocalPath(path) || paths.includes(path) || paths.length >= 64}
+        onClick={() => { onChange([...paths, path]); setValue(""); }}>Добавить</button>
+    </Row>
+    {paths.map(item => <div className="kv" key={item}><span>{item}{detail ? detail(item) : missing(status, item)}</span>
+      <button className="btn" disabled={disabled} onClick={() => onChange(paths.filter(x => x !== item))}>Убрать</button></div>)}
+  </>;
+}
+function Row({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
     <div className="setting-row">
       <div className="setting-label">
@@ -40,424 +82,234 @@ function Group({ title, children, hidden }: { title: string; children: ReactNode
   );
 }
 
+/**
+ * Settings of the single executing agent: the bundled Enki Runtime (Pi SDK) of
+ * this computer or of the selected SSH host. Nothing here starts a process; the
+ * former Pi CLI / Node program paths no longer exist.
+ */
 export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const s = useAppState();
-  const [tab, setTab] = useState("connection");
-  const settings = s.prefs.pi ?? {};
-  const [program, setProgram] = useState(settings.program ?? "");
-  const [nodeProgram, setNodeProgram] = useState(settings.nodeProgram ?? "");
+  const [tab, setTab] = useState("runtime");
+  const prefs = s.prefs.pi ?? {};
+  const connected = s.connection.phase === "connected";
+  const backendForRender = store.maybeBackend();
+  const workspace = s.prefs.workspaceKey ?? s.prefs.endpoint;
+  const runtimeScope = useRef({ backend: backendForRender, workspace, connected });
+  if (runtimeScope.current.backend !== backendForRender || runtimeScope.current.workspace !== workspace || runtimeScope.current.connected !== connected)
+    runtimeScope.current = { backend: backendForRender, workspace, connected };
+  const captureRuntime = () => {
+    const scope = runtimeScope.current;
+    return { backend: scope.backend, current: () => runtimeScope.current === scope && scope.backend === store.maybeBackend() };
+  };
+  const [runtime, setRuntime] = useState<RuntimeSettingsDTO | null>(null);
+  const [caps, setCaps] = useState<CapabilitiesDTO | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [lsp, setLsp] = useState<{ servers: string[]; missing: string[] } | null>(null);
   const [access, setAccess] = useState<{ ok: boolean; detail: string } | null>(null);
   const [checkingModel, setCheckingModel] = useState("");
-  const [custom, setCustom] = useState(settings.customModel ?? "");
+  const [custom, setCustom] = useState(prefs.customModel ?? "");
   const [extension, setExtension] = useState("");
   const [serverPath, setServerPath] = useState("");
-  const dirty = program !== (settings.program ?? "") || nodeProgram !== (settings.nodeProgram ?? "") || custom !== (settings.customModel ?? "") || !!extension || !!serverPath;
+  const [gitProgram, setGitProgram] = useState("");
+  const dirty = custom !== (prefs.customModel ?? "") || !!extension || !!serverPath || (runtime !== null && gitProgram !== (runtime.gitProgram ?? ""));
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
-  const health = s.piHealth;
-  const local = piAvailability(s.prefs);
 
-  useEffect(() => {
-    setProgram(s.prefs.pi?.program ?? "");
-  }, [s.prefs.pi?.program]);
-  useEffect(() => {
-    setNodeProgram(s.prefs.pi?.nodeProgram ?? "");
-  }, [s.prefs.pi?.nodeProgram]);
-
-  const probe = async () => {
-    setBusy(true);
-    setError("");
+  const [resources, setResources] = useState<ResourceStatusDTO | null>(null);
+  const [config, setConfig] = useState<{ status: ConfigStatusDTO | null; defaults: { model: ModelRef | null; code: string | null } | null }>({ status: null, defaults: null });
+  const load = async () => {
+    const { backend, current } = captureRuntime();
+    if (!current()) return;
+    if (!backend || !connected) { setRuntime(null); setCaps(null); setResources(null); setBusy(false); setConfig({ status: null, defaults: null }); return; }
+    setBusy(true); setError("");
     try {
-      await store.refreshPiHealth();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+      const [settings, capabilities] = await Promise.all([backend.client.settings(), backend.client.capabilities()]);
+      // Optional on older runtimes: absence is shown as "unknown", never as "none".
+      const [status, defaults, paths] = await Promise.all([
+        Promise.resolve().then(() => backend.client.configStatus()).catch(() => null),
+        Promise.resolve().then(() => backend.client.configDefaults()).catch(() => null),
+        Promise.resolve().then(() => backend.client.resourceStatus()).catch(() => null),
+      ]);
+      if (!current()) return;
+      setRuntime(settings); setCaps(capabilities); setGitProgram(settings.gitProgram ?? ""); setConfig({ status, defaults }); setResources(paths);
+    } catch (e) { if (current()) setError(errText(e)); }
+    finally { if (current()) setBusy(false); }
   };
+  /** Explicit owner action; the runtime refuses (501) when this profile has no Pi source. */
+  const importConfig = async () => {
+    const { backend, current } = captureRuntime();
+    if (!backend || !current() || store.currentHost()) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await backend.client.importPiAgent();
+      if (!current()) return;
+      const status = await backend.client.configStatus().catch(() => null);
+      if (!current()) return;
+      setConfig(current => ({ ...current, status }));
+      setNotice(status?.pendingRestart ? "Настройки Pi перенесены в хранилище Enki. Они применятся после перезапуска Enki." : "Настройки Pi перенесены.");
+    } catch (e) { if (current()) setError(configImportError(e)); }
+    finally { if (current()) setBusy(false); }
+  };
+  useEffect(() => { void load(); }, [connected, workspace, backendForRender]);
+  // `runtime.settings` from the connected runtime (any window or client) replaces the shown values.
+  useEffect(() => store.onRuntimeSettings(settings => setRuntime(current => current ? settings : current)), []);
 
-  useEffect(() => {
-    if (!health) void probe();
-    // Intentionally once: probing starts a Pi process, so it is user-driven.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const install = health?.install;
-  const lspExtensions = settings.extensions ?? [];
-  // The toggle must describe reality: without an installed extension there is
-  // nothing to enable, whatever the stored preference says.
-  const lspInstalled = lspExtensions.some((path) => path.endsWith("lsp-extension.ts"));
+  /** Runtime-owned settings: the runtime validates, persists and announces them. */
+  const save = async (patch: Partial<RuntimeSettingsDTO>, done = "Сохранено. Новые сессии агента получат изменения.") => {
+    const { backend, current } = captureRuntime();
+    if (!backend || !current()) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const settings = await backend.client.saveSettings(patch);
+      if (!current()) return;
+      setRuntime(settings); setNotice(done);
+      // Path lists changed: show which of them actually exist on the runtime host.
+      if (patch.extensionPaths || patch.skillPaths || patch.promptPaths || patch.packagePaths) {
+        const paths = await Promise.resolve().then(() => backend.client.resourceStatus()).catch(() => null);
+        if (current()) setResources(paths);
+      }
+    }
+    catch (e) { if (current()) setError(errText(e)); }
+    finally { if (current()) setBusy(false); }
+  };
   const checkModel = async (id: string) => {
-    setBusy(true);
-    setCheckingModel(id);
-    setAccess(null);
-    try {
-      setAccess(await store.checkPiModelAccess(id));
-    } finally {
-      setCheckingModel("");
-      setBusy(false);
-    }
+    setBusy(true); setCheckingModel(id); setAccess(null);
+    try { setAccess(await store.checkPiModelAccess(id)); }
+    finally { setCheckingModel(""); setBusy(false); }
   };
+  const options = store.piModelOptions();
+  const extensions = runtime?.extensionPaths ?? [];
+  const lspInstalled = (prefs.extensions ?? []).some(path => path.endsWith("lsp-extension.ts")) || prefs.lspEnabled === true;
+  // An older runtime without the field followed only its config file (= on).
+  const lspOn = runtime ? runtime.lspEnabled !== false : prefs.lspEnabled !== false;
 
   return (
-    <section className="pi-settings" aria-label="Pi">
+    <section className="pi-settings" aria-label="Агент Enki">
+      <nav className="settings-agent-tabs" aria-label="Настройки агента">{[
+        ["runtime", "Среда выполнения"], ["models", "Модели"], ["extensions", "Расширения и LSP"], ["capabilities", "Возможности"],
+      ].map(([id, title]) => <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{title}</button>)}</nav>
 
-
-      <nav className="settings-agent-tabs" aria-label="Настройки Pi">{[
-        ["connection","Подключение"],["models","Модели"],["extensions","Расширения и LSP"],["capabilities","Возможности"],
-      ].map(([id,title]) => <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{title}</button>)}</nav>
-      <Group title="Установка" hidden={tab !== "connection"}>
-        <Row title="Состояние">
-          <span>
-            {busy
-              ? "Проверка…"
-              : install?.installed
-                ? `Найден · версия ${install.version}`
-                : (install?.error ?? "Не проверено")}
-          </span>
+      <Group title="Среда выполнения" hidden={tab !== "runtime"}>
+        <Row title="Состояние" description="Встроенная среда выполнения запускается вместе с Enki; для SSH-хоста — установленная там среда. Отдельный агент не устанавливается.">
+          <span>{connected ? `Подключена · ${s.connection.version ?? ""} · ${store.hostLabel()}` : "Не подключена"}</span>
         </Row>
-        {install && !install.installed && <Row title="Установка Pi" description="Откройте официальную инструкцию, установите CLI и нажмите «Сохранить и проверить». Установка не выполняется автоматически."><button className="btn" onClick={() => void import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl("https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#getting-started"))}>Установить Pi…</button></Row>}
-        <Row
-          title="Путь к Pi"
-          description="Абсолютный путь. Пусто — искать в известных местах установки."
-        >
-          <input
-            aria-label="Путь к исполняемому файлу Pi"
-            spellCheck={false}
-            placeholder="/opt/homebrew/bin/pi"
-            value={program}
-            onChange={(e) => setProgram(e.target.value)}
-          />
+        <Row title="Доступ к инструментам по умолчанию" description="Для чатов без своих правил. «Спрашивать» — безопасное значение: без ответа действие отклоняется. Явные запреты чата действуют всегда.">
+          <select aria-label="Доступ к инструментам по умолчанию" disabled={!runtime || busy} value={runtime?.defaultPolicy ?? "ask"}
+            onChange={(e) => { const value = e.target.value; void save({ defaultPolicy: value === "full" ? "full" : value === "read" ? "read" : "ask" }); }}>
+            <option value="ask">Спрашивать подтверждение</option>
+            <option value="read">Только чтение</option>
+            <option value="full">Полный доступ без запроса</option>
+          </select>
         </Row>
-        <Row title="Обнаружено" description={install?.source || "—"}>
-          <span>{install?.path || "—"}</span>
+        <Row title="Сжатие контекста" description="Агент сжимает старую часть истории, когда контекст модели заполняется.">
+          <label className="switch-label">
+            <input type="checkbox" disabled={!runtime || busy} checked={runtime?.compaction.enabled ?? true}
+              onChange={(e) => runtime && void save({ compaction: { ...runtime.compaction, enabled: e.target.checked } })} />
+            <span>{runtime?.compaction.enabled === false ? "Выключено" : "Включено"}</span>
+          </label>
         </Row>
-        <Row title="Путь к Node.js" description="Для Pi, установленного через npm. Пусто — искать рядом с Pi и в известных местах.">
-          <input aria-label="Путь к Node.js для Pi" spellCheck={false} placeholder="/opt/homebrew/bin/node" value={nodeProgram} onChange={(e) => setNodeProgram(e.target.value)} />
+        <Row title="Путь к Git" description="Абсолютный путь на компьютере среды выполнения. Пусто — искать автоматически.">
+          <input aria-label="Путь к Git" spellCheck={false} disabled={!runtime} placeholder="/usr/bin/git" value={gitProgram} onChange={(e) => setGitProgram(e.target.value)} />
         </Row>
         <div className="btn-row">
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={() => {
-              store.setPiSettings({ program: program.trim() || undefined, nodeProgram: nodeProgram.trim() || undefined });
-              void probe();
-            }}
-          >
-            Сохранить и проверить
-          </button>
-        </div>
-      </Group>
-
-      <Group title="Подключение" hidden={tab !== "connection"}>
-        <Row
-          title="Где выполняется"
-          description="Pi работает только на этом компьютере: у режима RPC нет сетевого транспорта."
-        >
-          <span>{local.available ? "Этот компьютер" : "Недоступен"}</span>
-        </Row>
-        {!local.available && (
-          <p role="status" className="handoff-note">
-            {local.reason}
-          </p>
-        )}
-        <Row
-          title="Учётные данные"
-          description="Ключи провайдеров хранит сам Pi (переменные окружения или его хранилище). Приложение их не читает, не показывает и не сохраняет."
-        >
-          <span>
-            {install?.installed
-              ? "Проверяются самим Pi при запросе"
-              : "—"}
-          </span>
-        </Row>
-        <Row
-          title="Доступ к выбранной модели"
-          description="Настроенная модель — это ещё не доступ. Проверяйте нужные модели ниже: каждая проверка отправляет один минимальный запрос. В чате доступны только проверенные модели."
-        >
-          <span>
-            {access
-              ? access.ok
-                ? `Подтверждён · ${access.detail}`
-                : `Не подтверждён · ${access.detail}`
-              : settings.verifiedModel
-                ? `Подтверждён ранее: ${settings.verifiedModel}`
-                : "Не проверялся"}
-          </span>
-        </Row>
-        <div className="btn-row">
-          <button
-            className="btn"
-            disabled={busy || !install?.installed || !store.getModelChoice("pi")}
-            onClick={() => {
-              const choice = store.getModelChoice("pi");
-              if (choice) void checkModel(`${choice.providerID}/${choice.modelID}`);
-            }}
-          >
-            Проверить выбранную модель
-          </button>
+          <button className="btn" disabled={!runtime || busy || gitProgram === (runtime?.gitProgram ?? "") || (!!gitProgram.trim() && !isAbsoluteLocalPath(gitProgram.trim()))}
+            onClick={() => void save({ gitProgram: gitProgram.trim() || null })}>Сохранить путь</button>
+          <button className="btn" disabled={busy || !connected} onClick={() => void load()}>Обновить</button>
         </div>
       </Group>
 
       <Group title="Модели" hidden={tab !== "models"}>
-        <Row
-          title="Свой идентификатор модели"
-          description="provider/model. Используется, даже если модели нет во встроенном каталоге Pi — Pi принимает такие идентификаторы как пользовательские."
-        >
-          <input
-            aria-label="Свой идентификатор модели Pi"
-            spellCheck={false}
-            placeholder="deepseek/deepseek-flash"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            onBlur={() => store.setPiCustomModel(custom)}
-          />
+        <Row title="Выбранная модель" description="Настроенная модель — ещё не доступ. Проверка отправляет один минимальный запрос через среду выполнения.">
+          <span>{access ? `${access.ok ? "Подтверждён" : "Не подтверждён"} · ${access.detail}` : prefs.verifiedModel ? `Подтверждён ранее: ${prefs.verifiedModel}` : "Не проверялся"}</span>
+          <button className="btn" disabled={busy || !connected || !store.getModelChoice()} onClick={() => { const choice = store.getModelChoice(); if (choice) void checkModel(`${choice.providerID}/${choice.modelID}`); }}>Проверить</button>
         </Row>
-
-        {custom.trim() && <div className="btn-row">
-          <button className="btn" disabled={busy || !install?.installed || !/^[^/]+\/.+/.test(custom.trim())}
-            onClick={() => { store.setPiCustomModel(custom); void checkModel(custom.trim()); }}>
-            {checkingModel === custom.trim() ? "Проверка…" : "Проверить свою модель"}
-          </button>
-        </div>}
-        {health?.models.length ? (
-          <div className="pi-model-list">
-            {health.models.map((m) => (
-              <div className="kv" key={`${m.provider}/${m.id}`}>
-                <span>
-                  {m.name ?? m.id}
-                  <small>{m.provider}</small>
-                </span>
-                <b>
-                  {m.contextWindow
-                    ? `${Math.round(m.contextWindow / 1000)}K контекст`
-                    : ""}
-                  {m.reasoning ? " · рассуждение" : ""}
-                  {(m.input ?? []).includes("image") ? " · изображения" : ""}
-                </b>
-                <button className="btn" disabled={busy || !install?.installed}
-                  onClick={() => void checkModel(`${m.provider}/${m.id}`)}>
-                  {checkingModel === `${m.provider}/${m.id}` ? "Проверка…" :
-                    settings.verifiedModels?.[`${m.provider}/${m.id}`] || settings.verifiedModel === `${m.provider}/${m.id}`
-                      ? "Проверена · повторить" : "Проверить"}
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="handoff-note">
-            {install?.installed
-              ? "Pi не сообщил ни одной модели. Настройте провайдера в самом Pi (`pi auth` или ~/.pi/agent/models.json)."
-              : "Сначала установите Pi."}
-          </p>
-        )}
+        <Row title="Настройки прежнего Pi" description="Однократный явный перенос models.json и ключей из каталога прежнего Pi в хранилище Enki. Исходные файлы не изменяются; применяется после перезапуска Enki.">
+          <span>{configSummary(config.status, config.defaults)}</span>
+          <button className="btn" disabled={busy || !connected || !!store.currentHost() || !!config.status?.pendingRestart} onClick={() => void importConfig()}>Перенести</button>
+        </Row>
+        <Row title="Свой идентификатор модели" description="provider/model — для моделей вне встроенного каталога.">
+          <input aria-label="Свой идентификатор модели" spellCheck={false} placeholder="deepseek/deepseek-flash" value={custom}
+            onChange={(e) => setCustom(e.target.value)} onBlur={() => store.setPiCustomModel(custom)} />
+          {custom.trim() && <button className="btn" disabled={busy || !connected || !/^[^/]+\/.+/.test(custom.trim())}
+            onClick={() => { store.setPiCustomModel(custom); void checkModel(custom.trim()); }}>{checkingModel === custom.trim() ? "Проверка…" : "Проверить"}</button>}
+        </Row>
+        {options.length ? <div className="pi-model-list">{options.map(m => {
+          const id = `${m.providerID}/${m.modelID}`;
+          return <div className="kv" key={id}><span>{m.label}<small>{m.providerID}</small></span>
+            <button className="btn" disabled={busy || !connected} onClick={() => void checkModel(id)}>
+              {checkingModel === id ? "Проверка…" : m.verified ? "Проверена · повторить" : "Проверить"}</button></div>;
+        })}</div> : <p className="handoff-note">{connected ? "Среда выполнения не сообщила моделей. Добавьте провайдера в разделе «Модели (Hub)» или ключ API." : "Нет подключения к среде выполнения."}</p>}
       </Group>
 
-      <Group title="Расширения, навыки и LSP" hidden={tab !== "extensions"}>
-        <Row
-          title="Языковые серверы (LSP)"
-          description={
-            lspInstalled
-              ? "Расширение установлено и передаётся Pi при запуске сессии."
-              : "Расширение ещё не установлено — нажмите «Настроить LSP» ниже."
-          }
-        >
+      <Group title="Расширения и LSP" hidden={tab !== "extensions"}>
+        <Row title="Расширения агента" description="Абсолютные пути к расширениям Pi на компьютере среды выполнения. Их интерфейсы (виджеты, диалоги, собственные экраны и редактор) показываются над полем ввода чата.">
+          <span>{extensions.length ? `${extensions.length} шт.` : "Нет"}</span>
+        </Row>
+        <Row title="Добавить расширение" description="Абсолютный путь к .ts/.js файлу расширения.">
+          <input aria-label="Путь к расширению" spellCheck={false} placeholder="/home/user/.pi/agent/extensions/my.ts" value={extension} onChange={(e) => setExtension(e.target.value)} />
+          <button className="btn" disabled={!runtime || busy || !isAbsoluteLocalPath(extension.trim())} onClick={() => {
+            const path = extension.trim();
+            if (!extensions.includes(path)) void save({ extensionPaths: [...extensions, path] });
+            setExtension("");
+          }}>Добавить</button>
+        </Row>
+        {extensions.map(path => <div className="kv" key={path}><span>{path}{missing(resources?.extensions, path)}</span>
+          <button className="btn" disabled={busy} onClick={() => void save({ extensionPaths: extensions.filter(x => x !== path) })}>Убрать</button></div>)}
+        <ExplicitPaths title="Навыки" description="Абсолютные пути к файлам или каталогам навыков Pi на компьютере среды выполнения. Загружаются только указанные здесь и включённые в общем каталоге; ничего не ищется автоматически."
+          placeholder="/home/user/.pi/agent/skills/my-skill" paths={runtime?.skillPaths ?? []} status={resources?.skills} disabled={!runtime || busy || runtime.skillPaths === undefined}
+          onChange={(skillPaths) => void save({ skillPaths })} />
+        <ExplicitPaths title="Шаблоны запросов" description="Абсолютные пути к файлам или каталогам шаблонов Pi (prompt templates) на компьютере среды выполнения."
+          placeholder="/home/user/.pi/agent/prompts" paths={runtime?.promptPaths ?? []} status={resources?.prompts} disabled={!runtime || busy || runtime.promptPaths === undefined}
+          onChange={(promptPaths) => void save({ promptPaths })} />
+        <ExplicitPaths title="Пакеты Pi" description="Абсолютный путь к локальной папке пакета Pi на компьютере среды выполнения (package.json с полем pi или папки extensions/skills/prompts/themes). Пакеты подключаются только из выбранной локальной папки; npm/git-пакеты не скачиваются и не устанавливаются. Расширения пакета — доверенный код: он выполняется с правами агента, поэтому добавляйте только пакеты, которым доверяете. Ссылки за пределы папки пакета, шаблоны путей и файлы .gitignore не поддерживаются — такие записи не загружаются и показываются ниже. При совпадении имён ресурс пакета важнее навыка или шаблона, указанного выше отдельно (как в Pi)."
+          placeholder="/home/user/pi-packages/my-package" paths={runtime?.packagePaths ?? []} disabled={!runtime || busy || runtime.packagePaths === undefined}
+          onChange={(packagePaths) => void save({ packagePaths })}
+          detail={(path) => <PackageDetails status={resources?.packages?.find((item) => item.path === path)} />} />
+        {!!resources?.deferred.length && <p className="handoff-note">
+          Из настроек прежнего Pi не включены автоматически: {resources.deferred.map(deferredLabel).join(", ")}. Добавьте нужные расширения, навыки и шаблоны явно выше.
+          Пакеты Pi (npm/git) Enki не скачивает и не устанавливает: укажите локальную папку уже установленного пакета в разделе «Пакеты Pi».</p>}
+        <Row title="Языковые серверы (LSP)" description="Собственное расширение Enki без фоновых демонов; находит установленные серверы на этом компьютере.">
           <label className="switch-label">
-            <input
-              type="checkbox"
-              disabled={!lspInstalled}
-              checked={lspInstalled && settings.lspEnabled !== false}
-              onChange={(e) => store.setPiSettings({ lspEnabled: e.target.checked })}
-            />
-            <span>
-              {!lspInstalled
-                ? "Не установлено"
-                : settings.lspEnabled === false
-                  ? "Выключено"
-                  : "Включено"}
-            </span>
+            {/* Runtime-owned switch of the connected host; the legacy UI pref is only a one-time migration input. */}
+            <input type="checkbox" aria-label="Языковые серверы (LSP)" disabled={!lspInstalled || !runtime || busy || !!store.currentHost()} checked={lspInstalled && lspOn}
+              onChange={(e) => void save({ lspEnabled: e.target.checked }, e.target.checked ? "Языковые серверы включены для новых чатов." : "Языковые серверы выключены для новых чатов.")} />
+            <span>{!lspInstalled ? "Не настроено" : store.currentHost() ? "Только на этом компьютере" : lspOn ? "Включено" : "Выключено"}</span>
           </label>
+          <button className="btn" disabled={busy} onClick={async () => {
+            setBusy(true); setError("");
+            try { setLsp(await store.setupPiLsp()); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
+            // Setup also enables the runtime switch; show the runtime's own value.
+            void load();
+          }}>Настроить LSP</button>
         </Row>
-        <Row
-          title="Доступ Pi к инструментам"
-          description="Встроенные write/edit/bash самого Pi. «Спрашивать» — безопасное значение по умолчанию; при закрытом окне или без ответа действие отклоняется."
-        >
-          <select
-            aria-label="Доступ Pi к инструментам"
-            value={settings.toolPolicy === "full" ? "full" : "ask"}
-            onChange={(e) =>
-              store.setPiSettings({
-                toolPolicy: e.target.value === "full" ? "full" : "ask",
-              })
-            }
-          >
-            <option value="ask">Спрашивать подтверждение</option>
-            <option value="full">Полный доступ без запроса</option>
-          </select>
+        {lsp && <>
+          {lsp.servers.map(line => <div className="kv" key={line}><span>{line}</span><b>готов</b></div>)}
+          {lsp.missing.length > 0 && <p className="handoff-note">Не найдены серверы: {lsp.missing.join(", ")}. Установите их сами и повторите.</p>}
+        </>}
+        <Row title="Путь к языковому серверу" description="Абсолютный путь, пробуется раньше встроенных (приложение из Finder не наследует PATH).">
+          <input aria-label="Путь к языковому серверу" spellCheck={false} placeholder="/opt/homebrew/bin/rust-analyzer" value={serverPath} onChange={(e) => setServerPath(e.target.value)} />
+          <button className="btn" disabled={!isAbsoluteLocalPath(serverPath.trim())} onClick={() => {
+            const path = serverPath.trim(), current = prefs.lspServerPaths ?? [];
+            if (!current.includes(path)) store.setPiSettings({ lspServerPaths: [...current, path] });
+            setServerPath("");
+          }}>Добавить путь</button>
         </Row>
-        <Row
-          title="Подключить языковые серверы"
-          description="Ставит собственное расширение приложения (без сторонних зависимостей и фоновых демонов) и находит установленные серверы."
-        >
-          <button
-            className="btn"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError("");
-              try {
-                const result = await store.setupPiLsp();
-                setLsp(result);
-              } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            Настроить LSP
-          </button>
-        </Row>
-        {lsp && (
-          <>
-            {lsp.servers.map((line) => (
-              <div className="kv" key={line}>
-                <span>{line}</span>
-                <b>готов</b>
-              </div>
-            ))}
-            {lsp.missing.length > 0 && (
-              <p className="handoff-note">
-                Не найдены серверы: {lsp.missing.join(", ")}. Установите их сами
-                (например, «rustup component add rust-analyzer» или
-                «npm i -g typescript-language-server») и повторите.
-              </p>
-            )}
-          </>
-        )}
-        <Row
-          title="Загружаемые расширения"
-          description="Абсолютные пути, передаются Pi через --extension при запуске сессии."
-        >
-          <span>{lspExtensions.length ? `${lspExtensions.length} шт.` : "Нет"}</span>
-        </Row>
-        <Row
-          title="Путь к языковому серверу"
-          description="Абсолютный путь, пробуется раньше встроенных. Нужен, когда приложение запущено из Finder и не наследует PATH."
-        >
-          <input
-            aria-label="Путь к языковому серверу"
-            spellCheck={false}
-            placeholder="/opt/homebrew/bin/rust-analyzer"
-            value={serverPath}
-            onChange={(e) => setServerPath(e.target.value)}
-          />
-        </Row>
-        <div className="btn-row">
-          <button
-            className="btn"
-            disabled={!isAbsoluteLocalPath(serverPath)}
-            onClick={() => {
-              const path = serverPath.trim();
-              const current = settings.lspServerPaths ?? [];
-              if (!current.includes(path))
-                store.setPiSettings({ lspServerPaths: [...current, path] });
-              setServerPath("");
-            }}
-          >
-            Добавить путь
-          </button>
-        </div>
-        {(settings.lspServerPaths ?? []).map((path) => (
-          <div className="kv" key={path}>
-            <span>{path}</span>
-            <button
-              className="btn"
-              onClick={() =>
-                store.setPiSettings({
-                  lspServerPaths: (settings.lspServerPaths ?? []).filter((x) => x !== path),
-                })
-              }
-            >
-              Убрать
-            </button>
-          </div>
-        ))}
-        <Row
-          title="Добавить расширение"
-          description="Абсолютный путь к .ts файлу расширения Pi."
-        >
-          <input
-            aria-label="Путь к расширению Pi"
-            spellCheck={false}
-            placeholder="/home/user/.pi/agent/extensions/my.ts"
-            value={extension}
-            onChange={(e) => setExtension(e.target.value)}
-          />
-        </Row>
-        <div className="btn-row">
-          <button
-            className="btn"
-            disabled={!isAbsoluteLocalPath(extension)}
-            onClick={() => {
-              const path = extension.trim();
-              if (!lspExtensions.includes(path))
-                store.setPiSettings({ extensions: [...lspExtensions, path] });
-              setExtension("");
-            }}
-          >
-            Добавить
-          </button>
-        </div>
-        {lspExtensions.map((path) => (
-          <div className="kv" key={path}>
-            <span>{path}</span>
-            <button
-              className="btn"
-              onClick={() =>
-                store.setPiSettings({
-                  extensions: lspExtensions.filter((x) => x !== path),
-                })
-              }
-            >
-              Убрать
-            </button>
-          </div>
-        ))}
-        {health?.commands.length ? (
-          <div className="pi-model-list">
-            {health.commands.map((c) => (
-              <div className="kv" key={c.name}>
-                <span>
-                  /{c.name}
-                  {c.description && <small>{c.description}</small>}
-                </span>
-                <b>{c.source}</b>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        {(prefs.lspServerPaths ?? []).map(path => <div className="kv" key={path}><span>{path}</span>
+          <button className="btn" onClick={() => store.setPiSettings({ lspServerPaths: (prefs.lspServerPaths ?? []).filter(x => x !== path) })}>Убрать</button></div>)}
       </Group>
 
       <Group title="Возможности" hidden={tab !== "capabilities"}>
-
-        <div className="kv">
-          <span>Вложения</span>
-          <b>{PI_CAPABILITIES.attachments ? "Изображения и подготовленные файлы" : "Нет"}</b>
-        </div>
-        <div className="kv">
-          <span>Сжатие контекста</span>
-          <b>{PI_CAPABILITIES.compaction ? "Есть" : "Нет"}</b>
-        </div>
+        <div className="kv"><span>Вложения</span><b>{RUNTIME_CAPABILITIES.attachments ? "Изображения и подготовленные файлы" : "Нет"}</b></div>
+        <div className="kv"><span>Сжатие контекста</span><b>{RUNTIME_CAPABILITIES.compaction ? "Есть" : "Нет"}</b></div>
+        <div className="kv"><span>Вопросы агента</span><b>{caps ? caps.questions ? "Есть" : "Нет в этой версии среды" : "—"}</b></div>
+        <div className="kv"><span>Интерфейсы расширений</span><b>{caps ? caps.extensionUi.tui ? "Экраны, редактор, виджеты и диалоги" : "Только диалоги и уведомления" : "—"}</b></div>
+        <div className="kv"><span>Терминал</span><b>{caps ? caps.pty ? "Есть" : "Недоступен в этой сборке" : "—"}</b></div>
       </Group>
 
-      {(error || health?.error) && (
-        <p className="composer-error" role="alert">
-          {error || health?.error}
-        </p>
-      )}
+      {busy && <p role="status">Обращаюсь к среде выполнения…</p>}
+      {notice && <p role="status" className="settings-notice">{notice}</p>}
+      {error && <p className="composer-error" role="alert">{error}</p>}
     </section>
   );
 }

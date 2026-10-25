@@ -2,8 +2,9 @@ import { SettingHelp } from "./SettingHelp";
 import { platform } from "../native/platform";
 import {useEffect,useState} from "react";
 import {store,useAppState} from "../state/store";
-import {COMPUTER_MCP,computerConfig,computerReadinessError,isLocalComputer,type ComputerStatus} from "../state/computer";
-type Document={path:string;content:string};
+import {computerReadinessError,isLocalComputer,type ComputerStatus} from "../state/computer";
+import {invalidateCapabilities} from "../capabilities/integration";
+import {COMPUTER_SERVER,reservedServerEnabled,setReservedServer} from "../capabilities/reserved";
 const err=(e:unknown)=>e instanceof Error?e.message:String(e);
 async function invoke<T>(command:string,args?:Record<string,unknown>):Promise<T>{return(await import("@tauri-apps/api/core")).invoke<T>(command,args);}
 export function ComputerSettings(){
@@ -15,9 +16,11 @@ export function ComputerSettings(){
   const refresh=async()=>{
     if(!native)return;
     setStatus(await invoke<ComputerStatus>("computer_status"));
-    if(local){try{const m=await store.client.request<Record<string,{status:string}>>("GET","/mcp",{query:{directory:s.directory}});setConnection(m[COMPUTER_MCP]?.status??"not_configured");}catch{setConnection("unavailable");}}
+    if(local){try{setConnection(await reservedServerEnabled(COMPUTER_SERVER)?"configured":"not_configured");}catch{setConnection("unavailable");}}
   };
   useEffect(()=>{void refresh().catch(e=>setError(err(e)));},[s.prefs.endpoint,s.directory]);
+  // Live state comes from the current chat worker's shared-MCP report.
+  const live=store.mcpServerStatuses(s.activeSessionId).find(x=>x.id===COMPUTER_SERVER.id);
   const action=async(name:"permissions"|"stop")=>{
     setBusy(true);setError("");setNotice("");
     try{const text=await invoke<string>("computer_action",{action:name});setNotice(name==="stop"?"Управление выключено. Текущие сеансы Cua Driver отозваны; новые действия заблокированы до подключения.":text);await refresh();}
@@ -25,26 +28,25 @@ export function ComputerSettings(){
   };
   const apply=async(enabled:boolean)=>{
     if(!status||!local||running||busy)return;
-    const client=store.client,directory=s.directory,workspace=s.prefs.workspaceKey??s.prefs.endpoint;
+    const directory=s.directory,workspace=s.prefs.workspaceKey??s.prefs.endpoint;
     setBusy(true);setError("");setNotice("");let written=false;
     try{
-      const doc=await invoke<Document>("read_opencode_config",{scope:"global",directory:null});
-      if(client!==store.client||workspace!==(store.state.prefs.workspaceKey??store.state.prefs.endpoint))throw new Error("Подключение изменилось. Откройте настройки заново.");
-      const next=computerConfig(doc.content,status,enabled);
+      if(workspace!==(store.state.prefs.workspaceKey??store.state.prefs.endpoint))throw new Error("Подключение изменилось. Откройте настройки заново.");
       if(enabled)await invoke("computer_action",{action:"resume"});
       await invoke("computer_set_enabled",{enabled});
-      try{await invoke("write_opencode_config",{scope:"global",directory:null,expected:doc.content,content:next.content});written=true;}
+      // CAS update of Enki's reserved registry entry; a foreign entry with this id is never replaced.
+      try{await setReservedServer(COMPUTER_SERVER,enabled);written=true;}
       catch(e){if(enabled)await invoke("computer_set_enabled",{enabled:false});throw e;}
+      invalidateCapabilities();
+      // The reserved registry entry is committed: idle chats reopen with it, busy ones once idle.
+      const refreshed=await store.capabilitiesCommitted(null).catch(()=>null);
+      if(!refreshed&&directory)await store.configureSharedTools(directory).catch(()=>{});
       if(enabled){
-        const m=await client.request<Record<string,{status:string;error?:string}>>("POST","/mcp",{query:{directory},body:{name:COMPUTER_MCP,config:next.config},timeoutMs:45000});
-        if(m[COMPUTER_MCP]?.status!=="connected")throw new Error(m[COMPUTER_MCP]?.error??"MCP не подтвердил подключение");
         const ready=await invoke<ComputerStatus>("computer_status");
         const problem=computerReadinessError(ready);if(problem)throw new Error(problem);
-        setNotice("Инструменты подключены к текущему проекту, конфигурация сохранена. Работающий сервер может хранить прежние настройки в памяти: если в другом проекте инструментов нет, нажмите «Подключить» после перехода в него. Навык появится после штатной перезагрузки конфигурации сервера.");
-      }else{
-        try{await client.request("POST",`/mcp/${COMPUTER_MCP}/disconnect`,{query:{directory}});}catch{/* Native gate already blocks existing connections. */}
-        setNotice("Управление выключено для всех подключений Desktop. Остальные инструменты OpenCode сохранены.");
-      }
+        setNotice(refreshed?`Инструменты управления добавлены в общий набор. Новые и свободные открытые чаты получат их сразу${refreshed.pending?`; занятые (${refreshed.pending}) — после завершения текущей работы`:""}.`
+          :"Инструменты управления добавлены в общий набор. Новые чаты получат их сразу, открытые — после переоткрытия.");
+      }else setNotice("Управление выключено: локальный выключатель блокирует действия и в уже открытых чатах. Остальные инструменты сохранены.");
       await refresh();
     }catch(e){if(enabled)await invoke("computer_set_enabled",{enabled:false}).catch(()=>{});setError(`${written?"Конфигурация сохранена с резервной копией, но подключение не завершилось. ":""}${err(e)}`);await refresh().catch(()=>{});}
     finally{setBusy(false);}
@@ -57,13 +59,14 @@ export function ComputerSettings(){
       :!native?<p>Откройте установленное приложение Desktop.</p>:<>
       <div className="kv"><span>Драйвер</span><b>{status?status.installed?status.version:"Не установлен":"Проверка…"}</b></div>
       <div className="kv"><span>Управление</span><b>{status?.enabled?computerReadinessError(status)?"Не готово":"Включено":"Выключено"}</b></div>
-      <div className="kv"><span>OpenCode · текущий проект</span><b>{connection==="connected"?"Подключён":connection==="not_configured"?"Не подключён":connection||"—"}</b></div>
+      <div className="kv"><span>Общий набор инструментов</span><b>{connection==="configured"?"Добавлено":connection==="not_configured"?"Не добавлено":connection==="unavailable"?"Не прочитан":"—"}</b></div>
+      <div className="kv"><span>Текущий чат</span><b>{!live?"Нет отчёта агента":live.state==="connected"?`Подключено · ${live.tools.length} инструментов`:live.state==="checking"?"Подключается":"Ошибка подключения"}</b></div>
       {!windows&&<><div className="kv"><span>Доступность macOS</span><b>{p?.accessibility===true?"Разрешена":p?.accessibility===false?"Нужен доступ":"Не проверена"}</b></div>
       <div className="kv"><span>Запись экрана</span><b>{p?.screen_recording===true?"Разрешена":p?.screen_recording===false?"Нужен доступ":"Не проверена"}</b></div></>}
       {windows&&<><div className="kv"><span>Интерактивный сеанс Windows</span><b>{p?.interactive_session===true?"Доступен":"Не подтверждён"}</b></div><div className="kv"><span>UI Automation</span><b>{p?.uia===true&&p?.windows_visible===true?"Готово":"Не подтверждено"}</b></div></>}
       {p?.status==="refused"&&status&&<p role="status">{computerReadinessError(status)}</p>}
       <p className="handoff-note">Некоторые приложения требуют активного окна.</p>
-      {!local&&<p role="status">Эта интеграция управляет компьютером, на котором открыт Desktop. Для настройки выберите «Этот компьютер» и локальный сервер OpenCode.</p>}
+      {!local&&<p role="status">Эта интеграция управляет компьютером, на котором открыт Desktop. Для настройки выберите «Этот компьютер».</p>}
       {running&&<p role="status">Подключение можно менять после завершения агента. Экстренная остановка доступна сейчас.</p>}
       <div className="btn-row computer-actions">
         <button className="btn" disabled={busy} onClick={()=>void refresh().catch(e=>setError(err(e)))}>Проверить</button>

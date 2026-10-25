@@ -1,6 +1,7 @@
 import {expect,it} from 'vitest';
 import {archivePart,archiveReference,attachmentParts,splitArchiveText} from '../src/attachments/archive';
-import {entriesToHistory,PiStreamTranslator} from '../src/agent/pi/translate';
+import {StreamTranslator} from '../src-tauri/resources/agent/src/sdk/translate';
+import {entriesToMessages} from '../src-tauri/resources/agent/src/sdk/history';
 import {sessionContext} from '../src/state/taskContext';
 import {emptySessionChat} from '../src/state/chatReducer';
 const ref={version:1 as const,name:'Исходники.zip',path:'/home/test/.local/share/opencode-desktop/attachments/12345678-1234-1234-1234-123456789abc/archive.zip',url:'file:///home/test/.local/share/opencode-desktop/attachments/12345678-1234-1234-1234-123456789abc/archive.zip',size:1234,sha256:'a'.repeat(64),remote:false};
@@ -19,15 +20,25 @@ it('projects original ZIP into the common source gallery without exposing binary
  chat.messageOrder=['msg'];chat.partsByMessage.msg=[part.id];chat.parts[part.id]=part;
  expect(sessionContext(chat).sources).toEqual([expect.objectContaining({name:ref.name,url:ref.url,mime:'application/zip'})]);
 });
-it('Pi live echo and durable JSONL restore the same archive reference and hide transport text',()=>{
+// Live and durable projections are now produced by the runtime's SDK
+// translator/history (src-tauri/resources/agent/src/sdk); the gallery stays here.
+it('runtime live echo, durable publication and history restore the same archive reference and hide transport text',()=>{
  const text='Read the source archive\n\n'+archivePart(ref).text;
  const entry={type:'message',id:'entry',timestamp:new Date().toISOString(),message:{role:'user',content:text,timestamp:1}};
- const history=entriesToHistory('ses',[entry] as any);
+ const history=entriesToMessages('ses',[entry] as any);
  expect(history[0].parts[0].text).toBe('Read the source archive');
- expect(attachmentParts(history[0].parts)[0].filename).toBe(ref.name);
- const translator=new PiStreamTranslator('ses');
- const live=translator.translate({type:'message_start',message:entry.message} as any);
- const parts=live.events.filter(e=>e.type==='message.part.updated').map(e=>(e.properties as any).part);
- expect(parts.find(p=>p.type==='text'&&!p.synthetic).text).toBe('Read the source archive');
- expect(attachmentParts(parts)[0].url).toBe(ref.url);
+ expect(attachmentParts(history[0].parts as any)).toEqual([expect.objectContaining({filename:ref.name,mime:'application/zip',url:ref.url})]);
+ const translator=new StreamTranslator('ses');
+ const partsOf=(events:any[])=>events.filter(e=>e.type==='message.part.updated').map(e=>e.properties.part);
+ // Provisional echo: visible text only, never the marker or its JSON.
+ const live=partsOf(translator.translate({type:'message_start',message:entry.message} as any));
+ expect(live.find(p=>p.type==='text'&&!p.synthetic).text).toBe('Read the source archive');
+ expect(JSON.stringify(live)).not.toContain('arvela-attachment-v1');
+ // The persisted entry replaces the echo and carries the same reference as history.
+ const appended=translator.appended(entry as any);
+ expect(appended[0]).toMatchObject({type:'message.removed'});
+ const durable=partsOf(appended);
+ expect(durable.find(p=>p.type==='text'&&!p.synthetic).text).toBe('Read the source archive');
+ expect(attachmentParts(durable)).toEqual(attachmentParts(history[0].parts as any));
+ expect(JSON.stringify(durable)).not.toContain('<arvela-attachment-v1>');
 });

@@ -13,13 +13,25 @@ import {makeBackup} from '../operations/backups';
 import {store} from '../state/store';
 import {savePrefs,flushPrefs} from '../state/prefs';
 const call=<T,>(action:string,extra:Record<string,unknown>={})=>invoke<T>('hub_update',{action,channel:null,data:null,digest:null,...extra});
-export function agentsRunning(){const s=store.getSnapshot();return s.ui.sending||s.ui.workspacePreparing||Object.values({...s.statuses,...s.activityStatuses}).some(s=>s.type!=='idle')||Object.keys(s.chat.permissions).length>0||Object.keys(s.chat.questions).length>0||!!s.ui.piDialog;}
+export function agentsRunning(){const s=store.getSnapshot();return s.ui.sending||s.ui.workspacePreparing||Object.values({...s.statuses,...s.activityStatuses}).some(s=>s.type!=='idle')||Object.keys(s.chat.permissions).length>0||Object.keys(s.chat.questions).length>0||!!s.ui.agentDialog;}
+/** Authoritative runtime activity (all folders): owned shells, questions and work this window does not show. */
+export async function runtimeBlocker():Promise<string|null>{
+  const backend=store.maybeBackend();if(!backend)return null;
+  const a=await backend.client.idle();if(a.idle)return null;
+  if(a.terminals){
+    const unconfirmed=a.pty?.unconfirmed??0, open=a.terminals-unconfirmed;
+    if(open>0)return `Открыт терминал (${open}). Завершите оболочку кнопкой «Завершить»: работающая команда может ничего не выводить.`;
+    return `Закрытый терминал (${unconfirmed}) не подтвердил очистку фоновых процессов. Проверьте их и нажмите «Отсоединить» в панели терминала.`;
+  }
+  if(a.questions)return 'Агент ждёт ответа на вопрос в одном из чатов.';
+  return 'Среда выполнения Enki ещё выполняет работу. Установите после завершения задач.';
+}
 export const updates=new UpdateController(call,kind=>maintenance.run(async()=>{
   await flushDictationCapture();
   await operationJournal.drain();await attachmentDrafts.flush();
   savePrefs(store.getSnapshot().prefs);if(!flushPrefs())throw Error('Не удалось сохранить состояние. Обновление отменено.');
   if(kind==='hot') {await call('activate',{channel:updates.snapshot().channel});maintenance.handoff();window.location.reload();}
-  else {if(agentsRunning())throw Error('Агенты ещё работают. Установите после завершения задач.');await call('install',{channel:updates.snapshot().channel,data:await makeBackup(store.getSnapshot().prefs)});}
+  else {if(agentsRunning())throw Error('Агенты ещё работают. Установите после завершения задач.');const blocker=await runtimeBlocker();if(blocker)throw Error(blocker);await call('install',{channel:updates.snapshot().channel,data:await makeBackup(store.getSnapshot().prefs)});}
 }));
 export const useUpdates=()=>useSyncExternalStore(updates.subscribe,updates.snapshot);
 export function UpdateRuntime(){

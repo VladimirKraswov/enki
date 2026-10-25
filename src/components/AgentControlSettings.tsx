@@ -1,11 +1,9 @@
 import { SettingHelp } from "./SettingHelp";
 import { useEffect, useState } from "react";
 import { store, useAppState } from "../state/store";
-import {
-  AGENT_CONTROL_MCP,
-  type AgentControlStatus,
-} from "../state/agentControl";
+import type { AgentControlStatus } from "../state/agentControl";
 import { installAgentControlMcp } from "../control/install";
+import { AGENT_CONTROL_SERVER, reservedServerEnabled } from "../capabilities/reserved";
 
 const err = (value: unknown) => (value instanceof Error ? value.message : String(value));
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -30,17 +28,14 @@ export function AgentControlSettings() {
     setStatus(next);
     if (local) {
       try {
-        const inventory = await store.client.request<Record<string, { status?: string }>>(
-          "GET",
-          "/mcp",
-          { query: { directory: state.directory } },
-        );
-        setConnection(inventory[AGENT_CONTROL_MCP]?.status ?? "not_configured");
+        setConnection((await reservedServerEnabled(AGENT_CONTROL_SERVER)) ? "configured" : "not_configured");
       } catch {
         setConnection("unavailable");
       }
     }
   };
+  // Live state is the current chat worker's shared-MCP report, never assumed.
+  const live = store.mcpServerStatuses(state.activeSessionId).find((item) => item.id === AGENT_CONTROL_SERVER.id);
 
   useEffect(() => {
     void refresh().catch((problem) => setError(err(problem)));
@@ -75,7 +70,8 @@ export function AgentControlSettings() {
       ) : (
         <>
           <div className="kv"><span>Локальный шлюз</span><b>{status?.supported === false ? "Недоступен на этой платформе" : status?.ready ? "Готов" : "Запускается"}</b></div>
-          <div className="kv"><span>OpenCode · текущий проект</span><b>{connection === "connected" ? "Подключён" : connection === "not_configured" ? "Не подключён" : connection || "—"}</b></div>
+          <div className="kv"><span>Общий набор инструментов</span><b>{connection === "configured" ? "Добавлено" : connection === "not_configured" ? "Не добавлено" : connection === "unavailable" ? "Не прочитан" : "—"}</b></div>
+          <div className="kv"><span>Текущий чат</span><b>{!live ? "Нет отчёта агента" : live.state === "connected" ? `Подключено · ${live.tools.length} инструментов` : live.state === "checking" ? "Подключается" : "Ошибка подключения"}</b></div>
           <div className="kv"><span>Протокол</span><b>{status?.protocol ?? "—"}</b></div>
           {status?.supported === false ? <p className="handoff-note">Agent Control недоступен на этой платформе.</p> : null}
           {!local && <p role="status">Для регистрации локальной команды выберите «Этот компьютер».</p>}

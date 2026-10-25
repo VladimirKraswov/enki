@@ -1,12 +1,9 @@
 import type { AppState } from './types';
-import type { ModelInfo, Session } from '../api/types';
-import type { PiHealth } from '../agent/pi/backend';
-import { PI_BACKEND_ID } from '../agent/ids';
-import { modelScope } from './engines';
+import type { Session } from '../api/types';
 export interface ModelChoice { providerID: string; modelID: string; variant?: string | null }
-/** Selection policy on already-normalized data. No network, probes, writes or fallback to another engine. */
-export function chooseOpenCodeModel(state: AppState, context: {
-  projectless: boolean; activeModel?: Session['model']; agentName: string | null;
+/** Selection policy on already-normalized data. No network, probes, writes or silent fallback. */
+export function chooseModel(state: AppState, context: {
+  projectless: boolean; activeModel?: Session['model'];
   defaultVariant: (providerID: string, modelID: string) => string | null;
 }): ModelChoice | null {
     const dir = context.projectless ? "@chats" : (state.directory ?? "");
@@ -15,7 +12,7 @@ export function chooseOpenCodeModel(state: AppState, context: {
       state.providers.some(p => p.id === pid && p.source === "config" && Boolean(p.models[mid])) ||
       state.prefs.modelServices?.some(s => s.providerID === pid && Boolean(s.bindings[mid]));
     const sessionChoice = sessionId
-      ? state.prefs.modelChoice[`session:${sessionId}`]
+      ? legacyModelChoice(state, `session:${sessionId}`)
       : undefined;
     if (sessionChoice && configured(sessionChoice.providerID, sessionChoice.modelID))
       return sessionChoice;
@@ -29,24 +26,9 @@ export function chooseOpenCodeModel(state: AppState, context: {
         variant: active.variant ?? null,
       };
     }
-    const stored =
-      state.prefs.modelChoice[dir] ?? state.prefs.modelChoice["*"];
+    const stored = legacyModelChoice(state, dir || "*") ?? legacyModelChoice(state, "*");
     if (stored && configured(stored.providerID, stored.modelID))
       return stored;
-    const agent = state.agents.find(
-      (a) => a.name === context.agentName,
-    );
-    if (
-      agent?.model &&
-      state.connectedProviderIds.includes(agent.model.providerID)
-    ) {
-      return {
-        ...agent.model,
-        variant:
-          agent.variant ??
-          context.defaultVariant(agent.model.providerID, agent.model.modelID),
-      };
-    }
     const configuredDefault = state.configModel?.split("/");
     if (
       configuredDefault &&
@@ -86,41 +68,6 @@ export function chooseOpenCodeModel(state: AppState, context: {
     return null;
 }
 
-/** Keep an explicit configured selection offline; defaults still require access evidence. */
-export function choosePiModel(state: AppState, directory: string | null): ModelChoice | null {
-    const models = state.piHealth?.models ?? [];
-    const custom = parseModelId(state.prefs.pi?.customModel);
-    const verified = (choice: { providerID: string; modelID: string }) => {
-      const id = `${choice.providerID}/${choice.modelID}`;
-      return state.prefs.pi?.verifiedModel === id ||
-        Boolean(state.prefs.pi?.verifiedModels?.[id]);
-    };
-    const usable = (choice: { providerID: string; modelID: string } | undefined) => {
-      return choice?.providerID && choice.modelID && verified(choice) ? choice : undefined;
-    };
-    const sessionId = state.activeSessionId;
-    const keys = [
-      sessionId ? modelScope(PI_BACKEND_ID, `session:${sessionId}`) : undefined,
-      modelScope(PI_BACKEND_ID, directory ?? "@chats"),
-      modelScope(PI_BACKEND_ID, "*"),
-    ].filter((k): k is string => Boolean(k));
-    for (const key of keys) {
-      const stored = state.prefs.modelChoice[key];
-      if (stored && (verified(stored) || models.some(m => m.provider === stored.providerID && m.id === stored.modelID) ||
-        custom?.providerID === stored.providerID && custom.modelID === stored.modelID ||
-        state.prefs.modelServices?.some(s => s.providerID === stored.providerID && Boolean(s.bindings[stored.modelID])))) return stored;
-    }
-    if (custom && verified(custom))
-      return { ...custom, variant: state.prefs.pi?.thinking ?? null };
-    const configured = usable(parseModelId(state.prefs.pi?.model) ?? undefined);
-    if (configured)
-      return { ...configured, variant: state.prefs.pi?.thinking ?? null };
-    const first = models.find((m) => verified({ providerID: m.provider, modelID: m.id }));
-    return first
-      ? { providerID: first.provider, modelID: first.id, variant: null }
-      : null;
-}
-
 export function parseModelId(
   value: string | undefined | null,
 ): { providerID: string; modelID: string } | null {
@@ -129,37 +76,7 @@ export function parseModelId(
   return { providerID: parts[0], modelID: parts.slice(1).join("/") };
 }
 
-/**
- * Pi's catalog uses its own shape; the attachment pipeline only needs the
- * declared input modalities and context window, so this projects the minimum
- * rather than pretending Pi models are OpenCode models.
- */
-export function piModelInfo(
-  health: PiHealth | null,
-  choice: { providerID: string; modelID: string },
-): ModelInfo | null {
-  const model = health?.models.find(
-    (m) => m.provider === choice.providerID && m.id === choice.modelID,
-  );
-  // A custom model Pi accepts but does not describe still needs *some*
-  // metadata, or the attachment pipeline would refuse the whole prompt. Assume
-  // the conservative shape: text only.
-  if (!model)
-    return {
-      id: choice.modelID,
-      name: choice.modelID,
-      attachment: false,
-      reasoning: false,
-      input: ["text"],
-      limit: {},
-    } as unknown as ModelInfo;
-  return {
-    id: model.id,
-    providerID: model.provider,
-    name: model.name ?? model.id,
-    attachment: (model.input ?? []).includes("image"),
-    reasoning: Boolean(model.reasoning),
-    input: model.input ?? ["text"],
-    limit: { context: model.contextWindow, output: model.maxTokens },
-  } as unknown as ModelInfo;
+/** Choices saved for former Pi CLI chats (`pi::<scope>`) still resolve after the migration. */
+export function legacyModelChoice(state: AppState, key: string): ModelChoice | undefined {
+  return state.prefs.modelChoice[key] ?? state.prefs.modelChoice[`pi::${key}`];
 }

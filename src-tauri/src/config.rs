@@ -1,46 +1,12 @@
-use serde::Serialize;
+//! Compare-and-swap writes for Enki-owned configuration files.
+//!
+//! Agent configuration (Pi `models.json`, runtime settings) is owned by the
+//! Enki Runtime and edited through its versioned API. External engine
+//! configuration (OpenCode `opencode.json`, `~/.pi/agent`) is never written.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-#[derive(Serialize)]
-pub struct ConfigDocument {
-    path: String,
-    content: String,
-}
-
-fn config_dir(scope: &str, directory: Option<&str>) -> Result<PathBuf, String> {
-    match scope {
-        "global" => {
-            // Per-OS resolution lives in `paths`: macOS keeps $HOME/.config/opencode
-            // byte-for-byte, Linux follows XDG like the engine itself does.
-            let dir = crate::paths::opencode_config_dir()?;
-            fs::create_dir_all(&dir).map_err(|_| "Не удалось открыть каталог OpenCode")?;
-            fs::canonicalize(dir).map_err(|_| "Каталог OpenCode недоступен".into())
-        }
-        "project" => {
-            let dir = directory.ok_or("Выберите локальный проект")?;
-            let path = Path::new(dir);
-            if !path.is_absolute() || !path.is_dir() {
-                return Err("Нужен существующий локальный каталог проекта".into());
-            }
-            fs::canonicalize(path).map_err(|_| "Каталог проекта недоступен".into())
-        }
-        _ => Err("Неизвестная область настроек".into()),
-    }
-}
-
-fn config_path(scope: &str, directory: Option<&str>) -> Result<PathBuf, String> {
-    let base = config_dir(scope, directory)?;
-    let jsonc = base.join("opencode.jsonc");
-    let json = base.join("opencode.json");
-    let path = if jsonc.exists() { jsonc } else { json };
-    if path.exists() && path.is_symlink() {
-        return Err("Символьная ссылка на конфигурацию не поддерживается".into());
-    }
-    Ok(path)
-}
 
 fn read_at(path: &Path) -> Result<String, String> {
     if !path.exists() {
@@ -51,90 +17,6 @@ fn read_at(path: &Path) -> Result<String, String> {
         return Err("Конфигурация слишком велика или не является файлом".into());
     }
     fs::read_to_string(path).map_err(|_| "Конфигурация должна быть в UTF-8".into())
-}
-
-#[tauri::command]
-pub fn read_opencode_config(
-    window: tauri::WebviewWindow,
-    scope: String,
-    directory: Option<String>,
-) -> Result<ConfigDocument, String> {
-    if window.label() != "main" {
-        return Err("Недоступно в этом окне".into());
-    }
-    let path = config_path(&scope, directory.as_deref())?;
-    Ok(ConfigDocument {
-        path: path.display().to_string(),
-        content: read_at(&path)?,
-    })
-}
-
-#[tauri::command]
-pub fn write_opencode_config(
-    window: tauri::WebviewWindow,
-    scope: String,
-    directory: Option<String>,
-    expected: String,
-    content: String,
-) -> Result<ConfigDocument, String> {
-    if window.label() != "main" {
-        return Err("Недоступно в этом окне".into());
-    }
-    if content.len() > 1024 * 1024 {
-        return Err("Конфигурация слишком велика".into());
-    }
-    let path = config_path(&scope, directory.as_deref())?;
-    write_at(&path, &expected, &content)?;
-    Ok(ConfigDocument {
-        path: path.display().to_string(),
-        content,
-    })
-}
-
-fn pi_models_path() -> Result<PathBuf, String> {
-    let path = crate::paths::user_home()?
-        .join(".pi")
-        .join("agent")
-        .join("models.json");
-    if path.exists() && path.is_symlink() {
-        return Err("Символьная ссылка на настройки моделей Pi не поддерживается".into());
-    }
-    Ok(path)
-}
-
-#[tauri::command]
-pub fn read_pi_models(window: tauri::WebviewWindow) -> Result<ConfigDocument, String> {
-    if window.label() != "main" {
-        return Err("Недоступно в этом окне".into());
-    }
-    let path = pi_models_path()?;
-    Ok(ConfigDocument {
-        path: path.display().to_string(),
-        content: read_at(&path)?,
-    })
-}
-
-#[tauri::command]
-pub fn write_pi_models(
-    window: tauri::WebviewWindow,
-    expected: String,
-    content: String,
-) -> Result<ConfigDocument, String> {
-    if window.label() != "main" {
-        return Err("Недоступно в этом окне".into());
-    }
-    if content.len() > 1024 * 1024 {
-        return Err("Настройки моделей Pi слишком велики".into());
-    }
-    let path = pi_models_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| "Не удалось открыть каталог настроек Pi")?;
-    }
-    write_at(&path, &expected, &content)?;
-    Ok(ConfigDocument {
-        path: path.display().to_string(),
-        content,
-    })
 }
 
 pub(crate) fn write_at(path: &Path, expected: &str, content: &str) -> Result<(), String> {
@@ -191,7 +73,7 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir(&dir).unwrap();
-        let path = dir.join("opencode.jsonc");
+        let path = dir.join("settings.json");
         let original = "{\n  // keep this comment\n  \"plugin\": []\n}\n";
         fs::write(&path, original).unwrap();
         assert!(write_at(&path, "stale", "{}").is_err());

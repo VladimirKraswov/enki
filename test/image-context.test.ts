@@ -1,6 +1,5 @@
 import { expect, it, vi } from 'vitest';
 import { imageContextSources, imagePromptParts, stageImagePromptContext } from '../src/images/context';
-import accessPolicy from '../src-tauri/resources/browser/access-policy.mjs';
 import type { PromptRequest } from '../src/api/types';
 const source = { type:'file' as const, filename:'photo.png', mime:'image/png', url:'data:image/png;base64,AQID' };
 it('stages only actual prepared image bytes, never remote URLs, text markers or model paths', async () => {
@@ -29,16 +28,9 @@ it('limits references without dropping unsupported files from the actual prompt'
   expect(JSON.stringify(text)).toContain('не поддерживает Vision');
   expect(imagePromptParts([source],false,false)).toEqual([source]);
 });
-it('uses the always-installed policy hook for trusted image identity even without browser tools', async () => {
-  const hook=(await accessPolicy({} as any))['tool.execute.before'];
-  for(const tool of ['mesh_enki_images_image_inputs','mesh_enki_images_edit_image','mesh_enki_images_get_images']) {
-    const args={__enkiImageContext:{engine:'pi',sessionID:'forged'},input:'current'};
-    await hook({tool,sessionID:'ses_real'},{args});
-    expect(args.__enkiImageContext).toEqual({engine:'opencode',sessionID:'ses_real'});
-    expect(args.input).toBe('current');
-  }
-  const other={args:{__enkiImageContext:{engine:'pi',sessionID:'keep'}}};
-  await hook({tool:'mesh_other_read',sessionID:'ses_real'},other);
-  expect(other.args.__enkiImageContext.sessionID).toBe('keep');
-  await expect(hook({tool:'mesh_enki_images_edit_image',sessionID:'../escape'},{args:{}})).rejects.toThrow('session');
-});
+// The former 4th case (OpenCode `access-policy.mjs` tool.execute.before hook) is
+// held separately in `image-context-opencode-policy.test.ts` and retires with that
+// dead module. The trusted image identity it protected is owned by the sole SDK
+// runtime: `pi-shared-tools.test.ts` › "binds image calls…", "every image tool…",
+// "a model-supplied image identity never reaches another server" and "an
+// invalid SDK session identity is refused before any image call".

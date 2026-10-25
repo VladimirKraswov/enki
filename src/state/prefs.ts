@@ -7,9 +7,12 @@ import type { AccessMode } from "./access";
 import { defaultAsr, type AsrSettings } from "../voice/asr";
 import { DEFAULT_HELPER_ENDPOINT } from "../attachments/helper";
 // Persisted shell preferences. The shell owns theme/layout/directories/drafts;
-// OpenCode owns sessions, models, credentials. No engine data is rewritten here.
+// the Enki Runtime owns sessions, queues, schedules, models and credentials.
 
-/** App-owned metadata for a Pi chat; Pi itself owns only the transcript. */
+/**
+ * Metadata the former Pi CLI bridge kept for its chats. Read only once, to
+ * register those transcripts with the runtime (`/v1/migrations/pi-cli`).
+ */
 export interface PiSessionMeta {
   id: string;
   directory: string;
@@ -22,7 +25,20 @@ export interface PiSessionMeta {
   permission?: PermissionRule[];
 }
 
-/** Pi runtime configuration. Never holds a credential: Pi owns its own auth. */
+/** Enki-side agent preferences; runtime settings themselves live in the runtime. */
+export interface AgentPrefs {
+  /** Absolute language-server paths tried before the built-in candidates. */
+  lspServerPaths?: string[];
+  /** One-time imports already performed for this workspace. */
+  migrated?: { opencode?: number; piCli?: number; piAgent?: number; queues?: number; schedules?: number;
+    /** Per workspace: the pre-2.0 inherited tool policy was carried into the runtime default once. */
+    policy?: Record<string, number> };
+}
+
+/**
+ * Settings of the former Pi CLI bridge. Read only to carry LSP paths and the
+ * tool policy into the runtime once; never used to launch anything.
+ */
 export interface PiSettings {
   /** Absolute path override when Pi is not in a known location. */
   program?: string;
@@ -68,17 +84,11 @@ export interface Prefs {
   appearance: Appearance;
   /** Local browser lifecycle and executable choice; engines retain their own permissions. */
   browser?: BrowserPreferences;
-  /** Explicit browser-task profiles; selected engine/model/permissions remain independent. */
+  /** Explicit browser-task profiles; selected model/permissions remain independent. */
   browserTasks?: Record<string, { previousVariant?: string | null; appliedVariant?: string | null; providerID: string; modelID: string }>;
-  /** Preferred engine per project folder. Absent means OpenCode. */
-  projectEngine?: Record<string, string>;
-  /** Per-chat engine override. Absent means the folder preference. */
-  sessionEngine?: Record<string, string>;
+  /** Legacy (read for one-time import only). */
   piSessions?: Record<string, PiSessionMeta>;
-  /**
-   * Where a chat's starting context came from, for either engine. Kept engine
-   * neutral so the provenance banner works for OpenCode→Pi and Pi→OpenCode.
-   */
+  /** Where a chat's starting context came from (handoff provenance banner). */
   handoffOrigins?: Record<
     string,
     {
@@ -89,15 +99,16 @@ export interface Prefs {
       omitted: number;
     }
   >;
+  /** Legacy (read for one-time import only). */
   pi?: PiSettings;
-  /** Engine for a chat that has no folder yet. */
-  newChatEngine?: string;
-  // Stable server identity is independent of an ephemeral SSH forwarding port.
+  agent?: AgentPrefs;
+  // Stable workspace identity, independent of the runtime's ephemeral port.
   workspaceKey?: string;
+  /** Stable identity of this computer's workspace (kept from earlier versions). */
+  localWorkspace?: string;
   activeHost?: string;
+  /** Legacy: the old local engine origin, used only to derive `localWorkspace`. */
   localEndpoint?: string;
-  /** Optional local OpenCode CLI path; does not affect remote workspaces. */
-  localOpenCodeProgram?: string;
   remoteHosts?: RemoteHost[];
   projectlessDirectories?: string[];
   projectlessSessions?: Session[];
@@ -106,6 +117,7 @@ export interface Prefs {
   // Completion attention belongs to this server and survives app restarts.
   unreadSessions?: Record<string, { time: number; directory?: string }>;
 
+  /** Legacy UI-owned queues: backup kept per item until its runtime cutover receipt is accepted/resolved. */
   queues?: Record<string, QueuedPrompt[]>;
   newAccess?: AccessMode;
   asr?: AsrSettings;
@@ -176,6 +188,7 @@ export function loadPrefs(): Prefs {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_PREFS };
     const parsed = JSON.parse(raw) as Partial<Prefs>;
+    localStorageHadPrefs = true;
     return {
       ...DEFAULT_PREFS,
       ...parsed,
@@ -238,11 +251,45 @@ if (typeof window !== "undefined") {
   });
 }
 
+/**
+ * Stable key of this computer's workspace. Earlier versions keyed it by the
+ * local engine origin; keeping that value preserves drafts, attachments,
+ * unread markers and imported chats (which keep their original ids).
+ */
+export function localWorkspaceKey(prefs: Pick<Prefs, "localWorkspace" | "localEndpoint" | "workspaceKey" | "endpoint">, fresh: string): string {
+  if (prefs.localWorkspace) return prefs.localWorkspace;
+  if (prefs.localEndpoint) return prefs.localEndpoint;
+  if (prefs.workspaceKey && !prefs.workspaceKey.startsWith("ssh:")) return prefs.workspaceKey;
+  return localStorageHadPrefs ? prefs.endpoint : fresh;
+}
+let localStorageHadPrefs = false;
+
 export function draftKey(
   sessionId: string | null,
   directory: string | null,
 ): string {
   return sessionId ?? `new::${directory ?? ""}`;
+}
+
+/**
+ * Before 2.0 the local workspace snapshot was keyed by the old local engine
+ * origin (`localWorkspace`/`localEndpoint`, e.g. an OpenCode URL); 2.0 keys it
+ * by the stable local runtime key. When the user was on a remote host at
+ * upgrade time, a later remote→local switch must find that snapshot by its
+ * stable identity. Never crosses local/remote: SSH keys are never candidates.
+ */
+export function legacyLocalSnapshotKey(prefs: Prefs, localKey: string): string | null {
+  if (localKey.startsWith("ssh:") || prefs.endpointState?.[localKey]) return null;
+  for (const candidate of [prefs.localWorkspace, prefs.localEndpoint])
+    if (candidate && candidate !== localKey && !candidate.startsWith("ssh:") && prefs.endpointState?.[candidate]) return candidate;
+  return null;
+}
+
+/** Copy (not move) a saved snapshot to its new stable key; the old entry stays as a backup. */
+export function adoptSnapshot(prefs: Prefs, from: string, to: string): Prefs {
+  const saved = prefs.endpointState?.[from];
+  if (!saved || prefs.endpointState?.[to]) return prefs;
+  return { ...prefs, endpointState: { ...prefs.endpointState, [to]: { ...saved } } };
 }
 
 /** Server-owned IDs and drafts never migrate into another endpoint's workspace. */
@@ -258,17 +305,16 @@ export function switchEndpointPrefs(
     layout: prefs.layout,
     ...saved,
     workshop: restoredWorkshop(saved?.workshop),
-    // The CPU helper and speech recognizer belong to this computer, not an
-    // OpenCode workspace. Pi is local too: its runtime settings and its chats
-    // must survive switching to another OpenCode server.
+    // The CPU helper, speech recognizer, browser and legacy Pi metadata belong
+    // to this computer, not to one runtime workspace.
     asr: prefs.asr,
     helperEndpoint: prefs.helperEndpoint,
     modelServices: prefs.modelServices,
     pi: prefs.pi,
+    agent: prefs.agent,
     browser: prefs.browser,
     browserTasks: prefs.browserTasks,
     piSessions: prefs.piSessions,
-    sessionEngine: prefs.sessionEngine,
     handoffOrigins: prefs.handoffOrigins,
     // Appearance belongs to the app, not to a cached remote workspace.
     theme: prefs.theme,
@@ -287,7 +333,7 @@ export function switchEndpointPrefs(
     workspaceKey,
     activeHost: prefs.activeHost,
     localEndpoint: prefs.localEndpoint,
-    localOpenCodeProgram: prefs.localOpenCodeProgram,
+    localWorkspace: prefs.localWorkspace,
     remoteHosts: prefs.remoteHosts,
     endpointState: {
       ...endpointState,

@@ -1,0 +1,22 @@
+[package]
+name = "enki-build-runner"
+version = "0.1.0"
+description = "Minimal trusted native build-job runner, compiled by runtime:prepare from the authenticated Enki source"
+edition = "2021"
+publish = false
+
+# Standalone root: never a member of another workspace, never builds Tauri,
+# frontend assets or the agent runtime. Same exact crate versions as
+# src-tauri/Cargo.lock (see Cargo.lock here; `--locked` is required).
+[workspace]
+
+[[bin]]
+name = "enki-build-runner"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

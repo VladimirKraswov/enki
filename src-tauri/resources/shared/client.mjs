@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { remoteUrl, toolName } from "./registry.mjs";
+import { remoteUrl, stdioEnvironment, toolName } from "./registry.mjs";
 import { nodeScriptArgs } from "./stdio-command.mjs";
 export async function connectServer(spec, cwd, token, signal) {
   if (!path.isAbsolute(cwd)) throw new Error("Absolute workspace required");
@@ -19,18 +19,9 @@ export async function connectServer(spec, cwd, token, signal) {
   if (spec.kind === "stdio") {
     if (!path.isAbsolute(spec.command))
       throw new Error("Absolute executable required");
-    const env = {};
-    // Only the app-owned image service uses the native crash-safe state lock.
-    if(spec.id==='enki-images'&&path.isAbsolute(process.env.MESH_CAPABILITIES_COMMAND??''))
-      env.MESH_CAPABILITIES_COMMAND=process.env.MESH_CAPABILITIES_COMMAND;
-    for (const name of spec.envKeys || []) {
-      if (
-        !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) ||
-        process.env[name] === undefined
-      )
-        throw new Error("Required environment variable is missing");
-      env[name] = process.env[name];
-    }
+    // Declared keys only; the image service's native lock child additionally
+    // keeps this installation's profile identity (registry.mjs).
+    const env = stdioEnvironment(spec);
     transport = new StdioClientTransport({
       command: spec.command,
       args: await nodeScriptArgs(spec.command, spec.args || []),

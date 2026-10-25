@@ -1,15 +1,17 @@
 import type { Session } from "../api/types";
-import type { OpenCodeClient } from "../api/client";
+import type { RuntimeBackend } from "../agent/runtime/backend";
 import { store } from "../state/store";
 import type { UsageSource } from "./metrics";
-async function openCodeSessions(client: OpenCodeClient, signal: AbortSignal): Promise<Session[]> {
+
+/** Every chat of the runtime catalogue (active and archived), paged by the runtime cursor. */
+async function runtimeSessions(backend: RuntimeBackend, signal: AbortSignal): Promise<Session[]> {
   const sessions = new Map<string, Session>();
   for (const archived of [false, true]) {
     let cursor: number | undefined;
     const cursors = new Set<number>();
     do {
       signal.throwIfAborted();
-      const page = await client.usageSessionsPage(archived, cursor, signal);
+      const page = await backend.recentSessions(archived, cursor);
       for (const session of page.sessions) sessions.set(session.id, session);
       if (page.cursor === null || cursors.has(page.cursor)) break;
       cursor = page.cursor;
@@ -19,27 +21,20 @@ async function openCodeSessions(client: OpenCodeClient, signal: AbortSignal): Pr
   return [...sessions.values()];
 }
 
+/**
+ * One runtime serves both: chats executed by the bundled agent ("Pi") and
+ * read-only imported OpenCode archives ("OpenCode"), whose recorded usage stays
+ * attributed to the engine that produced it.
+ */
 export function usageSources(): UsageSource[] {
-  const result: UsageSource[] = [];
-  if (store.state.connection.phase === "connected") {
-    const client = store.client;
-    result.push({
-      engine: "OpenCode",
-      sessions: signal => openCodeSessions(client, signal),
-      messages: (session, before, signal) => client.messages(session.id, { directory: session.directory, before, limit: 200, signal }),
-    });
-  }
-  if (store.piInstalled) {
-    const pi = store.pi();
-    result.push({
-      engine: "Pi",
-      sessions: async () => {
-        const [active, archived] = await Promise.all([pi.recentSessions(false), pi.recentSessions(true)]);
-        return [...active.sessions, ...archived.sessions];
-      },
-      messages: (session, before) => pi.messages(session.id, { directory: session.directory, before, limit: 200 }),
-    });
-  }
-  return result;
+  const backend = store.state.connection.phase === "connected" ? store.maybeBackend() : null;
+  if (!backend) return [];
+  let all: Promise<Session[]> | null = null;
+  const sessions = (signal: AbortSignal) => (all ??= runtimeSessions(backend, signal).catch(error => { all = null; throw error; }));
+  const messages: UsageSource["messages"] = (session, before, signal) =>
+    backend.messages(session.id, { directory: session.directory, before, limit: 200, signal });
+  return [
+    { engine: "Pi", sessions: async signal => (await sessions(signal)).filter(s => s.origin?.kind !== "opencode"), messages },
+    { engine: "OpenCode", sessions: async signal => (await sessions(signal)).filter(s => s.origin?.kind === "opencode"), messages },
+  ];
 }
-

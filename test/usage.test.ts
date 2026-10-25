@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MessageResponse, Session } from "../src/api/types";
 import { addMessageUsage, periodStart, scanUsage, type UsageSource } from "../src/usage/metrics";
-import { OpenCodeClient } from "../src/api/client";
+import { bindStore, runtimeFixture } from "./helpers/runtime-fixture";
 
 const day = new Date(2026, 8, 30, 12).getTime();
 function session(id: string, updated = day): Session {
@@ -51,17 +51,30 @@ describe("usage accounting", () => {
   });
 });
 
-it("requests the full OpenCode session index with child sessions and cursor", async () => {
-  const urls: string[] = [];
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    urls.push(url);
-    return new Response(JSON.stringify([session("child")]), { status: 200, headers: { "content-type": "application/json", "x-next-cursor": "123" } });
-  }));
-  const page = await new OpenCodeClient().usageSessionsPage(true, 456);
-  expect(page.sessions[0].id).toBe("child");
-  expect(page.cursor).toBe(123);
-  expect(new URL(urls[0]).searchParams.get("roots")).toBe("false");
-  expect(new URL(urls[0]).searchParams.get("archived")).toBe("true");
-  expect(new URL(urls[0]).searchParams.get("cursor")).toBe("456");
-  vi.unstubAllGlobals();
+// The runtime catalogue replaced the OpenCode session index (roots=false/x-next-cursor).
+it("reads every active and archived runtime chat by cursor, once each, and attributes imported archives", async () => {
+  const { store } = await import("../src/state/store");
+  const { usageSources } = await import("../src/usage/sources");
+  const fx = runtimeFixture();
+  const pages: Record<string, { sessions: unknown[]; cursor: number | null }> = {
+    "false:": { sessions: [session("a"), session("b")], cursor: 456 },
+    "false:456": { sessions: [session("b"), { ...session("old"), origin: { kind: "opencode" } }], cursor: 456 }, // a repeated cursor ends paging
+    "true:": { sessions: [{ ...session("archived"), time: { created: day, updated: day, archived: day } }], cursor: null },
+  };
+  fx.on("GET", "/sessions/recent", c => pages[`${c.query.archived === "true"}:${c.query.cursor ?? ""}`] ?? { sessions: [], cursor: null });
+  fx.on("GET", "/sessions/:id/messages", () => ({ messages: [], before: null }));
+  bindStore(store, fx);
+  try {
+    const [pi, opencode] = usageSources();
+    const signal = new AbortController().signal;
+    expect((await pi.sessions(signal)).map(s => s.id)).toEqual(["a", "b", "archived"]);
+    expect((await opencode.sessions(signal)).map(s => s.id)).toEqual(["old"]);
+    expect(fx.made("GET", "/sessions/recent").map(c => [c.query.archived ?? "", c.query.cursor ?? "", c.query.limit])).toEqual([["", "", "20"], ["", "456", "20"], ["true", "", "20"]]);
+    await pi.messages(session("a"), "cursor-1", signal);
+    expect(fx.made("GET", "/sessions/:id/messages")[0].query).toEqual({ directory: "/tmp/test", before: "cursor-1", limit: "200" });
+    store.state = { ...store.state, connection: { ...store.state.connection, phase: "disconnected" } as never };
+    expect(usageSources()).toEqual([]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

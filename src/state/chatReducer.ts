@@ -25,6 +25,18 @@ export interface SessionChatState {
   status: SessionStatus;
   lastError: string | null;
   lastEventAt: number;
+  /** Supported outcome of the latest settled run (`session.outcome`); cleared when a new run starts. */
+  lastOutcome?: RunOutcomeView | null;
+  /** Bumped whenever a `patch` part is added, changed or removed: an O(1)
+   * "files touched" signal instead of scanning every part on each delta. */
+  patchRevision?: number;
+}
+
+export interface RunOutcomeView {
+  commandID: string | null;
+  state: "completed" | "failed" | "cancelled";
+  reason: string | null;
+  error: string | null;
 }
 
 export interface ChatRootState {
@@ -81,9 +93,14 @@ function sessionSlot(root: ChatRootState, sessionID: string): SessionChatState {
   return (root.sessions[sessionID] ??= emptySessionChat());
 }
 
+function bumpPatches(state: SessionChatState, ...parts: (MessagePart | undefined)[]): void {
+  if (parts.some((part) => part?.type === "patch")) state.patchRevision = (state.patchRevision ?? 0) + 1;
+}
+
 function upsertPart(state: SessionChatState, part: MessagePart): void {
   if (!part?.id || !part.messageID) return;
   const existing = state.parts[part.id];
+  bumpPatches(state, part, existing);
   if (!existing) {
     state.parts[part.id] = part;
     const order = (state.partsByMessage[part.messageID] ??= []);
@@ -157,11 +174,13 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       break;
     }
     case "message.part.delta": {
-      const { messageID, partID, field, delta } = props as {
+      const { messageID, partID, field, delta, partType } = props as {
         messageID?: string;
         partID?: string;
         field?: string;
         delta?: string;
+        /** Reasoning streams as deltas too; a provisional part keeps its kind. */
+        partType?: string;
       };
       if (
         !sessionID ||
@@ -182,7 +201,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
           id: partID,
           sessionID,
           messageID,
-          type: "text",
+          type: partType === "reasoning" ? "reasoning" : "text",
           text: delta,
         });
       }
@@ -195,6 +214,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       if (!sessionID || !partID) break;
       const slot = root.sessions[sessionID];
       if (slot?.parts[partID]) {
+        bumpPatches(slot, slot.parts[partID]);
         const msg = slot.parts[partID].messageID;
         slot.partsByMessage[msg] = (slot.partsByMessage[msg] ?? []).filter(
           (p) => p !== partID,
@@ -211,6 +231,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       if (slot?.messages[messageID]) {
         delete slot.messages[messageID];
         slot.messageOrder = slot.messageOrder.filter((m) => m !== messageID);
+        bumpPatches(slot, ...(slot.partsByMessage[messageID] ?? []).map((pid) => slot.parts[pid]));
         for (const pid of slot.partsByMessage[messageID] ?? [])
           delete slot.parts[pid];
         delete slot.partsByMessage[messageID];
@@ -222,7 +243,21 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       if (!sessionID) break;
       const slot = sessionSlot(root, sessionID);
       slot.status = (props.status as SessionStatus) ?? { type: "idle" };
-      if (slot.status.type === "busy") slot.lastError = null;
+      if (slot.status.type === "busy") { slot.lastError = null; slot.lastOutcome = null; }
+      changed = true;
+      break;
+    }
+    case "session.outcome": {
+      if (!sessionID) break;
+      const state = props.state;
+      if (state !== "completed" && state !== "failed" && state !== "cancelled") break;
+      if (seen(root, event.id)) break;
+      const slot = sessionSlot(root, sessionID);
+      const reason = typeof props.reason === "string" ? props.reason : null, error = typeof props.error === "string" ? props.error.slice(0, 2000) : null;
+      slot.lastOutcome = { commandID: typeof props.commandID === "string" ? props.commandID : null, state, reason, error };
+      // A run that ended without any answer has no other visible sign; an
+      // output-limit stop already shows its OutputLimitNotice on the message.
+      if (state === "failed" && (reason === "no_answer" || reason === "terminated") && error) slot.lastError = error;
       changed = true;
       break;
     }
@@ -239,7 +274,8 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       if (!sessionID) break;
       const slot = sessionSlot(root, sessionID);
       slot.status = { type: "idle" };
-      slot.lastError = describeMessageError(props.error) || "Session error";
+      // Runtime errors (e.g. HubLeaseLost) carry their own Russian message.
+      slot.lastError = describeMessageError(props.error) || "Ошибка сессии агента.";
       changed = true;
       break;
     }
@@ -323,11 +359,20 @@ export function applyHistory(
   sessionID: string,
   messages: Array<{ info: Message; parts: MessagePart[] }>,
 ): void {
+  const previous = root.sessions[sessionID];
   const slot = emptySessionChat();
-  slot.pendingTiming = root.sessions[sessionID]?.pendingTiming;
-  slot.taskObservations = root.sessions[sessionID]?.taskObservations;
-  slot.status = root.sessions[sessionID]?.status ?? { type: "idle" };
-  slot.lastError = root.sessions[sessionID]?.lastError ?? null;
+  slot.pendingTiming = previous?.pendingTiming;
+  slot.taskObservations = previous?.taskObservations;
+  slot.status = previous?.status ?? { type: "idle" };
+  slot.lastError = previous?.lastError ?? null;
+  slot.lastOutcome = previous?.lastOutcome ?? null;
+  // Monotonic across reloads, so a re-read with patch parts is never "unchanged".
+  slot.patchRevision = previous?.patchRevision;
+  // The replacement drops every previous part. If any was a patch, the set of
+  // touched files may have shrunk (even to none, which no upsert below would
+  // signal): invalidate once. O(parts) per authoritative load, never per token.
+  if (previous && Object.values(previous.parts).some((part) => part?.type === "patch"))
+    slot.patchRevision = (slot.patchRevision ?? 0) + 1;
   for (const { info, parts } of messages) {
     if (!slot.messages[info.id]) slot.messageOrder.push(info.id);
     slot.messages[info.id] = info;
@@ -411,6 +456,7 @@ export function reconcileHistoryEvents(
   for (const id of partIDs) {
     const current = live.parts[id];
     if (!current) {
+      bumpPatches(target, target.parts[id]);
       delete target.parts[id];
       for (const messageID of Object.keys(target.partsByMessage))
         target.partsByMessage[messageID] = target.partsByMessage[

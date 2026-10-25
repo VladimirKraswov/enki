@@ -26,22 +26,11 @@ pub(super) const DEPENDENCIES: &[(&str, &str)] = &[
 
 /// Desktop-owned scripts. A newer Desktop refreshes these in place, so a
 /// script-only change never downloads packages or Chromium again.
+/// The agent-side browser tools are bundled into the Enki Runtime itself.
 pub(super) const SCRIPTS: &[(&str, &str)] = &[
-    (
-        "execution-feedback.mjs",
-        include_str!("../../resources/browser/execution-feedback.mjs"),
-    ),
-    (
-        "access-policy.mjs",
-        include_str!("../../resources/browser/access-policy.mjs"),
-    ),
     (
         "session.mjs",
         include_str!("../../resources/browser/session.mjs"),
-    ),
-    (
-        "opencode-session-plugin.mjs",
-        include_str!("../../resources/browser/opencode-session-plugin.mjs"),
     ),
     (
         "actions.mjs",
@@ -72,24 +61,36 @@ pub(super) const SCRIPTS: &[(&str, &str)] = &[
         "skills/desktop-browser/SKILL.md",
         include_str!("../../resources/browser/SKILL.md"),
     ),
-    (
-        "pi-extension.ts",
-        include_str!("../../resources/browser/pi-extension.ts"),
-    ),
 ];
 
 pub fn root_dir() -> Result<PathBuf, String> {
-    // MSIX redirects AppData independently for the Desktop and an external
-    // engine. Their transport and persistent profile must have one owner/path.
     #[cfg(target_os = "windows")]
-    return Ok(crate::migration::resolve_named(
-        &crate::paths::user_home()?,
-        ".opencode-desktop",
-        ".enki",
-    )?
-    .join("browser-runtime"));
+    return windows_root_dir(
+        crate::paths::profile_override()?.as_deref(),
+        crate::paths::user_home,
+    );
     #[cfg(not(target_os = "windows"))]
     Ok(crate::paths::app_data_dir()?.join("browser-runtime"))
+}
+
+/// Windows selection, compiled everywhere so it is tested on every host.
+/// An explicit (already validated) profile owns its own root and is decided
+/// BEFORE the user-home lookup, which is then never consulted. Without one,
+/// MSIX redirects AppData independently for the Desktop and an external
+/// engine, so their transport and persistent profile share the outside-MSIX
+/// `.enki` (legacy `.opencode-desktop`) root exactly as before.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn windows_root_dir(
+    profile: Option<&Path>,
+    home: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    if let Some(profile) = profile {
+        return Ok(profile.join("browser-runtime"));
+    }
+    Ok(
+        crate::migration::resolve_named(&home()?, ".opencode-desktop", ".enki")?
+            .join("browser-runtime"),
+    )
 }
 
 pub fn support_dir() -> Result<PathBuf, String> {
@@ -224,7 +225,7 @@ pub(super) fn recorded_node(current: &Path) -> Option<PathBuf> {
 }
 
 /// Record the verified interpreter the daemon runs with, so proxies launched
-/// later by OpenCode or Pi use the same one. The manifest holds no secrets.
+/// later by the Enki Runtime use the same one. The manifest holds no secrets.
 pub(super) fn record_node(current: &Path, node: &Path) -> Result<(), String> {
     let node = node.to_str().ok_or("Путь к Node.js должен быть в UTF-8.")?;
     let path = current.join("installed.json");
@@ -349,6 +350,64 @@ mod tests {
         dir
     }
 
+    /// Windows branch, exercised on every host with fixture homes only: an
+    /// explicit profile wins over the owner's shared `.enki` root and the home
+    /// lookup is never consulted, even when it would itself be a conflict.
+    #[test]
+    fn windows_explicit_profile_root_beats_the_shared_user_home_root() {
+        let base = temp("win-profile");
+        let home = base.join("owner-home");
+        fs::create_dir_all(home.join(".enki/browser-runtime")).unwrap();
+        fs::create_dir_all(home.join(".opencode-desktop")).unwrap();
+        let profile = base.join("profile-a");
+        fs::create_dir_all(&profile).unwrap();
+        let consulted = std::cell::Cell::new(false);
+        let root = windows_root_dir(Some(profile.as_path()), || {
+            consulted.set(true);
+            Ok(home.clone())
+        })
+        .unwrap();
+        assert_eq!(root, profile.join("browser-runtime"));
+        assert!(
+            !consulted.get(),
+            "explicit profile must not look at user home"
+        );
+        assert!(!root.starts_with(&home));
+        // capabilities::root (and Hub config/ready/token beneath it) derive from
+        // root_dir().parent() on Windows: that is now the profile itself.
+        assert_eq!(root.parent(), Some(profile.as_path()));
+        let other = base.join("profile-b");
+        assert_ne!(
+            windows_root_dir(Some(other.as_path()), || Ok(home.clone())).unwrap(),
+            root
+        );
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Without a profile the shared outside-MSIX policy is byte-for-byte the
+    /// old one: `.enki` when fresh or current, legacy `.opencode-desktop` when
+    /// only it exists, and an explicit error for two different stores.
+    #[test]
+    fn windows_default_root_keeps_the_shared_outside_msix_route() {
+        let base = temp("win-default");
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let pick = || windows_root_dir(None, || Ok(home.clone()));
+        assert_eq!(pick().unwrap(), home.join(".enki/browser-runtime"));
+        fs::create_dir_all(home.join(".opencode-desktop")).unwrap();
+        assert_eq!(
+            pick().unwrap(),
+            home.join(".opencode-desktop/browser-runtime")
+        );
+        fs::create_dir_all(home.join(".enki")).unwrap();
+        assert!(pick().is_err(), "two different stores must not be guessed");
+        fs::remove_dir_all(home.join(".opencode-desktop")).unwrap();
+        assert_eq!(pick().unwrap(), home.join(".enki/browser-runtime"));
+        let missing = windows_root_dir(None, || Err("USERPROFILE недоступен".into()));
+        assert_eq!(missing, Err("USERPROFILE недоступен".to_string()));
+        fs::remove_dir_all(&base).unwrap();
+    }
+
     /// A fake but structurally complete runtime: packages, manifest, Chromium
     /// path and all pinned resources. Nothing is downloaded or executed.
     fn complete_runtime(root: &Path) -> PathBuf {
@@ -383,7 +442,7 @@ mod tests {
         let current = complete_runtime(&root);
         assert!(installed_at(&current));
         fs::write(current.join("proxy.mjs"), "// older Desktop build").unwrap();
-        fs::remove_file(current.join("pi-extension.ts")).unwrap();
+        fs::remove_file(current.join("session.mjs")).unwrap();
         assert!(!installed_at(&current));
         assert!(dependencies_installed(&current));
         refresh_scripts(&current).unwrap();

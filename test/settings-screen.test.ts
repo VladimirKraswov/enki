@@ -5,10 +5,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { DEFAULT_PREFS } from "../src/state/prefs";
 const fake = vi.hoisted(() => ({ state: {} as any, setUi: vi.fn(), setAsr: vi.fn(), setHelperEndpoint: vi.fn(), setAppearance: vi.fn(), setTheme: vi.fn(), connect: vi.fn() }));
-const cli = vi.hoisted(() => ({ detect: vi.fn<() => Promise<boolean | null>>() }));
 vi.mock('../src/state/store', () => ({ useAppState: () => fake.state, store: { ...fake, hostLabel: () => "Этот компьютер" } }));
-vi.mock('../src/native/localServer', () => ({ detectLocalOpenCode: cli.detect }));
-vi.mock('../src/components/OpenCodeSettings', () => ({ OpenCodeSettings: ({ section, onDirtyChange }: any) => createElement('button', { onClick: () => onDirtyChange(true) }, `Изменить ${section}`) }));
 vi.mock('../src/components/CapabilitiesSettings', () => ({ CapabilitiesSettings: ({onDirtyChange}:any) => {const [value,setValue]=requireReact.useState('');return createElement('input',{ 'aria-label':'Общий черновик',value,onChange:(e:any)=>{setValue(e.target.value);onDirtyChange(true);}});}}));
 vi.mock('../src/components/ComputerSettings', () => ({ ComputerSettings: () => createElement('p', {}, 'Cua Driver') }));
 vi.mock('../src/components/PiSettings', () => ({ PiSettings: ({onDirtyChange}:any) => {const [value,setValue]=requireReact.useState('');return createElement('input',{ 'aria-label':'Черновик Pi',value,onChange:(e:any)=>{setValue(e.target.value);onDirtyChange(true);}});}}));
@@ -16,7 +13,6 @@ import { SettingsScreen, searchSettings } from '../src/components/SettingsScreen
 let root: Root;
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-  cli.detect.mockResolvedValue(null);
   HTMLElement.prototype.scrollTo = vi.fn();
   fake.state = { prefs: structuredClone(DEFAULT_PREFS), ui: { settingsOpen: true }, connection: { version: "1.18.18", phase: "connected", streamState: "open" }, connectedProviderIds: ["local"], agents: [] };
   const node = document.createElement('div'); document.body.append(node); root = createRoot(node); act(() => root.render(createElement(SettingsScreen)));
@@ -45,8 +41,8 @@ it("keeps edited ASR fields across navigation and prevents accidental exit on Es
   act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))); expect(fake.setUi).not.toHaveBeenCalled(); expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
   click('Остаться'); click('Отменить изменения'); click('Вернуться в приложение'); expect(fake.setUi).toHaveBeenCalledWith({ settingsOpen: false }); expect(fake.setAsr).not.toHaveBeenCalled();
 });
-it("retains staged engine changes across settings sections and guards host navigation", () => {
-  click('OpenCode'); click('Разрешения'); click('Изменить tools'); click('Общее'); click('Управлять…'); expect(fake.setUi).not.toHaveBeenCalled();
+it("retains staged agent changes across settings sections and guards host navigation", () => {
+  click('Агент Enki'); input('Черновик Pi', 'staged'); click('Общее'); click('Управлять…'); expect(fake.setUi).not.toHaveBeenCalled();
   expect(document.querySelector('[role="alert"]')).not.toBeNull(); click('Не сохранять и выйти'); expect(fake.setUi).toHaveBeenCalledWith({ settingsOpen: false, hostDialogOpen: true });
 });
 it("offers the private helper separately from ASR and MCP and validates its loopback address", () => {
@@ -61,14 +57,14 @@ it("offers the private helper separately from ASR and MCP and validates its loop
   expect(fake.setHelperEndpoint).toHaveBeenCalledWith('http://127.0.0.1:18109');
   expect(fake.setAsr).not.toHaveBeenCalled();
 });
-it("offers OpenCode installation only when its local CLI is missing", async () => {
-  click('OpenCode');
-  cli.detect.mockResolvedValue(false);
-  await act(async () => { button('Проверить снова').click(); });
-  expect(button('Установить OpenCode…')).toBeTruthy();
-  cli.detect.mockResolvedValue(true);
-  await act(async () => { button('Проверить снова').click(); });
-  expect([...document.querySelectorAll('button')].some(e => e.textContent === 'Установить OpenCode…')).toBe(false);
+it("never offers an external agent install, endpoint or CLI path: the runtime is bundled", () => {
+  click('Обзор агента');
+  expect(document.body.textContent).toContain('Среда выполнения Enki');
+  expect(document.body.textContent).toContain('Архив OpenCode');
+  expect([...document.querySelectorAll('button')].some(e => /Установить OpenCode|Настроить OpenCode/.test(e.textContent ?? ''))).toBe(false);
+  expect(document.querySelector('[aria-label="Путь к OpenCode CLI"]')).toBeNull();
+  expect(document.querySelector('[aria-label="Адрес локального сервера OpenCode"]')).toBeNull();
+  expect(fake.connect).not.toHaveBeenCalled();
 });
 
 it("keeps shared capability drafts when navigating and warns on exit",()=>{
@@ -77,20 +73,18 @@ it("keeps shared capability drafts when navigating and warns on exit",()=>{
  click('Вернуться в приложение');expect(fake.setUi).not.toHaveBeenCalled();expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
 });
 
-it("gives agents equal sidebar entries and keeps engine controls out of common settings",()=>{
+it("shows one executing agent and no OpenCode configuration sections",()=>{
  const nav=document.querySelector('nav[aria-label="Разделы настроек"]')!;
  expect([...nav.querySelectorAll('.settings-nav-label')].map(x=>x.textContent)).toEqual(['Приложение','Общие возможности','Агенты']);
- expect([...nav.querySelectorAll('button')].filter(x=>x.textContent==='OpenCode')).toHaveLength(1);
- expect([...nav.querySelectorAll('button')].filter(x=>x.textContent==='Pi')).toHaveLength(1);
+ expect([...nav.querySelectorAll('button')].filter(x=>x.textContent==='Агент Enki')).toHaveLength(1);
+ expect([...nav.querySelectorAll('button')].filter(x=>x.textContent==='OpenCode')).toHaveLength(0);
  expect(nav.textContent).not.toContain('Разрешения OpenCode');
- expect(document.querySelector('[aria-label="Путь к OpenCode CLI"]')).toBeNull();
- click('OpenCode');expect(document.querySelector('[aria-label="Путь к OpenCode CLI"]')).not.toBeNull();
- click('MCP');expect(document.querySelector('nav[aria-label="Разделы настроек"] [aria-current="page"]')?.textContent).toBe('OpenCode');
- expect(button('Изменить mcp')).toBeTruthy();
- expect(searchSettings('OpenCode плагины').map(x=>x.id)).toContain('plugins');
+ expect(nav.textContent).not.toContain('MCP OpenCode');
+ expect(searchSettings('OpenCode плагины').map(x=>x.id)).not.toContain('plugins');
+ click('Агент Enki');expect(document.querySelector('nav[aria-label="Разделы настроек"] [aria-current="page"]')?.textContent).toBe('Агент Enki');
 });
-it("preserves Pi drafts across navigation and guards leaving settings",()=>{
- click('Pi');input('Черновик Pi','unfinished pi');click('OpenCode');click('Pi');
+it("preserves agent drafts across navigation and guards leaving settings",()=>{
+ click('Агент Enki');input('Черновик Pi','unfinished pi');click('Общее');click('Агент Enki');
  expect(document.querySelector<HTMLInputElement>('[aria-label="Черновик Pi"]')!.value).toBe('unfinished pi');
  click('Вернуться в приложение');expect(fake.setUi).not.toHaveBeenCalled();expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
 });

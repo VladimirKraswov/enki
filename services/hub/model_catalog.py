@@ -6,12 +6,17 @@ never probes endpoints and never executes anything here. Per-device choices
 (selection, exclusions, extra local providers) stay on the device.
 """
 
+import importlib.util
 import json
-import os
 import re
-import secrets
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
+
+# Loaded by file location like every Hub module (see releases.py).
+_durable_spec = importlib.util.spec_from_file_location("enki_hub_durable", Path(__file__).with_name("durable.py"))
+durable = importlib.util.module_from_spec(_durable_spec)
+_durable_spec.loader.exec_module(durable)
 
 MAX_CATALOG = 256 * 1024
 MAX_MODEL_JSON = 24 * 1024
@@ -246,20 +251,5 @@ class ModelCatalog:
                 "updatedBy": actor.get("name") or actor.get("id") or "admin",
                 "models": models,
             }
-            temporary = self.path.with_name("." + secrets.token_hex(12) + ".tmp")
-            raw = json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode()
-            try:
-                with temporary.open("xb") as output:
-                    os.chmod(temporary, 0o600)
-                    output.write(raw)
-                    output.flush()
-                    os.fsync(output.fileno())
-                temporary.replace(self.path)
-                descriptor = os.open(self.path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
-            finally:
-                temporary.unlink(missing_ok=True)
+            durable.publish(self.path, json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode())
             return record

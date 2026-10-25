@@ -1,11 +1,25 @@
 # Reproducible task evaluation (M39)
 
 This is a test harness, not another production agent loop. It submits one task
-to an independently installed OpenCode or Pi, waits under a deadline, checks
-the actual outcome, records the result and removes its own temporary project.
-It does not resume owner chats or change installed agents/settings. Local GPU
-inference requires explicit opt-in through the local adapter below. No history,
-screenshots, secrets or private project code is sent.
+to an agent loop, waits under a deadline, checks the actual outcome, records the
+result and removes its own temporary project. It does not resume owner chats or
+change installed agents/settings. Local GPU inference requires explicit opt-in
+through the local adapter below. No history, screenshots, secrets or private
+project code is sent.
+
+Execution adapters (`--agents`, comma-separated):
+
+* `pi-sdk` — **default**. The exact Pi SDK that Enki bundles: the package from
+  the reviewed agent lock (`src-tauri/resources/agent`, version checked against
+  `scripts/runtime/sdk-contract.mjs`), started through that package's own CLI
+  entry with the current Node. It measures the product's agent loop and tools
+  policy for fixture tools; it does not include Enki's runtime daemon, queues,
+  permissions UI or Hub reservation. Install it with
+  `npm ci --prefix src-tauri/resources/agent --ignore-scripts`.
+* `opencode`, `pi` — **retired** external-CLI baselines: the runner refuses them
+  (`EVAL_ENGINE_RETIRED`) and never launches an independently installed CLI.
+  Their historical 2026-10-08 reports and event streams stay readable
+  (`parseAgentEvents`); installed CLIs on the machine are left untouched.
 
 ## Offline contract checks
 
@@ -13,7 +27,7 @@ Node 24+ and the repository dependencies are required:
 
 ```sh
 npm ci
-npm run eval:check
+npm run eval:check          # fixture self-check + adapter contract tests
 npx vitest run test/evaluations.test.ts
 ```
 
@@ -27,19 +41,22 @@ The CI workflow has no live provider credentials or model calls.
 
 ## Live paired trials (explicit opt-in)
 
-Install OpenCode and Pi separately. Supply `DEEPSEEK_API_KEY` in the parent
-environment, or explicitly pass `--key-file /private/path/to/opencode/auth.json`.
+Install the pinned SDK (above). Supply `DEEPSEEK_API_KEY` in the parent
+environment, or explicitly pass `--key-file /private/path/to/auth.json` (the
+historical OpenCode `auth.json` shape; only `deepseek.key` is read).
 Never commit the key file. The harness reads only its DeepSeek credential; it
 does not import global agent configuration. Start with a smoke test:
 
-Live execution was verified on macOS. Windows/Linux live CLI/browser execution
-remains unverified; the Linux CI job runs only the engine-independent contracts.
+The historical live executions (2026-10-08 reports) used the external CLIs on
+macOS. The `pi-sdk` adapter has not yet had a live run; Windows/Linux live
+execution remains unverified and CI runs only the engine-independent contracts.
 
 ```sh
 npm run eval:live -- --cases zero-value --repeats 1 --output .local/evaluations/smoke
 ```
 
-Full comparison, two repeats, alternating agent order (AB then BA):
+Two repeats (the AB/BA alternation applies to memory/navigation modes; the
+historical cross-engine comparison is no longer repeatable live):
 
 ```sh
 npm run eval:live -- --repeats 2 --timeout 120 --total-timeout 1800 \
@@ -93,9 +110,10 @@ Tool diagnostics retain only counts under a fixed error-code vocabulary; unknown
 errors become `TOOL_FAILED`. Filesystem paths, error messages, argument payloads
 and model reasoning are not included in these counters.
 
-Both agents have only scoped fixture tools: list/read/write for code tasks or
-snapshot/action for browser tasks. OpenCode receives them through stdio MCP; Pi
-uses an explicit extension against the same backend. Built-in shell/network/file
+Every adapter has only scoped fixture tools: list/read/write for code tasks or
+snapshot/action for browser tasks. The OpenCode baseline receives them through
+stdio MCP; `pi-sdk` and the Pi baseline use an explicit extension
+(`scripts/evaluations/pi-extension.ts`) against the same backend. Built-in shell/network/file
 tools, skill discovery, owner instructions and global extensions are disabled.
 The real provider key remains in the parent gateway, not agent config/argv.
 Disposable HOME/XDG/Pi paths isolate engine storage. This is a bounded synthetic
@@ -141,9 +159,13 @@ The initial suite covers deliberately small tasks; it cannot establish local
 Qwen throughput, complex-project quality or skill effectiveness. Add harder
 versioned tasks and repeat the same checks before promoting M40/M41 retrieval.
 
-Historical accepted-fix replay remains in
-`integrations/opencode-agent/evals/`; it is separate from cloud-safe synthetic
-fixtures and must never send owner project sources to a cloud model implicitly.
+Historical accepted-fix replay (three offline incident cases recorded on
+2026-09-27) is archived evidence, not a current gate. Its case IDs, repositories,
+revisions and recorded results are preserved in the immutable
+[original sources](https://github.com/VladimirKraswov/enki/tree/67e359994031cbdd3eac080924b22f603bc9597b/integrations/opencode-agent/evals).
+It is separate from cloud-safe synthetic fixtures and must never send owner
+project sources to a cloud model implicitly. Current project helpers are the
+bundled SDK tools documented in [PROJECT-TOOLS.md](PROJECT-TOOLS.md).
 
 
 ## M41 memory comparison

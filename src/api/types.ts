@@ -1,5 +1,8 @@
-// Typed contract models for the OpenCode server API (observed baseline 1.18.18).
-// All shapes tolerate additive/optional fields: parsers below normalize live JSON.
+// UI models for sessions, messages and parts as served by the Enki Runtime
+// (wire contract: src-tauri/resources/agent/src/protocol.ts). The shapes stay
+// compatible with histories imported from OpenCode, which the runtime serves
+// read-only. Parsers below tolerate additive/optional fields.
+import type { SessionOrigin } from "../../src-tauri/resources/agent/src/protocol";
 
 export interface HealthInfo {
   healthy: boolean;
@@ -41,6 +44,14 @@ export interface Session {
   tokens?: { input?: number; output?: number; reasoning?: number };
   summary?: { additions?: number; deletions?: number; files?: number };
   time: { created: number; updated: number; archived?: number | null };
+  /** Native, imported read-only OpenCode archive, former Pi CLI chat or continuation. */
+  origin?: SessionOrigin;
+  workshop?: boolean;
+}
+
+/** Imported OpenCode history is shown read-only until explicitly continued. */
+export function isReadOnlySession(session: Pick<Session, "origin"> | undefined | null): boolean {
+  return session?.origin?.kind === "opencode";
 }
 
 export type SessionStatus =
@@ -135,11 +146,17 @@ export interface PromptPartInput {
 }
 
 export interface PromptRequest {
+  /** Client-generated command id; reused verbatim on retry after a lost ACK. */
   messageID?: string;
   model?: { providerID: string; modelID: string };
   agent?: string;
-  variant?: string;
+  variant?: string | null;
   parts: Array<TextPartInput | PromptPartInput>;
+  /** Provenance kept in the runtime's command receipt. */
+  source?: "manual" | "queue" | "schedule";
+  sourceId?: string | null;
+  /** The model is Hub-managed: the runtime must hold a lease before running it. */
+  hubRoute?: boolean;
 }
 
 export interface ModelVariantInfo {
@@ -283,7 +300,7 @@ export function normalizeSession(raw: Record<string, unknown>): Session {
     projectID: asString(raw.projectID),
     directory: asString(raw.directory),
     parentID: typeof raw.parentID === "string" ? raw.parentID : undefined,
-    title: asString(raw.title, "(untitled)"),
+    title: asString(raw.title, "Без названия"),
     agent: typeof raw.agent === "string" ? raw.agent : undefined,
     model: model
       ? {

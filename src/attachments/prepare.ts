@@ -86,7 +86,7 @@ export async function prepareAttachments(
       continue;
     }
     if (kind === "text") {
-      // Text is decoded by OpenCode's text/plain file-part handler. Guard model context rather than silently truncate.
+      // The runtime decodes text/plain file parts into the prompt. Guard model context rather than silently truncate.
       const value = await file.blob.text();
       if (value.length > 750_000) throw new Error(`Текст «${file.name}» слишком длинный для одной отправки (до 750 000 символов). Разделите файл.`);
       parts.push(textPart(file.name, value));

@@ -1,6 +1,12 @@
 //! Shared CLI dispatcher for Enki and the legacy MCP executable alias.
 pub fn run_cli() {
-    if std::env::args().nth(1).as_deref() == Some("--image-state-lock") {
+    // Build runner first: no Tauri, migration, vault or profile state is touched.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--enki-build-job")) {
+        if let Err(error) = crate::build_job::cli() {
+            eprintln!("enki-build-job: {error}");
+            std::process::exit(2);
+        }
+    } else if std::env::args().nth(1).as_deref() == Some("--image-state-lock") {
         if let Err(error) = crate::image_context::state_lock_cli() {
             eprintln!("{error}");
             std::process::exit(1);

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
 import {execFileSync} from 'node:child_process';
-import {publishAndVerify} from './verify.mjs';
+import {assertSignedForClients,publishAndVerify} from './verify.mjs';
 import {nativeFingerprint,snapshot,snapshotGit,hash,validateVersions} from './packet.mjs';
 const root=path.resolve(import.meta.dirname,'../..');
 const channel=process.argv[2]??'stable';if(!['stable','preview'].includes(channel))throw Error('Use stable or preview');
@@ -38,6 +38,8 @@ try{
     envelopes[kind]={payload:payload.toString('base64'),signature:fs.readFileSync(file+'.sig','utf8').trim()};
     console.log(`${kind}: ${payload.length} bytes, SHA256 ${hash(payload)}`);
   }
+  // Nothing is sent unless clients would accept both signatures.
+  assertSignedForClients(envelopes,{version,nativeFingerprint:fp},fs.readFileSync(path.join(root,'src-tauri/updater.pub'),'utf8'));
   const current=await request('GET',`/api/updates/enki/${channel}`);
   const receipt=await publishAndVerify(
     ()=>request('POST','/api/updates',{channel,expectedRevision:current.revision,...envelopes}),

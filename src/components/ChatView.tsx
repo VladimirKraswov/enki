@@ -97,9 +97,22 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
     };
   }, [cacheKey]);
   // Before paint, preserve anchors for React updates; ResizeObserver handles async height changes.
+  // Every AppState change re-renders this view (e.g. another chat streaming in
+  // the background); geometry is read/written only when what THIS view renders
+  // changed. The reducer replaces changed message/part objects, so identity
+  // comparison of the bounded visible window is exact and cheap.
+  const layoutInputs = useRef<readonly unknown[]>([]);
+  const inputs: unknown[] = [start, end, permission, question, bannerError, more, s.ui.historyLoading, s.ui.historyError];
+  for (const message of messages) {
+    inputs.push(message);
+    for (const id of slot?.partsByMessage[message.id] ?? []) inputs.push(slot!.parts[id]);
+  }
   useLayoutEffect(() => {
+    const previous = layoutInputs.current;
+    const changed = previous.length !== inputs.length || inputs.some((value, index) => value !== previous[index]);
+    layoutInputs.current = inputs;
     if (jump.current) { jump.current = false; controller.current?.latest(); }
-    else controller.current?.layout();
+    else if (changed) controller.current?.layout();
   });
 
   useLayoutEffect(() => {
@@ -141,7 +154,11 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
     following.current = true; first.current = order[Math.max(0,order.length - 60)];
     jump.current = true; redraw(n => n + 1);
   };
-  const broken = store.engineIdFor() !== 'pi' && ['reconnecting','error','closed'].includes(s.connection.streamState);
+  // The runtime's event stream is the only source of live status: while it is
+  // down, running/idle is not confirmed (a read-only archive has no live state).
+  const live = !!sessionId && !store.isLegacySession(sessionId);
+  const broken = live && ['reconnecting','error','closed'].includes(s.connection.streamState);
+  const unconfirmed = broken || (live && !!s.connection.statusError);
   // Provenance must be visible: a handed-over chat never pretends the earlier
   // turns were its own.
   const origin = store.handoffOrigin(sessionId);
@@ -180,11 +197,12 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
         })}
         {end < order.length && <button className="history-more" onClick={newer}>Следующие сообщения · {order.length - end}<Icon name="chevron" size={16}/></button>}
         {bannerError && <div className="msg-error" role="alert">{bannerError}</div>}
-        {slot?.status.type === 'busy' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />Агент работает…</div>}
-        {slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
+        {/* Without a live stream the alert below replaces the spinner: running is unconfirmed. */}
+        {!unconfirmed && slot?.status.type === 'busy' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />Агент работает…</div>}
+        {!unconfirmed && slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
         {permission && <PermissionCard req={permission} onReply={r => void store.replyPermission(permission, r)} />}
         {question && <QuestionCard key={question.id} req={question} onReply={a => void store.replyQuestion(question, a)} onReject={() => void store.rejectQuestion(question)} />}
-        {(broken || s.connection.statusError) && !store.isPiSession(sessionId ?? "") && <div className="status-line" role="alert">
+        {unconfirmed && <div className="status-line" role="alert">
           {s.connection.statusError ? `Не удалось проверить состояние чата: ${s.connection.statusError}` : "Нет свежих событий. Выполнение не подтверждено; история сохранена."}
           <button className="btn" onClick={() => void (s.connection.statusError ? store.retryProjectAccess() : store.retryConnection())}>{s.connection.statusError ? "Проверить доступ к проекту" : "Проверить соединение"}</button>
           {s.connection.statusError && platform() === "macos" && <a className="btn" href="https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac" target="_blank" rel="noreferrer">Восстановление доступа</a>}

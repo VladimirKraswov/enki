@@ -1,16 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { store } from "../src/state/store";
-import { agentControlConfig } from "../src/state/agentControl";
 import { agentControlForTest } from "../src/control/bridge";
 import type { ManagedRun } from "../src/control/managedRuns";
-
-const nativeStatus = {
-  supported: true,
-  ready: true,
-  command: "/Applications/OpenCode Desktop.app/Contents/MacOS/opencode-desktop",
-  descriptorPath: "/Users/test/.local/share/opencode-desktop/agent-control/control.json",
-  protocol: 1,
-};
 
 describe("agent control MCP", () => {
   const managed = (overrides: Partial<ManagedRun> = {}): ManagedRun => ({
@@ -31,28 +22,9 @@ describe("agent control MCP", () => {
     ...overrides,
   });
 
-  it("adds a local MCP without discarding JSONC comments or other servers", () => {
-    const source = `{
-  // keep this server
-  "mcp": { "existing": { "type": "remote", "url": "https://example.test/mcp" } }
-}\n`;
-    const next = agentControlConfig(source, nativeStatus, true);
-    expect(next.content).toContain("// keep this server");
-    expect(next.content).toContain('"existing"');
-    expect(next.content).toContain('"opencode_desktop"');
-    expect(next.config.command).toEqual([nativeStatus.command, "--agent-mcp"]);
-    expect(next.config.enabled).toBe(true);
-  });
-
-  it("does not overwrite an unrelated MCP using the reserved name", () => {
-    expect(() =>
-      agentControlConfig(
-        '{"mcp":{"opencode_desktop":{"type":"local","command":["other"]}}}',
-        nativeStatus,
-        true,
-      ),
-    ).toThrow(/занято/);
-  });
+  // Registration of the control MCP moved from the OpenCode JSONC writer to the
+  // shared registry: test/reserved-servers.test.ts ("enki-control: adds its
+  // entry…", "…an unrelated entry using the reserved id is kept and refused").
 
   it("exposes a bounded status snapshot without transport details", async () => {
     const result = (await agentControlForTest.execute("status", {})) as Record<
@@ -63,6 +35,15 @@ describe("agent control MCP", () => {
     expect(result).toHaveProperty("directory");
     expect(result).toHaveProperty("pending");
     expect(result).not.toHaveProperty("prefs");
+  });
+
+  it("refuses the retired OpenCode engine before selecting a project or sending anything", async () => {
+    const select = vi.spyOn(store, "setDirectory"), add = vi.spyOn(store, "addProjectDirectory"), send = vi.spyOn(store, "sendPrompt");
+    try {
+      for (const engine of ["opencode", "codex"])
+        await expect(agentControlForTest.execute("send", { directory: "/tmp/project", text: "build it", engine })).rejects.toThrow(/engine/);
+      expect(select).not.toHaveBeenCalled(); expect(add).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+    } finally { select.mockRestore(); add.mockRestore(); send.mockRestore(); }
   });
 
   it("rejects malformed model selection before mutating the chat", async () => {

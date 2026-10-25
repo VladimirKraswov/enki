@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"fixture.pi.corrupt","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/enki-fixtures/pi-corrupt"}
+{"type":"message","id":"ffffffff","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"KEEP_BEFORE_CORRUPTION","timestamp":1767225601000}}
+{"type":"message","id":"broken00","parentId":"ffffffff","timestamp":"2026-01-01T00:00:02.000Z","message":
+{"type":"message","id":"00000001","parentId":"ffffffff","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"KEEP_AFTER_CORRUPTION"}],"api":"openai-completions","provider":"fixture-provider","model":"fixture-model","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1767225603000}}

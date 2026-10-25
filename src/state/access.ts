@@ -1,10 +1,13 @@
 import type { PermissionRule } from "../api/types";
+// Per-chat access presets. The Enki Runtime evaluates rules last-match-wins
+// (src-tauri/resources/agent/src/interaction/access.ts); "inherit" stores no
+// rules, so the runtime's default policy (Settings → Агент) applies.
 export type AccessMode = "inherit" | "ask" | "read" | "full";
 export const accessOptions = [
   {
     value: "inherit",
-    label: "Настройки агента",
-    detail: "Разрешения выбранного агента и проекта",
+    label: "По умолчанию",
+    detail: "Политика по умолчанию из настроек агента",
   },
   {
     value: "ask",
@@ -24,15 +27,8 @@ export const accessOptions = [
 ];
 export function accessRules(mode: AccessMode): PermissionRule[] {
   if (mode === "inherit") return [];
-  if (mode === "full")
-    return [
-      { permission: "*", pattern: "*", action: "allow" },
-      // OpenCode propagates explicit external_directory rules to subagents,
-      // but discards wildcard allow rules when creating a child session.
-      { permission: "external_directory", pattern: "*", action: "allow" },
-      // Explicit for engines that evaluate loop guards against session rules.
-      { permission: "doom_loop", pattern: "*", action: "allow" },
-    ];
+  // One wildcard rule also matches `external_directory` in the runtime.
+  if (mode === "full") return [{ permission: "*", pattern: "*", action: "allow" }];
   return [
     { permission: "*", pattern: "*", action: mode === "read" ? "deny" : "ask" },
     ...["read", "glob", "grep", "list", "question", "todowrite"].map(
@@ -44,17 +40,24 @@ export function accessMode(
   rules: PermissionRule[] | undefined,
 ): AccessMode | "custom" {
   if (!rules?.length) return "inherit";
-  // Recognize both previously shipped full-access representations.
-  if (JSON.stringify(rules.slice(-2)) === JSON.stringify([
+  // Full-access representations stored by earlier versions stay recognized.
+  const tail = (n: number) => JSON.stringify(rules.slice(-n));
+  if (tail(1) === JSON.stringify([{ permission: "*", pattern: "*", action: "allow" }])) return "full";
+  if (tail(2) === JSON.stringify([
     { permission: "*", pattern: "*", action: "allow" },
     { permission: "external_directory", pattern: "*", action: "allow" },
   ])) return "full";
-  if (JSON.stringify(rules.slice(-2)) === JSON.stringify([
+  if (tail(3) === JSON.stringify([
+    { permission: "*", pattern: "*", action: "allow" },
+    { permission: "external_directory", pattern: "*", action: "allow" },
+    { permission: "doom_loop", pattern: "*", action: "allow" },
+  ])) return "full";
+  if (tail(2) === JSON.stringify([
     { permission: "*", pattern: "*", action: "allow" },
     { permission: "doom_loop", pattern: "*", action: "ask" },
   ])) return "full";
   return (
-    (["ask", "read", "full"] as const).find(
+    (["ask", "read"] as const).find(
       (mode) => JSON.stringify(accessRules(mode)) === JSON.stringify(rules.slice(-accessRules(mode).length)),
     ) ?? "custom"
   );

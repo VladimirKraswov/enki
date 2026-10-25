@@ -109,11 +109,7 @@ fn source(scope: &str, directory: Option<&str>, path: &str) -> Result<Skill, Str
     let skill = document(scope, directory)?
         .skills
         .into_iter()
-        .find(|s| {
-            s.path == path
-                && s.engines.iter().any(|e| e == "pi")
-                && s.engines.iter().any(|e| e == "opencode")
-        })
+        .find(|s| s.path == path && s.engines.iter().any(|e| e == "pi"))
         .ok_or("Выберите общий навык из каталога")?;
     let p = Path::new(path);
     if p.canonicalize()
@@ -121,7 +117,8 @@ fn source(scope: &str, directory: Option<&str>, path: &str) -> Result<Skill, Str
         .starts_with(root()?.canonicalize().map_err(|e| e.to_string())?)
     {
         return Err(
-            "Пакет библиотеки неизменяемый. Сначала создайте свою копию в .agents/skills.".into(),
+            "Пакет библиотеки неизменяемый. Создайте свою копию в .agents/skills и подключите эту папку как источник навыков, иначе Enki её не загрузит."
+                .into(),
         );
     }
     if p.file_name().and_then(|x| x.to_str()) != Some("SKILL.md") || p.is_symlink() {
@@ -136,7 +133,6 @@ fn source(scope: &str, directory: Option<&str>, path: &str) -> Result<Skill, Str
 }
 fn pairs(e: &Experiment) -> Result<(), String> {
     let mut count = 0;
-    let mut engines = std::collections::BTreeSet::new();
     for candidate in e.trials.iter().filter(|t| t.phase == "candidate") {
         let baseline = e
             .trials
@@ -158,10 +154,11 @@ fn pairs(e: &Experiment) -> Result<(), String> {
             );
         }
         count += 1;
-        engines.insert(&candidate.engine);
     }
-    if count < 3 || engines.len() < 2 {
-        return Err("Нужны минимум три парных сценария, охватывающие OpenCode и Pi".into());
+    // One agent runtime executes every chat; paired cases replace the former
+    // two-engine coverage requirement.
+    if count < 3 {
+        return Err("Нужны минимум три парных сценария".into());
     }
     Ok(())
 }
@@ -394,7 +391,7 @@ pub async fn skill_quality(
             "record" => {
                 let t = trial.ok_or("Нет результата")?;
                 if !matches!(t.phase.as_str(), "baseline" | "candidate")
-                    || !matches!(t.engine.as_str(), "pi" | "opencode")
+                    || t.engine != "pi"
                     || !t.skill_read
                     || t.case_id.is_empty()
                     || t.case_id.len() > 160
@@ -464,7 +461,7 @@ mod tests {
                     phase: phase.into(),
                     revision: if phase == "baseline" { "a" } else { "b" }.into(),
                     case_id: n.to_string(),
-                    engine: if n == 0 { "pi" } else { "opencode" }.into(),
+                    engine: "pi".into(),
                     model: "m".into(),
                     session_id: "s".into(),
                     message_id: format!("{n}-{phase}"),

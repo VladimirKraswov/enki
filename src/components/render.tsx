@@ -14,7 +14,7 @@ import type {
 import { store, useAppState, useAppSelector } from "../state/store";
 import { Markdown } from "./Markdown";
 import { CopyButton } from "./CopyButton";
-import { sessionContext } from "../state/taskContext";
+import { sessionSources } from "../state/taskContext";
 import { AttachmentThumbnail, AttachmentViewer } from "./AttachmentViewer";
 import { MessageEdit } from "./MessageEdit";
 import { actionCountLabel, answerText, finalAnswer, stepCountLabel, turnMetrics, visibleParts } from "../chat/turns";
@@ -66,7 +66,7 @@ export function Fold({
         >
           {label}
         </span>
-        {spinner && <span className="tool-spinner" aria-label="Running" />}
+        {spinner && <span className="tool-spinner" aria-label="Выполняется" />}
         {right}
       </button>
       {open && <div className="fold-body">{children}</div>}
@@ -154,7 +154,7 @@ export function PartView({ part, evidence }: { part: MessagePart; evidence?: Exe
       return part.text ? <Markdown source={part.text} /> : null;
     case "reasoning":
       return part.text ? (
-        <Fold label="Thinking" tone="reasoning">
+        <Fold label="Размышления" tone="reasoning">
           <div style={{ whiteSpace: "pre-wrap", color: "var(--text-dim)" }}>
             {part.text}
           </div>
@@ -166,19 +166,19 @@ export function PartView({ part, evidence }: { part: MessagePart; evidence?: Exe
       return null;
     case "patch":
       return (
-        <Fold label={<span>patch applied</span>}>
-          File changes recorded in the session diff.
+        <Fold label={<span>изменения применены</span>}>
+          Изменения файлов записаны в сводку изменений сессии.
         </Fold>
       );
     case "retry":
       return (
         <div className="msg-meta finish-note">
-          Retrying…{" "}
+          Повтор…{" "}
           {String((part.metadata as { message?: string })?.message ?? "")}
         </div>
       );
     case "compaction":
-      return <div className="msg-meta">Context compaction marker</div>;
+      return <div className="msg-meta">Контекст сжат</div>;
     default:
       return null;
   }
@@ -187,8 +187,8 @@ export function PartView({ part, evidence }: { part: MessagePart; evidence?: Exe
 function usePartsPresentation(sessionId: string, messageIds: readonly string[]) {
   const select = useMemo(() => partsPresentation(sessionId, messageIds,
     () => store.activityStatus(sessionId)?.type,
-    s => store.isPiSession(sessionId) ? store.engineReady("pi")
-      : s.connection.phase === "connected" && s.connection.streamState === "open" && !s.connection.statusError,
+    // The runtime event stream is the only live evidence that a tool still runs.
+    s => s.connection.phase === "connected" && s.connection.streamState === "open" && !s.connection.statusError,
   ), [sessionId, messageIds]);
   return useAppSelector(select);
 }
@@ -220,7 +220,7 @@ export const AssistantMessageView = memo(function AssistantMessageView({
       ))}
       {running && parts.length === 0 && (
         <div className="status-line">
-          <span className="tool-spinner" /> Working…
+          <span className="tool-spinner" /> Работаю…
         </div>
       )}
       {errText && (
@@ -309,7 +309,11 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
 
 function MessageAttachmentViewer({sessionId, initialKey, onClose}: {sessionId:string; initialKey:string; onClose:()=>void}) {
   const s = useAppState();
-  return <AttachmentViewer files={sessionContext(s.chat.sessions[sessionId]).sources} initialKey={initialKey} onClose={onClose}/>;
+  // Only user attachments; the same list object while nothing it shows changed.
+  const next = sessionSources(s.chat.sessions[sessionId]), stable = useRef(next);
+  const same = stable.current.length === next.length && next.every((f, i) => { const o = stable.current[i]; return o.key === f.key && o.url === f.url && o.name === f.name && o.mime === f.mime; });
+  if (!same) stable.current = next;
+  return <AttachmentViewer files={stable.current} initialKey={initialKey} onClose={onClose}/>;
 }
 
 export function UserMessageView({ message }: { message: UserMessage }) {
@@ -346,12 +350,12 @@ export function PermissionCard({
     <div
       className="action-card"
       role="alertdialog"
-      aria-label="Permission request"
+      aria-label="Запрос разрешения"
     >
-      <div className="caption">Permission requested</div>
+      <div className="caption">Нужно разрешение</div>
       <div className="body">
-        The agent is asking to use <b>{req.permission}</b>
-        {req.tool?.callID ? " as part of a tool call" : ""}.
+        Агент просит разрешение <b>{req.permission}</b>
+        {req.tool?.callID ? " для вызова инструмента" : ""}.
       </div>
       {req.patterns && req.patterns.length > 0 && (
         <div className="patterns">{req.patterns.join("\n")}</div>
@@ -363,17 +367,17 @@ export function PermissionCard({
       )}
       <div className="btn-row">
         <button className="btn small danger" onClick={() => onReply("reject")}>
-          Reject
+          Отклонить
         </button>
         <button
           className="btn small"
           onClick={() => onReply("always")}
-          title="Allow this permission for the rest of the session"
+          title="Разрешать это действие до конца сессии"
         >
-          Always allow
+          Разрешать всегда
         </button>
         <button className="btn small primary" onClick={() => onReply("once")}>
-          Allow once
+          Разрешить один раз
         </button>
       </div>
     </div>
@@ -406,9 +410,9 @@ export function QuestionCard({
     <div
       className="action-card"
       role="group"
-      aria-label="Question from the agent"
+      aria-label="Вопрос агента"
     >
-      <div className="caption">The agent is asking</div>
+      <div className="caption">Агент спрашивает</div>
       {req.questions.map((q, qi) => (
         <div
           key={qi}
@@ -445,8 +449,8 @@ export function QuestionCard({
           {(q.custom ?? true) && (
             <input
               className="search-box"
-              placeholder="Type your own answer…"
-              aria-label="Custom answer"
+              placeholder="Свой ответ…"
+              aria-label="Свой ответ"
               value={custom[qi] ?? ""}
               onChange={(e) => {
                 setCustom((prev) => ({ ...prev, [qi]: e.target.value }));
@@ -458,14 +462,14 @@ export function QuestionCard({
       ))}
       <div className="btn-row">
         <button className="btn small danger" onClick={onReject}>
-          Dismiss
+          Отклонить вопрос
         </button>
         <button
           className="btn small primary"
           disabled={!allAnswered}
           onClick={submit}
         >
-          Send answer
+          Отправить ответ
         </button>
       </div>
     </div>
@@ -481,11 +485,11 @@ export function sessionStatusLine(
   if (!st) return null;
   switch (st.type) {
     case "busy":
-      return "Running…";
+      return "Выполняется…";
     case "retry":
-      return `Retrying (attempt ${st.attempt ?? 1})${st.message ? `: ${st.message}` : ""}`;
+      return `Повтор (попытка ${st.attempt ?? 1})${st.message ? `: ${st.message}` : ""}`;
     case "waiting":
-      return "Waiting for input";
+      return "Ожидает ответа";
     default:
       return null;
   }

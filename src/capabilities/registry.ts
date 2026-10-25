@@ -1,7 +1,5 @@
-import { managedPlugins, pluginFileUri, type ManagedPluginPaths } from '../util/managedPlugins';
-import { parseConfig, updateConfig, remoteMcpUrl } from "../state/configEditor";
+import { remoteMcpUrl } from "./mcpUrl";
 import { isAbsoluteLocalPath } from "../util/paths";
-import { sameAppExecutable } from "../util/appExecutable";
 export type Scope = "global" | "project";
 export interface SkillSource {
   id: string;
@@ -37,14 +35,14 @@ export interface Skill {
   engines: string[];
   error: string | null;
 }
-export interface Catalog extends ManagedPluginPaths {
+/** Native shared registry document (src-tauri/src/capabilities.rs `Document`). */
+export interface Catalog {
   key: string;
   content: string;
   registry: Registry;
   inherited: Registry;
   skills: Skill[];
   runtimeReady: boolean;
-  accessPluginPath?: string;
   command: string;
   scopeDirectory: string | null;
   sourceHealth?: Record<string, boolean>;
@@ -57,6 +55,7 @@ export const emptyRegistry = (): Registry => ({
   servers: [],
   appliedPaths: [],
 });
+/** Tool namespace of a shared server inside agent sessions. */
 export const serverName = (id: string) => `mesh_${id.replace(/-/g, "_")}`;
 export function signature(value: unknown) {
   let h = 0xcbf29ce484222325n;
@@ -111,104 +110,23 @@ export function validateServer(s: SharedServer): string | null {
   }
   return null;
 }
-function owned(value: unknown, key: string, id: string, executable: string) {
-  if (!value || typeof value !== "object") return false;
-  const v = value as { type?: unknown; command?: unknown };
-  if (
-    v.type !== "local" ||
-    !Array.isArray(v.command) ||
-    v.command.length !== 4 ||
-    v.command[1] !== "--shared-mcp" ||
-    v.command[2] !== key ||
-    v.command[3] !== id ||
-    typeof v.command[0] !== "string" ||
-    !isAbsoluteLocalPath(v.command[0])
-  )
-    return false;
-  return sameAppExecutable(v.command[0], executable);
-}
-export const accessPluginUri = pluginFileUri;
-/** Reserved entries only. Foreign MCPs, comments, plugins and permissions survive. */
-export function sharedOpenCodeConfig(source: string, catalog: Catalog) {
-  const config = parseConfig(source),
-    registry = catalog.registry;
-  const mcp = config.mcp;
-  if (
-    mcp !== undefined &&
-    (!mcp || typeof mcp !== "object" || Array.isArray(mcp))
-  )
-    throw new Error("Проверьте объект mcp в OpenCode.");
-  const skills = config.skills as { paths?: unknown } | undefined;
-  if (
-    skills !== undefined &&
-    (!skills || typeof skills !== "object" || Array.isArray(skills))
-  )
-    throw new Error("Проверьте объект skills в OpenCode.");
-  if (
-    skills?.paths !== undefined &&
-    (!Array.isArray(skills.paths) ||
-      skills.paths.some((p) => typeof p !== "string"))
-  )
-    throw new Error("Проверьте skills.paths в OpenCode.");
-  let content = source;
-  if (catalog.accessPluginPath) {
-    if (!isAbsoluteLocalPath(catalog.accessPluginPath)) throw new Error("Путь политики доступа должен быть абсолютным.");
-    const plugins = config.plugin;
-    if (plugins !== undefined && (!Array.isArray(plugins) || plugins.some(p => typeof p !== "string")))
-      throw new Error("Проверьте plugin в OpenCode.");
-    const next = managedPlugins((plugins ?? []) as string[], catalog, {access:true,browser:false});
-    if (JSON.stringify(next) !== JSON.stringify(plugins ?? [])) content = updateConfig(content, ["plugin"], next);
-  }
-  const entries: Record<string, unknown> = {};
-  for (const s of registry.servers) {
-    const name = serverName(s.id),
-      existing = (mcp as Record<string, unknown> | undefined)?.[name];
-    if (
-      existing !== undefined &&
-      !owned(existing, catalog.key, s.id, catalog.command)
-    )
-      throw new Error(`Имя ${name} занято другой интеграцией. Она сохранена.`);
-    const entry = {
-      type: "local",
-      command: [catalog.command, "--shared-mcp", catalog.key, s.id],
-      enabled: s.enabled,
-      timeout: 45000,
-    };
-    content = updateConfig(content, ["mcp", name], entry);
-    entries[name] = entry;
-  }
-  const desired = registry.sources.filter((s) => s.enabled).map((s) => s.path),
-    previous = (skills?.paths ?? []) as string[];
-  const paths = previous.filter(
-    (p) => !registry.appliedPaths.includes(p) || desired.includes(p),
-  );
-  const applied = registry.appliedPaths.filter((p) => desired.includes(p));
-  for (const p of desired) {
-    if (!paths.includes(p)) {
-      paths.push(p);
-      applied.push(p);
-    }
-  }
-  if (desired.length || registry.appliedPaths.length)
-    content = updateConfig(content, ["skills", "paths"], paths);
-  return { content, entries, appliedPaths: [...new Set(applied)] };
-}
-export interface PiServerStatus {
+/** Live status of one shared server as reported by the runtime's MCP pool. */
+export interface RuntimeServerStatus {
   id: string;
   signature: string;
   state: string;
   tools: string[];
 }
-export function piServerState(
+export function runtimeServerState(
   server: SharedServer,
-  statuses: PiServerStatus[],
+  statuses: RuntimeServerStatus[],
   running: boolean,
 ) {
   if (!server.enabled) return "Выключено";
-  if (!running) return "Откройте сессию Pi";
+  if (!running) return "Откройте чат с агентом";
   const status = statuses.find((s) => s.id === server.id);
   if (!status || status.signature !== signature(server))
-    return "Переоткройте сессию Pi";
+    return "Переоткройте чат: подключение изменилось";
   return status.state === "connected"
     ? `Подключено · ${status.tools.length} инструментов`
     : status.state === "checking"

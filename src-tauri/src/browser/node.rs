@@ -61,64 +61,112 @@ fn parse_version(name: &str) -> Option<Vec<u32>> {
     (!parts.is_empty()).then_some(parts)
 }
 
-/// Absolute candidates in preference order: user-level shims, system/package
-/// manager installs, then version managers (nvm, fnm, mise, asdf). A system
-/// Node that is too old does not hide a newer version-manager install.
-fn candidates() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let home = crate::paths::user_home().ok();
+/// One lazily evaluated group of absolute candidates. A group is evaluated
+/// only when every earlier candidate failed, so a qualifying bundled Node
+/// means no HOME path is ever stat'ed and no version-manager tree is read.
+type Group = Box<dyn FnOnce() -> Vec<PathBuf>>;
+
+/// Groups in preference order: the verified interpreter bundled with the Enki
+/// Runtime, user-level shims, system/package manager installs, then version
+/// managers (nvm, fnm, mise, asdf). A system Node that is too old does not
+/// hide a newer version-manager install. `home` is None under an explicit
+/// profile (see [`crate::paths::discovery_home`]).
+fn groups(bundled: Option<PathBuf>, home: Option<PathBuf>) -> Vec<Group> {
+    let mut out: Vec<Group> = vec![Box::new(move || bundled.into_iter().collect())];
     #[cfg(not(target_os = "windows"))]
     {
-        if let Some(home) = &home {
-            out.extend([home.join(".local/bin/node"), home.join(".volta/bin/node")]);
+        if let Some(home) = home.clone() {
+            out.push(Box::new(move || {
+                vec![home.join(".local/bin/node"), home.join(".volta/bin/node")]
+            }));
         }
-        out.extend(
+        out.push(Box::new(|| {
             [
                 "/opt/homebrew/bin/node",
                 "/usr/local/bin/node",
                 "/usr/bin/node",
             ]
-            .map(PathBuf::from),
-        );
-        if let Some(home) = &home {
-            out.extend(versioned(&home.join(".nvm/versions/node"), "bin/node"));
-            out.extend(versioned(
-                &home.join(".local/share/fnm/node-versions"),
-                "installation/bin/node",
-            ));
-            #[cfg(target_os = "macos")]
-            out.extend(versioned(
-                &home.join("Library/Application Support/fnm/node-versions"),
-                "installation/bin/node",
-            ));
-            out.extend(versioned(
-                &home.join(".local/share/mise/installs/node"),
-                "bin/node",
-            ));
-            out.extend(versioned(&home.join(".asdf/installs/nodejs"), "bin/node"));
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
+        }));
+        if let Some(home) = home {
+            out.push(Box::new(move || {
+                let mut found = versioned(&home.join(".nvm/versions/node"), "bin/node");
+                found.extend(versioned(
+                    &home.join(".local/share/fnm/node-versions"),
+                    "installation/bin/node",
+                ));
+                #[cfg(target_os = "macos")]
+                found.extend(versioned(
+                    &home.join("Library/Application Support/fnm/node-versions"),
+                    "installation/bin/node",
+                ));
+                found.extend(versioned(
+                    &home.join(".local/share/mise/installs/node"),
+                    "bin/node",
+                ));
+                found.extend(versioned(&home.join(".asdf/installs/nodejs"), "bin/node"));
+                found
+            }));
         }
     }
     #[cfg(target_os = "windows")]
     {
-        for variable in ["ProgramFiles", "ProgramW6432"] {
-            if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
-                out.push(root.join(r"nodejs\node.exe"));
+        out.push(Box::new(|| {
+            ["ProgramFiles", "ProgramW6432"]
+                .into_iter()
+                .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from))
+                .map(|root| root.join(r"nodejs\node.exe"))
+                .collect()
+        }));
+        if let Some(home) = home {
+            out.push(Box::new(move || {
+                // nvm-windows points this variable at the active version's
+                // directory inside the user's profile.
+                let mut found: Vec<PathBuf> = std::env::var_os("NVM_SYMLINK")
+                    .map(|active| PathBuf::from(active).join("node.exe"))
+                    .into_iter()
+                    .collect();
+                found.push(home.join(r"AppData\Local\Programs\nodejs\node.exe"));
+                found.push(home.join(r"scoop\apps\nodejs\current\node.exe"));
+                found.push(home.join(r"scoop\apps\nodejs-lts\current\node.exe"));
+                found
+            }));
+        }
+        out.push(Box::new(|| {
+            vec![PathBuf::from(r"C:\Program Files\nodejs\node.exe")]
+        }));
+    }
+    out
+}
+
+/// First candidate that exists and reports a supported version. At most
+/// `MAX_PROBES` interpreters are executed; duplicates are probed once.
+fn select(
+    groups: Vec<Group>,
+    exists: impl Fn(&Path) -> bool,
+    mut probe: impl FnMut(&Path) -> Result<u32, String>,
+) -> Result<PathBuf, String> {
+    let mut seen = std::collections::HashSet::new();
+    let (mut probes, mut too_old) = (0, false);
+    'groups: for group in groups {
+        for candidate in group() {
+            if !candidate.is_absolute() || !seen.insert(candidate.clone()) || !exists(&candidate) {
+                continue;
+            }
+            if probes == MAX_PROBES {
+                break 'groups;
+            }
+            probes += 1;
+            match probe(&candidate) {
+                Ok(major) if major >= MINIMUM_MAJOR => return Ok(candidate),
+                Ok(_) => too_old = true,
+                Err(_) => {}
             }
         }
-        // nvm-windows points this variable at the active version's directory.
-        if let Some(active) = std::env::var_os("NVM_SYMLINK").map(PathBuf::from) {
-            out.push(active.join("node.exe"));
-        }
-        if let Some(home) = &home {
-            out.push(home.join(r"AppData\Local\Programs\nodejs\node.exe"));
-            out.push(home.join(r"scoop\apps\nodejs\current\node.exe"));
-            out.push(home.join(r"scoop\apps\nodejs-lts\current\node.exe"));
-        }
-        out.push(PathBuf::from(r"C:\Program Files\nodejs\node.exe"));
     }
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|path| seen.insert(path.clone()));
-    out
+    Err(if too_old { TOO_OLD } else { MISSING }.to_string())
 }
 
 fn major_version(node: &Path) -> Result<u32, String> {
@@ -144,7 +192,7 @@ fn major_version(node: &Path) -> Result<u32, String> {
 }
 
 /// A configured interpreter must itself qualify; auto-discovery returns the
-/// first candidate that runs and is new enough.
+/// first candidate that runs and is new enough (see [`groups`]).
 pub fn node_program(configured: Option<&str>) -> Result<PathBuf, String> {
     if let Some(value) = configured.map(str::trim).filter(|value| !value.is_empty()) {
         let path = PathBuf::from(value);
@@ -157,20 +205,14 @@ pub fn node_program(configured: Option<&str>) -> Result<PathBuf, String> {
             Err(TOO_OLD.into())
         };
     }
-    let mut too_old = false;
-    for candidate in candidates()
-        .into_iter()
-        .filter(|path| executable(path))
-        .take(MAX_PROBES)
-    {
-        match major_version(&candidate) {
-            Ok(major) if major >= MINIMUM_MAJOR => return Ok(candidate),
-            Ok(_) => too_old = true,
-            Err(_) => {}
-        }
-    }
-    let error = if too_old { TOO_OLD } else { MISSING };
-    Err(error.to_string())
+    select(
+        groups(
+            crate::runtime::known_bundled_node(),
+            crate::paths::discovery_home()?,
+        ),
+        executable,
+        major_version,
+    )
 }
 
 fn npm_beside(node: &Path) -> Option<PathBuf> {
@@ -245,11 +287,160 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Own fixture HOME with a newer version-manager install; never the
+    /// process HOME.
+    fn fixture_home(tag: &str) -> PathBuf {
+        let home = std::env::temp_dir().join(format!(
+            "browser-node-home-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(home.join(".nvm/versions/node/v24.1.0/bin")).unwrap();
+        fs::write(home.join(".nvm/versions/node/v24.1.0/bin/node"), b"fixture").unwrap();
+        home
+    }
+
+    fn evaluate(groups: Vec<Group>) -> Vec<PathBuf> {
+        groups.into_iter().flat_map(|group| group()).collect()
+    }
+
     #[test]
     fn every_candidate_is_absolute() {
-        for candidate in candidates() {
+        let home = fixture_home("absolute");
+        let bundled = home.join("bundled/node");
+        for candidate in evaluate(groups(Some(bundled), Some(home.clone()))) {
             assert!(candidate.is_absolute(), "{}", candidate.display());
         }
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn a_qualifying_bundled_node_never_evaluates_owner_discovery() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let walked = Arc::new(AtomicBool::new(false));
+        let flag = walked.clone();
+        let bundled = PathBuf::from("/fixture/enki/node/bin/node");
+        let chosen = select(
+            vec![
+                Box::new({
+                    let bundled = bundled.clone();
+                    move || vec![bundled]
+                }),
+                Box::new(move || {
+                    flag.store(true, Ordering::SeqCst);
+                    vec![PathBuf::from(
+                        "/fixture/home/.nvm/versions/node/v24.1.0/bin/node",
+                    )]
+                }),
+            ],
+            |_| true,
+            |_| Ok(24),
+        );
+        assert_eq!(chosen.unwrap(), bundled);
+        assert!(!walked.load(Ordering::SeqCst), "later group was evaluated");
+
+        // Normal discovery is kept: an unusable bundled Node falls through.
+        let user = PathBuf::from("/fixture/home/.nvm/versions/node/v24.1.0/bin/node");
+        let mut probed = Vec::new();
+        let chosen = select(
+            vec![
+                Box::new(|| vec![PathBuf::from("/fixture/enki/node/bin/node")]),
+                Box::new({
+                    let user = user.clone();
+                    move || vec![user]
+                }),
+            ],
+            |_| true,
+            |path| {
+                probed.push(path.to_path_buf());
+                Ok(if path == user { 24 } else { 18 })
+            },
+        );
+        assert_eq!(chosen.unwrap(), user);
+        assert_eq!(probed.len(), 2);
+    }
+
+    #[test]
+    fn production_groups_put_the_bundled_node_first_and_stat_no_home_path_after_it() {
+        let home = fixture_home("lazy");
+        let bundled = PathBuf::from("/fixture/enki/node/bin/node");
+        let mut first = groups(Some(bundled.clone()), Some(home.clone()));
+        assert_eq!(first.remove(0)(), vec![bundled.clone()]);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let chosen = select(
+            groups(Some(bundled.clone()), Some(home.clone())),
+            |path| {
+                asked.borrow_mut().push(path.to_path_buf());
+                true
+            },
+            |_| Ok(24),
+        );
+        assert_eq!(chosen.unwrap(), bundled);
+        assert_eq!(asked.into_inner(), vec![bundled]);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn an_explicit_profile_never_discovers_under_the_owner_home() {
+        let home = fixture_home("profile");
+        // Without a profile the user's version manager is normal discovery.
+        let owner = crate::paths::discovery_home_for(Ok(None), Ok(home.clone())).unwrap();
+        assert_eq!(owner.as_deref(), Some(home.as_path()));
+        let owner_candidates = evaluate(groups(None, owner));
+        assert!(owner_candidates.iter().any(|path| path.starts_with(&home)));
+        #[cfg(not(target_os = "windows"))]
+        assert!(owner_candidates.contains(&home.join(".nvm/versions/node/v24.1.0/bin/node")));
+        // An isolated profile considers no path below the owner's HOME.
+        let profile = crate::paths::discovery_home_for(
+            Ok(Some(PathBuf::from("/fixture/profile"))),
+            Ok(home.clone()),
+        )
+        .unwrap();
+        assert!(profile.is_none());
+        let isolated = evaluate(groups(None, profile));
+        assert!(
+            isolated.iter().all(|path| !path.starts_with(&home)),
+            "{isolated:?}"
+        );
+        // An invalid profile fails closed; it never falls back to the owner.
+        assert_eq!(
+            crate::paths::discovery_home_for(Err("invalid profile".into()), Ok(home.clone())),
+            Err("invalid profile".to_string())
+        );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn probing_is_bounded_and_duplicates_are_probed_once() {
+        let same = PathBuf::from("/fixture/node");
+        let mut probes = 0;
+        let result = select(
+            vec![
+                Box::new({
+                    let same = same.clone();
+                    move || vec![same.clone(), same]
+                }),
+                Box::new(|| {
+                    (0..20)
+                        .map(|i| PathBuf::from(format!("/fixture/old-{i}/node")))
+                        .collect()
+                }),
+                Box::new(|| vec![PathBuf::from("relative/node")]),
+            ],
+            |_| true,
+            |_| {
+                probes += 1;
+                Ok(18)
+            },
+        );
+        assert_eq!(result.unwrap_err(), TOO_OLD);
+        assert_eq!(probes, MAX_PROBES);
     }
 
     #[test]

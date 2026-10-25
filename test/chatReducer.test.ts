@@ -227,9 +227,7 @@ describe("chatReducer stream normalization", () => {
   });
 
   it("recognizes known message error shapes", () => {
-    expect(describeMessageError({ name: "MessageAbortedError" })).toMatch(
-      /aborted/i,
-    );
+    expect(describeMessageError({ name: "MessageAbortedError" })).toBe("Ответ остановлен.");
     expect(describeMessageError({ name: "ContextOverflowError" })).toMatch(
       /контекст/i,
     );
@@ -329,6 +327,44 @@ describe("sessionPatchFiles (1.18.18: /session/diff may be empty, patch parts ar
       "/tmp/x/a.ts",
       "/tmp/x/b.ts",
     ]);
+  });
+
+  // The changes panel watches this O(1) counter instead of scanning every part per delta.
+  it("patchRevision moves only for patch parts (added, changed, removed) and stays monotonic across history reloads", () => {
+    const root = emptyChatRoot();
+    const part = (id: string, type: string, extra: object = {}) => evt("message.part.updated", `e-${id}-${type}-${JSON.stringify(extra)}`, { part: { id, sessionID: SID, messageID: MID, type, ...extra } });
+    reduceEvent(root, part("t", "text", { text: "a" }));
+    reduceEvent(root, evt("message.part.delta", "d1", { sessionID: SID, messageID: MID, partID: "t", field: "text", delta: "b" }));
+    expect(root.sessions[SID].patchRevision ?? 0).toBe(0);
+    reduceEvent(root, part("p", "patch", { files: ["/x/a.ts"] }));
+    const added = root.sessions[SID].patchRevision!;
+    expect(added).toBeGreaterThan(0);
+    reduceEvent(root, part("p", "patch", { files: ["/x/a.ts", "/x/b.ts"] }));
+    const changed = root.sessions[SID].patchRevision!;
+    expect(changed).toBeGreaterThan(added);
+    reduceEvent(root, evt("message.part.removed", "r1", { sessionID: SID, partID: "p" }));
+    const removed = root.sessions[SID].patchRevision!;
+    expect(removed).toBeGreaterThan(changed);
+    applyHistory(root, SID, [{ info: { id: MID, sessionID: SID, role: "user", time: { created: 1 } }, parts: [{ id: "p", sessionID: SID, messageID: MID, type: "patch", files: ["/x/a.ts"] } as never] }]);
+    const reloaded = root.sessions[SID].patchRevision!;
+    expect(reloaded).toBeGreaterThan(removed);
+    // Final seam review: an authoritative snapshot that REMOVES the last patch
+    // must advance the revision too (no upsert would signal the removal).
+    applyHistory(root, SID, [{ info: { id: MID, sessionID: SID, role: "user", time: { created: 1 } }, parts: [] }]);
+    expect(root.sessions[SID].patchRevision!).toBeGreaterThan(reloaded);
+    expect(sessionPatchFiles(root.sessions[SID])).toEqual([]);
+  });
+
+  it("a HubLeaseLost session.error stays visible through the cancelled outcome and idle that follow it", () => {
+    const root = emptyChatRoot();
+    const message = "Hub завершил заявку на модель во время работы агента. Ход остановлен, чтобы не продолжить его на другой модели; заявка не заменялась автоматически. Повторите запрос.";
+    reduceEvent(root, evt("session.status", "s1", { sessionID: SID, status: { type: "busy" } }));
+    reduceEvent(root, evt("session.error", "e1", { sessionID: SID, error: { name: "HubLeaseLost", message } }));
+    reduceEvent(root, evt("session.outcome", "o1", { sessionID: SID, commandID: "c1", state: "cancelled", reason: "stopped", error: message }));
+    reduceEvent(root, evt("session.idle", "i1", { sessionID: SID }));
+    expect(root.sessions[SID].lastError).toBe(message);
+    expect(root.sessions[SID].lastOutcome).toMatchObject({ state: "cancelled", reason: "stopped" });
+    expect(root.sessions[SID].status).toEqual({ type: "idle" });
   });
 
   it("returns empty list for missing slot or malformed parts", () => {

@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "contract": 1,
+  "sdk": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "0.85.1",
+    "engines": ">=22.19.0"
+  },
+  "node": {
+    "version": "24.22.1",
+    "source": "https://nodejs.org/dist/v24.22.1/",
+    "checksums": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+    "artifacts": {
+      "darwin-arm64": {
+        "file": "node-v24.22.1-darwin-arm64.tar.gz",
+        "binary": "bin/node",
+        "sha256": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7"
+      },
+      "win32-x64": {
+        "file": "node-v24.22.1-win-x64.zip",
+        "binary": "node.exe",
+        "sha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5"
+      },
+      "linux-x64": {
+        "file": "node-v24.22.1-linux-x64.tar.xz",
+        "binary": "bin/node",
+        "sha256": "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6"
+      }
+    }
+  },
+  "review": {
+    "status": "PINNED",
+    "note": "Official Node 24.22.1 SHASUMS256.txt detached signature verified with pinned OpenPGP.js and trusted release key; proof retained in .local/pi-sdk-migration-20261024/node24-signature-proof. Cross-platform archives are pins, not claims of installed-platform qualification."
+  },
+  "tools": {
+    "rg": {
+      "version": "15.2.0",
+      "provenance": "Official GitHub release API asset digest over TLS; not a PGP signature. Root records verified archive proof before execution.",
+      "artifacts": {
+        "darwin-arm64": {
+          "file": "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+          "binary": "rg",
+          "sha256": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz"
+        },
+        "win32-x64": {
+          "file": "ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+          "binary": "rg.exe",
+          "sha256": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip"
+        },
+        "linux-x64": {
+          "file": "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+          "binary": "rg",
+          "sha256": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz"
+        }
+      }
+    },
+    "fd": {
+      "version": "10.3.0",
+      "provenance": "Official GitHub release API asset digest over TLS; not a PGP signature. Root records verified archive proof before execution.",
+      "artifacts": {
+        "darwin-arm64": {
+          "file": "fd-v10.3.0-aarch64-apple-darwin.tar.gz",
+          "binary": "fd",
+          "sha256": "0570263812089120bc2a5d84f9e65cd0c25e4a4d724c80075c357239c74ae904",
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.3.0/fd-v10.3.0-aarch64-apple-darwin.tar.gz"
+        },
+        "win32-x64": {
+          "file": "fd-v10.3.0-x86_64-pc-windows-msvc.zip",
+          "binary": "fd.exe",
+          "sha256": "318aa2a6fa664325933e81fda60d523fff29444129e91ebf0726b5b3bcd8b059",
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.3.0/fd-v10.3.0-x86_64-pc-windows-msvc.zip"
+        },
+        "linux-x64": {
+          "file": "fd-v10.3.0-x86_64-unknown-linux-musl.tar.gz",
+          "binary": "fd",
+          "sha256": "2b6bfaae8c48f12050813c2ffe1884c61ea26e750d803df9c9114550a314cd14",
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.3.0/fd-v10.3.0-x86_64-unknown-linux-musl.tar.gz"
+        }
+      }
+    }
+  },
+  "dataSchema": 3
+}

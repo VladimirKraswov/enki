@@ -4,8 +4,9 @@ import {createElement,act} from 'react';
 import {createRoot,type Root} from 'react-dom/client';
 import type {AssistantMessage,MessagePart} from '../src/api/types';
 const data=vi.hoisted(()=>({parts:{} as Record<string,MessagePart>,partsByMessage:{} as Record<string,string[]>,messageOrder:[] as string[],status:"busy",connected:true}));
-vi.mock('../src/state/store',()=>({useAppState:()=>({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed'}}),useAppSelector:(select:any)=>select({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed'}}),store:{isRunning:()=>true,activityStatus:()=>({type:data.status}),isPiSession:()=>false}}));
+vi.mock('../src/state/store',()=>({useAppState:()=>({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed'}}),useAppSelector:(select:any)=>select({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed'}}),store:{isRunning:()=>true,activityStatus:()=>({type:data.status}),isPiSession:()=>false,isLegacySession:(id:string)=>id==='archive'}}));
 import {AssistantTurnView,UserMessageView} from '../src/components/render';
+import {MessageEdit} from '../src/components/MessageEdit';
 let root:Root|undefined;
 afterEach(()=>{if(root)act(()=>root!.unmount());root=undefined;document.body.innerHTML='';data.parts={};data.partsByMessage={};data.status='busy';data.connected=true;vi.unstubAllGlobals();});
 const message=(id:string,finish='tool-calls'):AssistantMessage=>({id,sessionID:'s',role:'assistant',parentID:'u',finish,time:{created:1000,completed:2000},modelID:'local',tokens:{output:10}});
@@ -42,7 +43,7 @@ it('keeps explicit collapse through updates while surfacing tool errors and abor
  expect(toggle().getAttribute('aria-expanded')).toBe('false');expect(toggle().textContent).toContain('Ошибок инструментов: 1');
  expect(document.querySelector('.finish-note')?.closest('[hidden]')).toBeNull();expect(document.querySelector('.turn-answer')).toBeNull();
  mount([message('a'),{...message('b','stop'),error:{name:'MessageAbortedError'}}]);
- expect(document.querySelector('[role="alert"]')?.textContent).toContain('aborted');expect(document.querySelector('[role="alert"]')?.closest('[hidden]')).toBeNull();
+ expect(document.querySelector('[role="alert"]')?.textContent).toBe('Ответ остановлен.');expect(document.querySelector('[role="alert"]')?.closest('[hidden]')).toBeNull();
 });
 it('does not show a final copy or phantom whitespace for an in-progress tool-only step',()=>{
  parts('a',[{type:'step-start'},{text:'\n\n'},{type:'tool',tool:'bash',state:{status:'running'}},{type:'step-finish'}]);mount([{...message('a'),time:{created:1000},finish:undefined}],true);
@@ -94,6 +95,19 @@ it('a correction renders as a labelled compact note, ordinary user messages stay
  expect(el.querySelector('.user-message-steering')).not.toBeNull();expect(el.textContent).toContain('Уточнение');expect(el.textContent).not.toContain('hidden guidance');
  parts('u',[{text:'Новая задача'}]);act(()=>root!.render(createElement(UserMessageView,{message})));
  expect(el.querySelector('.user-message-steering')).toBeNull();expect(el.textContent).not.toContain('Уточнение');
+});
+// Regression: the edit action was hidden for EVERY chat by a constant
+// isPiSession()===true; only read-only archives lack it now.
+it('a live sent message offers "edit in a new branch"; a read-only archive does not',()=>{
+ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
+ parts('u',[{text:'Сделай отчёт'}]);
+ const el=document.createElement('div');document.body.append(el);root=createRoot(el);
+ act(()=>root!.render(createElement(UserMessageView,{message:{id:'u',sessionID:'s',role:'user' as const,time:{created:1000}}})));
+ const edit=el.querySelector<HTMLButtonElement>('[aria-label="Редактировать сообщение"]');
+ expect(edit).not.toBeNull();
+ expect(edit!.disabled).toBe(true); // the mocked chat is running: wait for it to finish
+ act(()=>root!.render(createElement(MessageEdit,{message:{id:'u',sessionID:'archive',role:'user' as const,time:{created:1000}},text:'x'})));
+ expect(el.querySelector('[aria-label="Редактировать сообщение"]')).toBeNull();
 });
 it('does not parse or mount folded historical steps until opened, then preserves their local state',()=>{
  parts('a',[{text:'```js\nconst hidden = 1;\n```'}]);parts('b',[{text:'Final'}]);

@@ -20,19 +20,15 @@ export function contextUsage(
     0,
     model?.limit?.input ? model.limit.input - reserved : limit - output,
   );
-  const latest = [...(chat?.messageOrder ?? [])]
-    .reverse()
-    .map((id) => chat!.messages[id])
-    .find(
-      (m) =>
-        m.role === "assistant" &&
-        m.tokens &&
-        (m.tokens.total ||
-          m.tokens.input ||
-          m.tokens.output ||
-          m.tokens.cache?.read ||
-          m.tokens.cache?.write),
-    ) as AssistantMessage | undefined;
+  // Rendered on every streamed delta: walk back from the tail without copying
+  // the whole transcript; the newest measured reply is usually the last one.
+  let latest: AssistantMessage | undefined;
+  const order = chat?.messageOrder ?? [];
+  for (let i = order.length - 1; i >= 0 && !latest; i--) {
+    const m = chat!.messages[order[i]];
+    if (m?.role === "assistant" && m.tokens && (m.tokens.total || m.tokens.input || m.tokens.output || m.tokens.cache?.read || m.tokens.cache?.write))
+      latest = m;
+  }
   // A model switch changes tokenization and the context limit. The last usage
   // measured for a different model is not a valid count for the selected one.
   const measuredForSelected =

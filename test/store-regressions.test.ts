@@ -1,738 +1,472 @@
-vi.mock("../src/operations/ownership", () => ({ownWork: vi.fn(async () => {})}));
+// Store regressions over the single Enki Runtime, via the shared route fixture
+// (the production RuntimeBackend/RuntimeClient; only the loopback wire is in
+// memory). Prompts are durable commands: POST /commands {id, kind:"prompt"}.
+//
+// Preparation gates use the current local readiness seam (ensureLocal); the
+// removed UI Hub reserve/ensure orchestration is not reintroduced.
+//
+// Moved to their actual owners (not re-implemented here):
+//  - Hub readiness/lease before dispatch, Stop while Hub loads → runtime
+//    test/integration/cancel-and-hub.test.ts, model-context-hub.test.ts;
+//  - all scheduled-task delivery cases (runScheduledTask is gone) → runtime
+//    test/scheduler-unit.test.ts and test/integration/schedules.test.ts;
+//  - Pi follow-up restoration after a cleared SDK queue → runtime
+//    PromptQueue.restoreUndelivered (queue-unit / integration queue);
+//  - engine routing (OpenCode vs Pi listing/stream/access) → retired: one engine.
 import { beforeEach, expect, it, vi } from "vitest";
-const captured = vi.hoisted(() => ({ stream: null as any }));
-vi.mock("../src/api/events", () => ({
-  globalEventStreamUrl: () => "http://localhost/global/event",
-  eventStreamUrl: () => "http://127.0.0.1:4096/event",
-  runEventStream: vi.fn((opts) => {
-    captured.stream = opts;
-    return Promise.resolve();
-  }),
-}));
-let store: any;
-const session = (id: string, directory = "/test/A", agent = "qwen-build") => ({
-  id,
-  directory,
-  title: id,
-  projectID: "test",
-  agent,
-  time: { created: 1, updated: 1 },
-});
-const flush = async () => {
-  for (let n = 0; n < 12; n++) await Promise.resolve();
-};
-it('Hub readiness holds the original prompt and reserves the model before exactly one engine dispatch', async () => {
-  store.state = {...store.state, activeSessionId: 'ses_a', sessions: [session('ses_a')], connectedProviderIds: ['local-qwen-next']};
-  store.commitModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium'); store.setDraft('write a story');
-  const {HubModelServices} = await import('../src/models/hub');
-  const {modelServices} = await import('../src/models/services');
-  let ready = false;
-  const calls: string[] = [];
-  const route = {service:'gpu',label:'GPU',providerID:'local-qwen-next',modelID:'qwen38-flash-next',target:'qwen38-flash-next',agent:'opencode'};
-  const hub = new HubModelServices({identity:async()=> 'hub-test',request:async(path,body:any)=>{
-    calls.push(path + ':' + (body?.mode ?? ''));
-    if(path==='catalog')return {schema:1,routes:[route]} as any;
-    return {schema:1,operation_id:'12345678-1234-1234-1234-123456789012',phase:ready?'ready':'loading',ready,
-      active_model:ready?route.target:null,target_model:route.target,elapsed_seconds:1,active_requests:0,error:null,loader:null} as any;
-  }});
-  modelServices.attachHub(hub); await hub.refresh();
-  const prompt = vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
-  const sending = store.sendPrompt('write a story');
-  await vi.waitFor(()=>expect(calls).toContain('prepare:select'));
-  expect(prompt).not.toHaveBeenCalled(); expect(store.getDraft()).toBe('write a story');
-  ready = true;
-  expect(await sending).toBe(true); expect(prompt).toHaveBeenCalledOnce();
-  expect(calls).toContain('prepare:run');
-  expect(prompt.mock.calls[0][2].parts[0]).toEqual({type:'text',text:'write a story'});
-});
-it('Stop while Hub is loading withdraws preparation, preserves the draft and never sends to the agent', async () => {
-  store.state = {...store.state, activeSessionId:'ses_a',sessions:[session('ses_a')],connectedProviderIds:['local-qwen-next']};
-  store.commitModelChoice('local-qwen-next','qwen38-flash-next','medium'); store.setDraft('keep me');
-  const {HubModelServices} = await import('../src/models/hub');
-  const {modelServices} = await import('../src/models/services');
-  const route = {service:'gpu',label:'GPU',providerID:'local-qwen-next',modelID:'qwen38-flash-next',target:'qwen38-flash-next',agent:'opencode'};
-  const request = vi.fn(async(path:string)=>path==='catalog'?{schema:1,routes:[route]}:{schema:1,operation_id:'12345678-1234-1234-1234-123456789012',phase:'loading',ready:false,
-    active_model:null,target_model:route.target,elapsed_seconds:1,active_requests:0,error:null,loader:null});
-  const hub = new HubModelServices({identity:async()=> 'hub-test',request:request as any});
-  modelServices.attachHub(hub); await hub.refresh();
-  const prompt = vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
-  const sending = store.sendPrompt('keep me');
-  await vi.waitFor(()=>expect(request.mock.calls.some(([p])=>p==='prepare')).toBe(true));
-  store.cancelPreparation();
-  expect(await sending).toBe(false); expect(store.getDraft()).toBe('keep me'); expect(prompt).not.toHaveBeenCalled();
-  await vi.waitFor(()=>expect(request.mock.calls.some(([p])=>p==='release')).toBe(true));
-});
-it('a reservation failure after creating the first chat leaves the prompt in that chat draft', async()=>{
-  store.state={...store.state,activeSessionId:null,sessions:[],connectedProviderIds:['local-qwen-next']};
-  store.commitModelChoice('local-qwen-next','qwen38-flash-next','medium');store.setDraft('preserve first prompt');
-  vi.spyOn(store.client,'createSession').mockResolvedValue(session('ses_created'));
-  const {modelServices}=await import('../src/models/services');
-  vi.spyOn(modelServices,'reserve').mockRejectedValue(new Error('Hub offline'));
-  const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
-  expect(await store.sendPrompt('preserve first prompt')).toBe(false);
-  expect(store.state.activeSessionId).toBe('ses_created');expect(store.getDraft()).toBe('preserve first prompt');expect(prompt).not.toHaveBeenCalled();
-});
-it('routes access changes to Pi and keeps OpenCode out of its permissions', async () => {
-  const piSession = { ...session('pi:access'), permission: [] };
-  store.state.activeSessionId = piSession.id;
-  store.state.sessions = [piSession];
-  store.state.prefs.sessionEngine = { [piSession.id]: 'pi' };
-  const pi = store.engine('pi');
-  const updated = vi.spyOn(pi, 'updateSession').mockImplementation(async (_id: unknown, patch: any) => ({ ...piSession, ...patch }));
-  const wrong = vi.spyOn(store.backend, 'updateSession');
-  await store.setAccessMode('full');
-  expect(updated).toHaveBeenCalledOnce();
-  expect(wrong).not.toHaveBeenCalled();
-  expect(store.getAccessMode()).toBe('full');
-});
-it('OpenCode reconnect cannot erase a running Pi session or another project', async () => {
-  const { emptySessionChat } = await import('../src/state/chatReducer');
-  store.state.prefs.sessionEngine = { 'pi:active': 'pi' };
-  store.state.chat.sessions = {
-    'pi:active': { ...emptySessionChat(), status: { type: 'busy' } },
-    'ses_other': { ...emptySessionChat(), status: { type: 'busy' } },
-    'ses_stale': { ...emptySessionChat(), status: { type: 'busy' } },
-  };
-  store.activityDirectories.set('ses_other', '/other');
-  await store.resyncAfterReconnect('/test/A', store.directoryGeneration, false);
-  expect(store.state.chat.sessions['pi:active'].status.type).toBe('busy');
-  expect(store.state.chat.sessions.ses_other.status.type).toBe('busy');
-  expect(store.state.chat.sessions.ses_stale.status.type).toBe('idle');
-});
+import type { RuntimeFixture } from "./helpers/runtime-fixture";
+
+let store: any, fx: RuntimeFixture, fixture: typeof import("./helpers/runtime-fixture");
+const session = (id: string, directory = "/test/A") => ({ id, directory, title: id, projectID: "test", time: { created: 1, updated: 1 } });
+const flush = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(); };
+const commands = () => fx.made("POST", "/commands").map(c => c.body as { id: string; kind: string; sessionID: string; directory: string; payload: { parts: Array<Record<string, unknown>>; model: Record<string, unknown> } });
+const accepted = (id: string) => ({ id, kind: "prompt", sessionID: "x", state: "accepted", createdAt: 1, updatedAt: 1 });
+let sessions: Record<string, unknown[]>;
 beforeEach(async () => {
-  vi.restoreAllMocks();
-  vi.resetModules();
-  captured.stream = null;
+  vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules();
   const values = new Map<string, string>();
-  vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
-  const journal = (await import('../src/operations/journal')).operationJournal;
-  // These regressions exercise store routing. Native durability is independently
-  // fault-tested; a mocked native host has no SQLite IPC bridge.
-  vi.spyOn(journal as any, 'storage').mockReturnValue({list: async () => [], write: async () => {}});
+  vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
+  fixture = await import("./helpers/runtime-fixture");
+  const journal = (await import("../src/operations/journal")).operationJournal;
+  // Native journal durability is fault-tested separately; a mocked host has no SQLite IPC.
+  vi.spyOn(journal as any, "storage").mockReturnValue({ list: async () => [], write: async () => {} });
   store = (await import("../src/state/store")).store;
-  store.state = {
-    ...store.state,
-    connection: { ...store.state.connection, phase: "connected" },
-  };
-  vi.spyOn(store.client, "vcs").mockResolvedValue(null);
-  vi.spyOn(store.client, "listSessions").mockResolvedValue([]);
-  vi.spyOn(store.client, "sessionStatuses").mockResolvedValue({});
-  vi.spyOn(store.client, "pendingPermissions").mockResolvedValue([]);
-  vi.spyOn(store.client, "pendingQuestions").mockResolvedValue([]);
-  vi.spyOn(store.client, "messages").mockResolvedValue({ messages: [] });
-  // Project switches reload metadata as well. Keep these unit tests independent
-  // of an owner's running server and its response time.
-  vi.spyOn(store.client, "providers").mockResolvedValue({ all: [], connected: [], default: {} });
-  vi.spyOn(store.client, "agents").mockResolvedValue([]);
-  vi.spyOn(store.client, "config").mockResolvedValue({});
-  vi.spyOn(store, "configureSharedTools").mockResolvedValue(undefined);
+  fx = fixture.runtimeFixture();
+  fixture.withProvider(fx, "local-qwen-next", ["qwen38-flash-next"], ["low", "medium"]);
+  sessions = { "/test/A": [], "/test/B": [] };
+  fx.on("GET", "/sessions", c => sessions[c.query.directory] ?? []);
+  fx.on("POST", "/commands", c => accepted((c.body as { id: string }).id));
+  fx.on("POST", "/sessions/:id/stop", () => ({ stopped: true }));
+  fixture.bindStore(store, fx);
   await store.setDirectory("/test/A");
 });
-it("R1: session.created must not invalidate the current project SSE stream", async () => {
-  const stream = captured.stream;
-  stream.onEvent({
-    type: "session.created",
-    properties: { info: session("ses_new") },
-  });
+const choose = (sessionId: string | null, variant = "medium") => {
+  if (sessionId) store.state = { ...store.state, activeSessionId: sessionId, sessions: [session(sessionId)] };
+  store.setModelChoice("local-qwen-next", "qwen38-flash-next", variant);
+};
+const stream = (directory = "/test/A") => fx.directoryStreams.filter(s => s.directory === directory && !s.subscription.signal.aborted).at(-1)!.subscription;
+
+it("R1: session.created must not invalidate the current project stream", async () => {
+  const before = stream();
+  fx.emit({ type: "session.created", properties: { info: session("ses_new") } } as never, "/test/A");
   await flush();
-  stream.onEvent({
-    type: "message.updated",
-    properties: {
-      info: {
-        id: "msg_new",
-        sessionID: "ses_new",
-        role: "user",
-        time: { created: 2 },
-      },
-    },
-  });
+  expect(before.signal.aborted).toBe(false);
+  fx.emit({ type: "message.updated", properties: { info: { id: "msg_new", sessionID: "ses_new", role: "user", time: { created: 2 } } } } as never, "/test/A");
   expect(store.state.chat.sessions.ses_new?.messages.msg_new).toBeDefined();
 });
-it("R2: an explicit agent selection must override the old session agent", () => {
-  store.state = {
-    ...store.state,
-    activeSessionId: "ses_a",
-    sessions: [session("ses_a")],
-  };
+
+it("R2: an explicit agent selection overrides the old session agent", () => {
+  store.state = { ...store.state, activeSessionId: "ses_a", sessions: [{ ...session("ses_a"), agent: "build" }] };
   store.setAgentOverride("/test/A", "plan");
   expect(store.getAgentChoice()).toBe("plan");
 });
-it("R3: a late session creation from project A must not select it inside project B", async () => {
-  let resolve!: (s: unknown) => void;
-  vi.spyOn(store.client, "createSession").mockImplementation(
-    () =>
-      new Promise((r) => {
-        resolve = r;
-      }),
-  );
+
+it("R3: a late session creation from project A is not selected inside project B", async () => {
+  let resolve!: (value: unknown) => void;
+  fx.on("POST", "/sessions", () => new Promise(r => { resolve = r; }));
   const pending = store.createSessionNow("A task");
+  await vi.waitFor(() => expect(fx.made("POST", "/sessions")).toHaveLength(1));
   await store.setDirectory("/test/B");
   resolve(session("ses_a"));
   await pending;
   expect(store.state.directory).toBe("/test/B");
   expect(store.state.activeSessionId).not.toBe("ses_a");
-  expect(store.state.sessions.some((s: any) => s.id === "ses_a")).toBe(false);
+  expect(store.state.sessions.some((s: { id: string }) => s.id === "ses_a")).toBe(false);
+  expect(fx.made("POST", "/sessions")[0].body).toMatchObject({ directory: "/test/A" });
 });
-it("R4: reconnect must replace stale busy status with authoritative idle", async () => {
-  captured.stream.onEvent({
-    type: "session.status",
-    properties: { sessionID: "ses_a", status: { type: "busy" } },
-  });
-  store.state = {
-    ...store.state,
-    activeSessionId: "ses_a",
-    sessions: [session("ses_a")],
+
+it("R4: a reconnect replaces stale busy status with the runtime's authoritative idle", async () => {
+  sessions["/test/A"] = [session("ses_a")];
+  fx.emit({ type: "session.status", properties: { sessionID: "ses_a", status: { type: "busy" } } } as never, "/test/A");
+  store.state = { ...store.state, activeSessionId: "ses_a", sessions: [session("ses_a")] };
+  expect(store.isRunning("ses_a")).toBe(true);
+  fx.on("GET", "/sessions/status", () => ({}));
+  stream().onState("open");
+  await vi.waitFor(() => expect(store.state.chat.sessions.ses_a.status.type).toBe("idle"));
+});
+
+it("a reconnect of one project cannot erase running work of another project", async () => {
+  const { emptySessionChat } = await import("../src/state/chatReducer");
+  sessions["/test/B"] = [session("ses_other", "/test/B")];
+  await store.setDirectory("/test/B");
+  await store.setDirectory("/test/A");
+  store.state.chat.sessions = {
+    ses_other: { ...emptySessionChat(), status: { type: "busy" } },
+    ses_stale: { ...emptySessionChat(), status: { type: "busy" } },
   };
-  vi.mocked(store.client.listSessions).mockResolvedValue([session("ses_a")]);
-  vi.mocked(store.client.sessionStatuses).mockResolvedValue({
-    ses_a: { type: "idle" },
-  });
-  captured.stream.onState("open");
-  await flush();
-  expect(store.state.chat.sessions.ses_a.status.type).toBe("idle");
-});
-it("R5: accepting a prompt must preserve a new draft typed while awaiting acknowledgement", async () => {
-  store.state = {
-    ...store.state,
-    activeSessionId: "ses_a",
-    sessions: [session("ses_a")],
-    connectedProviderIds: ["local-qwen-next"],
-  };
-  store.setModelChoice("local-qwen-next", "qwen38-flash-next", "medium");
-  let resolve!: () => void;
-  vi.spyOn(store.client, "prompt").mockImplementation(
-    () =>
-      new Promise<void>((r) => {
-        resolve = r;
-      }),
-  );
-  const pending = store.sendPrompt("first task");
-  store.setDraft("next task typed during request");
-  await flush();
-  resolve();
-  await pending;
-  expect(store.getDraft()).toBe("next task typed during request");
+  stream().onState("open");
+  await vi.waitFor(() => expect(store.state.chat.sessions.ses_stale.status.type).toBe("idle"));
+  expect(store.state.chat.sessions.ses_other.status.type).toBe("busy");
 });
 
-it('workshop manual requests carry the permanent release authorization without changing the draft',async()=>{
- const s=session('workshop');store.state.activeSessionId=s.id;store.state.sessions=[s];
- store.state.prefs.workshop={directory:s.directory,sourceDirectory:'/source',session:s};
- store.state.connectedProviderIds=['p'];store.setModelChoice('p','m','medium');
- const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
- expect(await store.sendPrompt('Исправь цвет')).toBe(true);
- const body=prompt.mock.calls[0][2];expect(body.parts[0]).toEqual({type:'text',text:'Исправь цвет'});
- expect(body.parts.find(p=>p.type==='text' && p.metadata?.arvelaWorkshopRelease)).toMatchObject({type:'text',synthetic:true,metadata:{arvelaWorkshopRelease:1}});
- expect(body.variant).toBe('medium');
-});
-
-it('workshop queued corrections retain release authorization when steering now',async()=>{
- const s=session('workshop');store.state.activeSessionId=s.id;store.state.sessions=[s];
- store.state.prefs.workshop={directory:s.directory,sourceDirectory:'/source',session:s};
- store.state.connectedProviderIds=['p'];store.setModelChoice('p','m','medium');store.state.statuses[s.id]={type:'busy'};
- const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
- expect(store.enqueuePrompt('Также исправь тест')).toBe(true);
- await store.steerQueued(store.getQueue()[0].id);
- expect(prompt).toHaveBeenCalledOnce();expect(prompt.mock.calls[0][2].parts.find(p=>p.type==='text' && p.metadata?.arvelaWorkshopRelease)).toMatchObject({synthetic:true,metadata:{arvelaWorkshopRelease:1}});
-});
-
-it('Stop during manual preparation prevents a late POST and retains the draft', async () => {
-  store.state = { ...store.state, activeSessionId: 'ses_a', sessions: [session('ses_a')], connectedProviderIds: ['local-qwen-next'] };
-  store.setModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium');
-  store.setDraft('keep this draft');
-  let ready!: () => void;
-  vi.mocked(store.configureSharedTools).mockImplementationOnce(() => new Promise<void>(resolve => { ready = resolve; }));
-  vi.spyOn(store.client, 'prompt').mockResolvedValue(undefined);
-  vi.spyOn(store.client, 'abort').mockResolvedValue(undefined);
-  const sending = store.sendPrompt('keep this draft');
-  await flush();
-  await store.stopSession('ses_a');
-  ready();
-  expect(await sending).toBe(false);
-  expect(store.client.prompt).not.toHaveBeenCalled();
-  expect(store.getDraft()).toBe('keep this draft');
-});
-
-it('leaving and returning to a chat invalidates its unfinished manual preparation', async () => {
-  store.state = { ...store.state, activeSessionId: 'ses_a', sessions: [session('ses_a')], connectedProviderIds: ['local-qwen-next'] };
-  store.setModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium');
-  let ready!: () => void;
-  vi.mocked(store.configureSharedTools).mockImplementationOnce(() => new Promise<void>(resolve => { ready = resolve; }));
-  vi.spyOn(store.client, 'prompt').mockResolvedValue(undefined);
-  const sending = store.sendPrompt('old preparation');
-  await flush();
-  await store.selectSession('ses_b');
-  await store.selectSession('ses_a');
-  ready();
-  expect(await sending).toBe(false);
-  expect(store.client.prompt).not.toHaveBeenCalled();
-});
-
-it('completion of cancelled preparation cannot unlock a newer send in another chat', async () => {
-  store.state = { ...store.state, activeSessionId: 'ses_a', sessions: [session('ses_a')], connectedProviderIds: ['local-qwen-next'] };
-  store.setModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium');
+// The window's only preparation step before POST /commands is the local
+// model-service readiness seam (`modelServices.ensureLocal`, store.sendPrompt);
+// Hub readiness and the whole-turn lease belong to the runtime dispatcher.
+const gateEnsure = async () => {
+  const { modelServices } = await import("../src/models/services");
   const ready: Array<() => void> = [];
-  vi.mocked(store.configureSharedTools).mockImplementation(() => new Promise<void>(resolve => { ready.push(resolve); }));
-  const prompt = vi.spyOn(store.client, 'prompt').mockResolvedValue(undefined);
-  const old = store.sendPrompt('old'); await flush();
-  await store.selectSession('ses_b');
-  store.setModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium');
-  const current = store.sendPrompt('current'); await flush();
-  expect(ready).toHaveLength(2);
+  vi.spyOn(modelServices, "ensureLocal").mockImplementation(() => new Promise<void>(resolve => { ready.push(resolve); }));
+  return ready;
+};
+
+// The permanent release authorization is runtime turn policy (system prompt,
+// re-read per turn: agent test/turn-policy.test.ts "re-reads the workshop flag
+// per turn…"). The window sends only the user's own words, never a duplicate.
+it("workshop manual requests carry only the user's text; the runtime owns the release authorization", async () => {
+  const s = session("workshop"); choose("workshop");
+  store.state.prefs.workshop = { directory: s.directory, sourceDirectory: "/source", session: s };
+  store.setDraft("Исправь цвет");
+  expect(await store.sendPrompt("Исправь цвет")).toBe(true);
+  const [command] = commands();
+  expect(command.payload.parts).toEqual([{ type: "text", text: "Исправь цвет" }]);
+  expect(command.payload.model.variant).toBe("medium");
+  expect(store.getDraft()).toBe("");
+});
+
+it("Stop during manual preparation prevents a late command and retains the draft", async () => {
+  choose("ses_a"); store.setDraft("keep this draft");
+  const ready = await gateEnsure();
+  const sending = store.sendPrompt("keep this draft");
+  await vi.waitFor(() => expect(ready).toHaveLength(1));
+  await store.stopSession("ses_a");
+  ready[0]();
+  expect(await sending).toBe(false);
+  expect(commands()).toEqual([]);
+  expect(store.getDraft()).toBe("keep this draft");
+  expect(fx.made("POST", "/sessions/:id/stop").map(c => [c.params.id, c.query.directory])).toEqual([["ses_a", "/test/A"]]);
+});
+
+it("leaving and returning to a chat invalidates its unfinished preparation", async () => {
+  choose("ses_a");
+  const ready = await gateEnsure();
+  const sending = store.sendPrompt("old preparation");
+  await vi.waitFor(() => expect(ready).toHaveLength(1));
+  await store.selectSession("ses_b"); await store.selectSession("ses_a");
+  ready[0]();
+  expect(await sending).toBe(false);
+  expect(commands()).toEqual([]);
+});
+
+it("completion of a cancelled preparation cannot unlock or redirect a newer send in another chat", async () => {
+  choose("ses_a");
+  const ready = await gateEnsure();
+  const old = store.sendPrompt("old");
+  await vi.waitFor(() => expect(ready).toHaveLength(1));
+  await store.selectSession("ses_b");
+  choose("ses_b");
+  const current = store.sendPrompt("current");
+  await vi.waitFor(() => expect(ready).toHaveLength(2));
   ready[0](); await old;
   expect(store.state.ui.sending).toBe(true);
-  ready[1](); expect(await current).toBe(true);
-  expect(prompt).toHaveBeenCalledTimes(1);
-  expect(prompt.mock.calls[0][0]).toBe('ses_b');
+  ready[1]();
+  expect(await current).toBe(true);
+  expect(commands().map(c => c.sessionID)).toEqual(["ses_b"]);
   expect(store.state.ui.sending).toBe(false);
 });
 
-it('leaving and returning to a chat invalidates unfinished queued preparation', async () => {
-  store.state = { ...store.state, activeSessionId: 'ses_a', sessions: [session('ses_a')], statuses: { ses_a: { type: 'busy' } }, connectedProviderIds: ['local-qwen-next'] };
-  store.setModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium');
-  const { modelServices } = await import('../src/models/services');
-  let ready!: () => void;
-  vi.spyOn(modelServices, 'ensure').mockImplementationOnce(() => new Promise<void>(resolve => { ready = resolve; }));
-  const prompt = vi.spyOn(store.client, 'prompt').mockResolvedValue(undefined);
-  expect(store.enqueuePrompt('queued')).toBe(true);
-  const sending = store.steerQueued(store.getQueue()[0].id);
-  await flush();
-  await store.selectSession('ses_b'); await store.selectSession('ses_a');
-  ready(); await sending;
-  expect(prompt).not.toHaveBeenCalled();
-  expect(store.getQueue()[0].state).toBe('ready');
-  expect(store.isQueueArmed()).toBe(false);
-});
-
-it('Stop after a POST keeps acknowledgement ownership and clears only its submitted draft', async () => {
-  store.state = { ...store.state, activeSessionId: 'ses_a', sessions: [session('ses_a')], connectedProviderIds: ['local-qwen-next'] };
-  store.setModelChoice('local-qwen-next', 'qwen38-flash-next', 'medium');
-  store.setDraft('submitted');
+it("Stop after the command was sent keeps acknowledgement ownership and clears only the submitted draft", async () => {
+  choose("ses_a"); store.setDraft("submitted");
   let acknowledge!: () => void;
-  const prompt = vi.spyOn(store.client, 'prompt').mockImplementation(() => new Promise<void>(resolve => { acknowledge = resolve; }));
-  vi.spyOn(store.client, 'abort').mockResolvedValue(undefined);
-  const sending = store.sendPrompt('submitted');
-  await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
-  await store.stopSession('ses_a');
+  fx.on("POST", "/commands", c => new Promise(r => { acknowledge = () => r(accepted((c.body as { id: string }).id)); }));
+  const sending = store.sendPrompt("submitted");
+  await vi.waitFor(() => expect(commands()).toHaveLength(1));
+  await store.stopSession("ses_a");
   expect(store.state.ui.sending).toBe(true);
   acknowledge();
   expect(await sending).toBe(true);
-  expect(store.getDraft()).toBe('');
+  expect(store.getDraft()).toBe("");
   expect(store.state.ui.sending).toBe(false);
-  expect(prompt).toHaveBeenCalledOnce();
+  expect(commands()).toHaveLength(1);
 });
 
-it("waits for local browser MCP attachment before delivering the first prompt", async () => {
-  const images=await import("../src/images/context");
-  const staged=vi.spyOn(images,"stageImagePromptContext").mockResolvedValue(undefined);
+it("a failed preparation keeps the draft and sends nothing", async () => {
+  choose("ses_a"); store.setDraft("own draft");
+  const { modelServices } = await import("../src/models/services");
+  vi.spyOn(modelServices, "ensureLocal").mockRejectedValue(new Error("Сервис модели недоступен"));
+  expect(await store.sendPrompt("own draft")).toBe(false);
+  expect(commands()).toEqual([]);
+  expect(store.getDraft()).toBe("own draft");
+  expect(store.state.ui.sendError).toContain("Сервис модели недоступен");
+});
+
+it("a refused first command after creating the chat leaves the prompt in that chat's draft", async () => {
+  store.state = { ...store.state, activeSessionId: null, sessions: [] };
+  store.setModelChoice("local-qwen-next", "qwen38-flash-next", "medium");
+  store.setDraft("preserve first prompt");
+  fx.on("POST", "/sessions", () => session("ses_created"));
+  fx.on("POST", "/commands", c => ({ ...accepted((c.body as { id: string }).id), state: "rejected", error: "Модель недоступна" }));
+  expect(await store.sendPrompt("preserve first prompt")).toBe(false);
+  expect(store.state.activeSessionId).toBe("ses_created");
+  expect(store.getDraft()).toBe("preserve first prompt");
+  expect(store.state.ui.sendError).toContain("Модель недоступна");
+});
+
+it("waits for local browser tools before delivering the first prompt, and stages image context under the command id", async () => {
+  const images = await import("../src/images/context");
+  const staged = vi.spyOn(images, "stageImagePromptContext").mockResolvedValue(undefined);
   const platform = await import("../src/native/platform");
   vi.spyOn(platform, "isNative").mockReturnValue(true);
-  store.state = { ...store.state, activeSessionId: "ses_a", sessions: [session("ses_a")],
-    connectedProviderIds: ["local-qwen-next"], prefs: { ...store.state.prefs, browser: { enabled: true } } };
-  store.setModelChoice("local-qwen-next", "qwen38-flash-next", "medium");
+  choose("ses_a");
+  store.state = { ...store.state, prefs: { ...store.state.prefs, browser: { enabled: true } } };
   let resolve!: () => void;
   const setup = vi.spyOn(store, "configureBrowser").mockReturnValue(new Promise<void>(r => { resolve = r; }));
-  const prompt = vi.spyOn(store.client, "prompt").mockResolvedValue(undefined);
   const pending = store.sendPrompt("Use the built-in browser");
-  await flush(); expect(setup).toHaveBeenCalledOnce(); expect(prompt).not.toHaveBeenCalled();
-  resolve(); await pending; expect(prompt).toHaveBeenCalledOnce();
-  expect(staged).toHaveBeenCalledWith(expect.objectContaining({engine:"opencode",sessionId:"ses_a",directory:"/test/A",parts:[],local:true}));
-  expect(staged.mock.calls[0][0].messageId).toBe(prompt.mock.calls[0][2].messageID);
+  await vi.waitFor(() => expect(setup).toHaveBeenCalledOnce());
+  expect(commands()).toEqual([]);
+  resolve(); expect(await pending).toBe(true);
+  expect(commands()).toHaveLength(1);
+  expect(staged).toHaveBeenCalledWith(expect.objectContaining({ engine: "pi", sessionId: "ses_a", directory: "/test/A", parts: [], local: true }));
+  expect(staged.mock.calls[0][0].messageId).toBe(commands()[0].id);
 });
 
-it("does not attach local browser tools when delivering to a remote endpoint", async () => {
-  const platform = await import("../src/native/platform");
-  vi.spyOn(platform, "isNative").mockReturnValue(true);
-  store.state = { ...store.state, activeSessionId: "ses_a", sessions: [session("ses_a")],
-    connectedProviderIds: ["local-qwen-next"], prefs: { ...store.state.prefs, endpoint: "http://192.168.1.22:4096", browser: { enabled: true } } };
-  store.setModelChoice("local-qwen-next", "qwen38-flash-next", "medium");
-  const setup = vi.spyOn(store, "configureBrowser").mockResolvedValue(undefined);
-  const prompt = vi.spyOn(store.client, "prompt").mockResolvedValue(undefined);
-  await store.sendPrompt("Remote task"); expect(setup).not.toHaveBeenCalled(); expect(prompt).toHaveBeenCalledOnce();
-});
-
-it("aborts a session with its own project directory, not whichever project is open", async () => {
-  // The sidebar shows running work from other projects. Aborting used the open
-  // project's directory, so OpenCode answered 404 and the run kept going.
-  const abort = vi.spyOn(store.client, "abort").mockResolvedValue(undefined);
-  vi.mocked(store.client.listSessions).mockImplementation(async (dir: string) =>
-    dir === "/test/B" ? [session("ses_other", "/test/B")] : [],
-  );
+it("stops a session with its own project directory, not whichever project is open", async () => {
+  sessions["/test/B"] = [session("ses_other", "/test/B")];
   await store.setDirectory("/test/B");
-  vi.spyOn(store, "configureSharedTools").mockResolvedValue(undefined);
   await store.setDirectory("/test/A");
   await store.stopSession("ses_other");
-  expect(abort).toHaveBeenCalledWith("ses_other", "/test/B");
+  expect(fx.made("POST", "/sessions/:id/stop").map(c => [c.params.id, c.query.directory])).toEqual([["ses_other", "/test/B"]]);
 });
 
-it("routes a stop to the project the session was created in, not the one now open", async () => {
-  // A chat started in project A keeps running while the user moves to project B.
-  // Aborting it with B's directory made OpenCode answer 404 and the run continued.
-  store.state = {
-    ...store.state,
-    connectedProviderIds: ["local-qwen-next"],
-  };
+it("routes a stop to the project the chat was created in, not the one now open", async () => {
+  store.state = { ...store.state, activeSessionId: null, sessions: [] };
   store.setModelChoice("local-qwen-next", "qwen38-flash-next", "medium");
-  vi.spyOn(store.client, "createSession").mockResolvedValue(
-    session("ses_created", "/test/A"),
-  );
-  vi.spyOn(store.client, "prompt").mockResolvedValue(undefined);
-  const abort = vi.spyOn(store.client, "abort").mockResolvedValue(undefined);
+  fx.on("POST", "/sessions", () => session("ses_created", "/test/A"));
   expect(await store.sendPrompt("long task")).toBe(true);
   expect(store.state.activeSessionId).toBe("ses_created");
-
   await store.setDirectory("/test/B");
   await store.stopSession("ses_created");
-  expect(abort).toHaveBeenCalledWith("ses_created", "/test/A");
+  expect(fx.made("POST", "/sessions/:id/stop").map(c => [c.params.id, c.query.directory])).toEqual([["ses_created", "/test/A"]]);
 });
 
-const scheduled = () => ({ id: "job", server: store.state.prefs.workspaceKey ?? store.state.prefs.endpoint, directory: "/test/A", sessionID: "ses_a", engine: "opencode", title: "CI", prompt: "check", minutes: 15, model: { providerID: "local-qwen-next", modelID: "qwen38-flash-next", variant: "medium" }, enabled: true, nextAt: 0, state: "ready" as const });
-const scheduledSetup = () => {
- store.state = { ...store.state, activeSessionId: "ses_a", sessions: [session("ses_a")], connection: { ...store.state.connection, streamState: "open" } };
- vi.spyOn(store.client, "getSession").mockResolvedValue(session("ses_a"));
-};
-it("scheduled prompts preserve drafts, attachments and the saved reasoning model", async()=>{
- scheduledSetup();store.setDraft("user typing");const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
- expect(await store.runScheduledTask(scheduled())).toEqual({kind:"sent"});expect(store.getDraft()).toBe("user typing");
- expect(prompt).toHaveBeenCalledWith("ses_a","/test/A",expect.objectContaining({model:{providerID:"local-qwen-next",modelID:"qwen38-flash-next"},variant:"medium",parts:[{type:"text",text:"check"},expect.objectContaining({type:"text",synthetic:true,metadata:{enkiScheduleWake:1}}),expect.objectContaining({synthetic:true,metadata:{arvelaResponseLanguage:1}}),expect.objectContaining({synthetic:true,metadata:{arvelaToolWorkflow:1}}),expect.objectContaining({synthetic:true,metadata:{enkiSchedules:1}})]}));
-});
-it('scheduled workshop prompts also retain permanent release authorization',async()=>{
- scheduledSetup();const s=session('ses_a');store.state.prefs.workshop={directory:s.directory,sourceDirectory:'/source',session:s};
- const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
- expect(await store.runScheduledTask(scheduled())).toEqual({kind:'sent'});
- expect(prompt.mock.calls[0][2].parts.find(p=>p.type==='text' && p.metadata?.arvelaWorkshopRelease)).toMatchObject({synthetic:true,metadata:{arvelaWorkshopRelease:1}});
-});
-it('cancelling a scheduled task during model readiness never sends it afterward', async () => {
-  scheduledSetup();
-  const { modelServices } = await import('../src/models/services');
-  let ready!: () => void;
-  vi.spyOn(modelServices, 'ensure').mockImplementationOnce(() => new Promise<void>(resolve => { ready = resolve; }));
-  const prompt = vi.spyOn(store.client, 'prompt').mockResolvedValue(undefined);
-  const cancel = new AbortController();
-  const operation = store.runScheduledTask(scheduled(), cancel.signal);
-  await vi.waitFor(() => expect(ready).toBeTypeOf('function'));
-  cancel.abort(); ready();
-  expect(await operation).toEqual({ kind: 'cancelled' });
-  expect(prompt).not.toHaveBeenCalled();
-});
-it('Stop during scheduled readiness prevents a late POST even without scheduler cancellation', async () => {
-  scheduledSetup();
-  const { modelServices } = await import('../src/models/services');
-  let ready!: () => void;
-  vi.spyOn(modelServices, 'ensure').mockImplementationOnce(() => new Promise<void>(resolve => { ready = resolve; }));
-  const prompt = vi.spyOn(store.client, 'prompt').mockResolvedValue(undefined);
-  vi.spyOn(store.client, 'abort').mockResolvedValue(undefined);
-  const operation = store.runScheduledTask(scheduled());
-  await vi.waitFor(() => expect(ready).toBeTypeOf('function'));
-  await store.stopSession('ses_a'); ready();
-  expect(await operation).toEqual({ kind: 'cancelled' });
-  expect(prompt).not.toHaveBeenCalled();
-});
-it("scheduled prompts never route to another server or bypass a pending permission",async()=>{
- scheduledSetup();const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
- expect((await store.runScheduledTask({...scheduled(),server:"other"})).kind).toBe("waiting");
- vi.mocked(store.client.pendingPermissions).mockResolvedValue([{id:"approval",sessionID:"ses_a"}] as any);
- expect((await store.runScheduledTask(scheduled())).kind).toBe("waiting");expect(prompt).not.toHaveBeenCalled();
-});
-it("scheduled preflight is cancelled by a connection switch and locks manual sends",async()=>{
- scheduledSetup();let resolve!:(s:unknown)=>void;vi.mocked(store.client.getSession).mockImplementation(()=>new Promise(r=>{resolve=r;}));
- const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined),pending=store.runScheduledTask(scheduled());
- expect(await store.sendPrompt("manual")).toBe(false);store.connectionGeneration++;resolve(session("ses_a"));
- expect((await pending).kind).toBe("waiting");expect(prompt).not.toHaveBeenCalled();
-});
-it("rechecks busy state after asynchronous setup, rejects archived and changed-engine chats",async()=>{
- scheduledSetup();const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
- vi.mocked(store.client.sessionStatuses).mockResolvedValueOnce({}).mockResolvedValueOnce({ses_a:{type:"busy"}});
- expect((await store.runScheduledTask(scheduled())).kind).toBe("waiting");expect(prompt).not.toHaveBeenCalled();
- vi.mocked(store.client.getSession).mockResolvedValue({...session("ses_a"),time:{created:1,updated:1,archived:2}});
- await expect(store.runScheduledTask(scheduled())).rejects.toThrow();
- await expect(store.runScheduledTask({...scheduled(),engine:"pi"})).rejects.toThrow();
-});
-it("a deleted chat, a vanished model and a server refusal are definite non-deliveries, not uncertain ones",async()=>{
- const { ApiError } = await import("../src/api/client"), { ScheduleBlocked } = await import("../src/schedules/tasks");
- scheduledSetup();const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
- vi.mocked(store.client.getSession).mockRejectedValueOnce(new ApiError(404,"secret body"));
- await expect(store.runScheduledTask(scheduled())).rejects.toBeInstanceOf(ScheduleBlocked);
- vi.mocked(store.client.providers).mockResolvedValueOnce({all:[{id:"local-qwen-next",models:{other:{id:"other",providerID:"local-qwen-next"}}}],connected:["local-qwen-next"],default:{}});
- await expect(store.runScheduledTask(scheduled())).rejects.toThrow(/qwen38-flash-next/);
- expect(prompt).not.toHaveBeenCalled();
- prompt.mockRejectedValueOnce(new ApiError(400,"secret body"));
- const refused=store.runScheduledTask(scheduled());
- await expect(refused).rejects.toBeInstanceOf(ScheduleBlocked);await expect(refused).rejects.not.toThrow(/secret/);
-});
-it("a withdrawn or failed read-only check sends nothing and is simply retried later",async()=>{
- scheduledSetup();const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
- vi.mocked(store.client.getSession).mockImplementationOnce(()=>new Promise(()=>{}));
- const abort=new AbortController(),pending=store.runScheduledTask(scheduled(),abort.signal);abort.abort();
- expect(await pending).toEqual({kind:"cancelled"});
- vi.mocked(store.client.sessionStatuses).mockRejectedValueOnce(new Error("network"));
- expect((await store.runScheduledTask(scheduled())).kind).toBe("waiting");expect(prompt).not.toHaveBeenCalled();
- // Every lock was released: the next check proceeds and sends exactly once.
- expect(await store.runScheduledTask(scheduled())).toEqual({kind:"sent"});expect(prompt).toHaveBeenCalledOnce();
-});
-it("a manual send blocked by a scheduled check explains itself and keeps the draft",async()=>{
- scheduledSetup();store.setDraft("mine");let resolve!:(s:unknown)=>void;
- vi.mocked(store.client.getSession).mockImplementation(()=>new Promise(r=>{resolve=r;}));
- vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);const pending=store.runScheduledTask(scheduled());
- expect(await store.sendPrompt("mine")).toBe(false);expect(store.state.ui.sendError).toMatch(/запланированное/);expect(store.getDraft()).toBe("mine");
- resolve(session("ses_a"));await pending;
-});
+const providers = (variants: Record<string, object>) => [{ id: "local-qwen-next", models: { "qwen38-flash-next": { id: "qwen38-flash-next", providerID: "local-qwen-next", capabilities: { reasoning: true }, variants } } }];
 
-it("browser profile selects real Low only in the explicit chat and preserves manual Medium", async () => {
-  store.state = { ...store.state, activeSessionId: "ses_a", sessions: [session("ses_a")], connectedProviderIds:["local-qwen-next"],
-    providers:[{id:"local-qwen-next",models:{"qwen38-flash-next":{id:"qwen38-flash-next",providerID:"local-qwen-next",capabilities:{reasoning:true},variants:{low:{},medium:{}}}}}] };
-  store.setModelChoice("local-qwen-next","qwen38-flash-next","medium");
+it("the browser profile selects a real Low only in the explicit chat and preserves the manual Medium", async () => {
+  choose("ses_a");
+  store.state = { ...store.state, providers: providers({ low: {}, medium: {} }) };
   const beforeGlobal = store.state.prefs.modelChoice["*"];
-  store.setBrowserTask(true); expect(store.getModelChoice().variant).toBe("low");
-  const prompt = vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
-  await store.sendPrompt("Navigate the fixture");
-  expect(prompt.mock.calls[0][2].variant).toBe("low");
+  store.setBrowserTask(true);
+  expect(store.getModelChoice().variant).toBe("low");
+  expect(await store.sendPrompt("Navigate the fixture")).toBe(true);
+  expect(commands()[0].payload.model.variant).toBe("low");
   expect(store.state.prefs.modelChoice["*"]).toEqual(beforeGlobal);
-  store.state.chat.sessions.ses_a.status={type:"idle"};
-  store.setModelChoice("local-qwen-next","qwen38-flash-next","medium");
-  store.setBrowserTask(false); expect(store.getModelChoice().variant).toBe("medium");
-  store.state.activeSessionId="ses_b"; expect(store.browserTaskActive()).toBe(false);
-});
-it("does not silently substitute unsupported Low or change a running browser chat", () => {
-  store.state = { ...store.state, activeSessionId:"ses_a", sessions:[session("ses_a")], connectedProviderIds:["local-qwen-next"],
-    providers:[{id:"local-qwen-next",models:{"qwen38-flash-next":{id:"qwen38-flash-next",providerID:"local-qwen-next",variants:{medium:{}}}}}] };
-  store.setModelChoice("local-qwen-next","qwen38-flash-next","medium"); store.setBrowserTask(true);
+  store.state.chat.sessions.ses_a = { ...store.state.chat.sessions.ses_a, status: { type: "idle" } };
+  store.setModelChoice("local-qwen-next", "qwen38-flash-next", "medium");
+  store.setBrowserTask(false);
   expect(store.getModelChoice().variant).toBe("medium");
-  store.state.chat.sessions.ses_a={...store.state.chat.sessions.ses_a,status:{type:"busy"}};
-  store.setBrowserTask(false); expect(store.browserTaskActive()).toBe(true);
+  store.state = { ...store.state, activeSessionId: "ses_b" };
+  expect(store.browserTaskActive()).toBe(false);
+});
+
+it("never substitutes an unsupported Low and does not change a running browser chat", () => {
+  choose("ses_a");
+  store.state = { ...store.state, providers: providers({ medium: {} }) };
+  store.setBrowserTask(true);
+  expect(store.getModelChoice().variant).toBe("medium");
+  store.state.chat.sessions.ses_a = { ...store.state.chat.sessions.ses_a, status: { type: "busy" } };
+  store.setBrowserTask(false);
+  expect(store.browserTaskActive()).toBe(true);
 });
 
 it("retains an explicit manual Low when the browser profile is disabled", () => {
-  store.state={...store.state,activeSessionId:"ses_a",sessions:[session("ses_a")],connectedProviderIds:["local-qwen-next"],providers:[{id:"local-qwen-next",models:{"qwen38-flash-next":{id:"qwen38-flash-next",providerID:"local-qwen-next",variants:{low:{},medium:{}}}}}]};
-  store.setModelChoice("local-qwen-next","qwen38-flash-next","medium"); store.setBrowserTask(true);
-  store.setModelChoice("local-qwen-next","qwen38-flash-next","low"); store.setBrowserTask(false);
+  choose("ses_a");
+  store.state = { ...store.state, providers: providers({ low: {}, medium: {} }) };
+  store.setBrowserTask(true);
+  store.setModelChoice("local-qwen-next", "qwen38-flash-next", "low");
+  store.setBrowserTask(false);
   expect(store.getModelChoice().variant).toBe("low");
 });
 
 it("starts the browser before exposing a newly created browser task panel", async () => {
-  const integration=await import("../src/browser/integration");
-  vi.spyOn(store,"ensureChatWorkspace").mockImplementation(async () => { await store.setDirectory("/test/browser-owned"); return true; });
-  vi.spyOn(store,"createSessionNow").mockImplementation(async () => {store.state.activeSessionId="browser-test"; return session("browser-test","/test/browser-owned");});
-  vi.spyOn(store,"configureBrowser").mockResolvedValue(undefined);
+  const integration = await import("../src/browser/integration");
+  vi.spyOn(store, "ensureChatWorkspace").mockImplementation(async () => { await store.setDirectory("/test/browser-owned"); return true; });
+  vi.spyOn(store, "createSessionNow").mockImplementation(async () => { store.state.activeSessionId = "browser-test"; return session("browser-test", "/test/browser-owned"); });
+  vi.spyOn(store, "configureBrowser").mockResolvedValue(undefined);
   let resolve!: (value: unknown) => void;
-  const started=vi.spyOn(integration,"openSessionBrowser").mockReturnValue(new Promise(r => {resolve=r;}));
-  const pending=store.newBrowserTask(); await vi.waitFor(() => expect(started).toHaveBeenCalled());
-  expect(started).toHaveBeenCalledWith({directory:"/test/browser-owned",engine:"opencode",sessionId:"browser-test"},expect.any(Function),null,null);
-  expect(store.state.ui.browserOpen).toBe(false); resolve({browserOpen:true}); await pending;
+  const started = vi.spyOn(integration, "openSessionBrowser").mockReturnValue(new Promise(r => { resolve = r; }) as never);
+  const pending = store.newBrowserTask();
+  await vi.waitFor(() => expect(started).toHaveBeenCalled());
+  expect(started).toHaveBeenCalledWith({ directory: "/test/browser-owned", engine: "pi", sessionId: "browser-test" }, expect.any(Function), null, null);
+  expect(store.state.ui.browserOpen).toBe(false);
+  resolve({ browserOpen: true }); await pending;
   expect(store.state.ui.browserOpen).toBe(true);
 });
 
-it("waits for common tool preparation and preserves draft if preparation fails",async()=>{
- store.state={...store.state,activeSessionId:"ses_a",sessions:[session("ses_a")],connectedProviderIds:["local-qwen-next"]};
- store.setModelChoice("local-qwen-next","qwen38-flash-next","medium");
- store.setDraft("own draft");
- vi.spyOn(store,"configureSharedTools").mockRejectedValue(new Error("Shared MCP missing dependency"));
- const prompt=vi.spyOn(store.client,"prompt").mockResolvedValue(undefined);
- expect(await store.sendPrompt("own draft")).toBe(false);
- expect(prompt).not.toHaveBeenCalled();expect(store.getDraft()).toBe("own draft");
-});
-
-it("healthy transport with failed project reads preserves state and blocks dispatch until read-only recovery", async () => {
-  const { ApiError } = await import("../src/api/client");
-  store.state.activeSessionId = "ses_a";
-  store.state.sessions = [session("ses_a")];
-  store.state.chat.sessions.ses_a = { messages: {}, messageOrder: [], status: { type: "busy" } };
-  store.state.prefs.queues = { ses_a: [{ id: "q", directory: "/test/A", text: "queued", state: "ready", model: {providerID:"p",modelID:"m"} }] };
-  store.queueArmed.add("ses_a");
-  const prompt = vi.spyOn(store.client, "prompt");
-  vi.mocked(store.client.sessionStatuses).mockRejectedValue(new ApiError(500, "EPERM: lstat project"));
+it("a healthy runtime with failed project reads keeps the chat and blocks dispatch until recovery", async () => {
+  sessions["/test/A"] = [session("ses_a")];
+  choose("ses_a");
+  fx.on("GET", "/sessions/status", () => { throw new fixture.RuntimeReply(500, { message: "EPERM: operation not permitted, lstat '/test/A'" }); });
   await store.refreshSessions();
   expect(store.state.connection.phase).toBe("connected");
   expect(store.state.connection.statusError).toContain("отказ доступа");
   expect(store.state.activeSessionId).toBe("ses_a");
-  expect(store.state.chat.sessions.ses_a).toBeDefined();
   expect(await store.sendPrompt("new prompt")).toBe(false);
-  expect(store.queueArmed.has("ses_a")).toBe(false);
-  vi.mocked(store.client.sessionStatuses).mockResolvedValue({});
-  vi.mocked(store.client.listSessions).mockResolvedValue([session("ses_a")]);
+  fx.on("GET", "/sessions/status", () => ({}));
   await store.retryProjectAccess();
   expect(store.state.connection.statusError).toBeNull();
   expect(store.state.activeSessionId).toBe("ses_a");
-  expect(prompt).not.toHaveBeenCalled();
+  expect(commands()).toEqual([]);
 });
+
 it("a late failure of project recovery does not contaminate the newly selected project", async () => {
-  let reject!: (error: Error) => void;
-  vi.mocked(store.client.sessionStatuses).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+  let reject!: (error: unknown) => void;
+  fx.on("GET", "/sessions/status", () => new Promise((_, fail) => { reject = fail; }));
   const recovery = store.retryProjectAccess();
+  await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
+  fx.on("GET", "/sessions/status", () => ({}));
   await store.setDirectory("/test/B");
-  reject(new Error("old A failure"));
+  reject(new fixture.RuntimeReply(500, { message: "EPERM: old A failure" }));
   await recovery;
   expect(store.state.connection.statusError).toBeNull();
   expect(store.state.directory).toBe("/test/B");
 });
 
-it("a Pi listing failure does not mark the healthy OpenCode project inaccessible", async () => {
-  vi.spyOn(store, "piListFor").mockRejectedValue(new Error("Pi listing failed"));
-  await store.refreshSessions();
-  expect(store.state.ui.sessionListError).toContain("Pi listing failed");
-  expect(store.state.connection.statusError).toBeNull();
+it("preserves full access when creating a chat before its first prompt", async () => {
+  store.state = { ...store.state, activeSessionId: null, prefs: { ...store.state.prefs, newAccess: "full" } };
+  fx.on("POST", "/sessions", c => ({ ...session("ses_full"), permission: (c.body as { permission: unknown }).permission }));
+  const created = await store.createSessionNow("Full access");
+  expect(created?.id).toBe("ses_full");
+  expect(fx.made("POST", "/sessions")[0].body).toMatchObject({ directory: "/test/A", permission: [{ permission: "*", pattern: "*", action: "allow" }] });
+  expect(store.getAccessMode()).toBe("full");
 });
 
-it('preserves full access when creating a Pi chat before its first prompt', async () => {
-  store.state.activeSessionId = null;
-  store.state.prefs.projectEngine = { '/test/A': 'pi' };
-  store.state.prefs.newAccess = 'full';
-  store.piInstalled = true;
-  const created = await store.createSessionNow('Pi full access');
-  expect(created).not.toBeNull();
-  expect(store.state.prefs.piSessions[created.id].permission).toContainEqual({ permission: '*', pattern: '*', action: 'allow' });
-  expect(store.getAccessMode()).toBe('full');
-});
-it('subscribes to Pi before the first Pi chat exists in a local project', () => {
-  store.state.prefs.piSessions = {};
-  store.state.prefs.projectEngine = {};
-  const subscribe = vi.spyOn(store.engine('pi'), 'subscribeDirectory').mockImplementation(() => {});
-  store.startPiStream('/test/A', store.directoryGeneration);
-  expect(subscribe).toHaveBeenCalledWith('/test/A', expect.objectContaining({signal: expect.any(AbortSignal)}));
+it("subscribes to the folder's durable stream before its first chat exists", () => {
+  expect(store.state.sessions).toEqual([]);
+  expect(fx.directoryStreams.filter(s => s.directory === "/test/A" && !s.subscription.signal.aborted)).toHaveLength(1);
 });
 
-it('restores cleared Pi follow-ups in their original draft without replacing typed text', () => {
-  store.state.prefs.drafts = { 'pi-origin': 'already typed', 'pi-other': 'other chat' };
-  store.engine('pi').host.onQueueCleared('/test/A', 'pi-origin', ['correction', 'next']);
-  expect(store.state.prefs.drafts['pi-origin']).toBe('already typed\n\ncorrection\n\nnext');
-  expect(store.state.prefs.drafts['pi-other']).toBe('other chat');
-  expect(store.state.prefs.drafts['/test/A']).toBeUndefined();
-});
-it('keeps recovered Pi text on the local computer after an SSH workspace switch', () => {
-  store.state.prefs.endpoint = 'http://127.0.0.1:5555';
-  store.state.prefs.workspaceKey = 'ssh:other';
-  store.state.prefs.localEndpoint = 'http://127.0.0.1:4096';
-  store.state.prefs.drafts = { 'pi-origin': 'remote untouched' };
-  store.state.prefs.endpointState = { 'http://127.0.0.1:4096': { drafts: { 'pi-origin': 'local' } } };
-  store.engine('pi').host.onQueueCleared('/test/A', 'pi-origin', ['restored']);
-  expect(store.state.prefs.drafts['pi-origin']).toBe('remote untouched');
-  expect(store.state.prefs.endpointState['http://127.0.0.1:4096'].drafts['pi-origin']).toBe('local\n\nrestored');
-});
-it('Stop cancels only its own Pi dialog before aborting the child', async () => {
-  store.state.prefs.sessionEngine = { 'pi-dialog': 'pi' };
-  store.state.ui.piDialog = { sessionId:'pi-dialog',key:'owned-key',request:{id:'question'} };
-  const pi = store.engine('pi'), events: string[] = [];
-  vi.spyOn(pi,'answerDialog').mockImplementation(async()=>{events.push('cancel');});
-  vi.spyOn(pi,'abort').mockImplementation(async()=>{events.push('abort');});
-  await store.stopSession('pi-dialog');
-  expect(events).toEqual(['cancel','abort']);expect(store.state.ui.piDialog).toBeNull();
+const dialog = (id: string) => ({ id, sessionID: "ses_a", directory: "/test/A", method: "confirm", title: `Подтвердите ${id}`, deadline: Date.now() + 60_000 });
+
+it("an extension dialog stays visible on transport failure, is tied to its exact request and is never auto-answered", async () => {
+  fx.emit({ type: "dialog.asked", properties: { dialog: dialog("one") } } as never, "/test/A");
+  expect(store.state.ui.agentDialog?.id).toBe("one");
+  expect(fx.made("POST", "/dialogs/:id/reply")).toEqual([]);
+  let fail = true;
+  fx.on("POST", "/dialogs/:id/reply", () => { if (fail) { fail = false; throw new TypeError("connection reset"); } return undefined; });
+  await expect(store.answerAgentDialog({ confirmed: true }, "one")).rejects.toBeTruthy();
+  expect(store.state.ui.agentDialog?.id).toBe("one");
+  expect(store.state.ui.toast).toContain("не доставлен");
+  await store.answerAgentDialog({ confirmed: true }, "old");
+  expect(fx.made("POST", "/dialogs/:id/reply")).toHaveLength(1);
+  await store.answerAgentDialog({ confirmed: true }, "one");
+  expect(fx.made("POST", "/dialogs/:id/reply").map(c => [c.params.id, c.body])).toEqual([["one", { confirmed: true }], ["one", { confirmed: true }]]);
+  expect(store.state.ui.agentDialog ?? null).toBeNull();
 });
 
-it('Pi approval remains visible on transport failure and is tied to its exact request', async () => {
-  const pi = store.engine('pi');
-  const dialog = {key: 'key', directory: '/test/A', sessionId: 'pi:test', request: {type: 'extension_ui_request', id:'one', method:'confirm'}};
-  store.state.ui.piDialog = dialog;
-  const post = vi.spyOn(pi, 'answerDialog').mockRejectedValueOnce(Error('pipe closed')).mockResolvedValue(undefined);
-  await expect(store.answerPiDialog({confirmed:true}, {key:'key',id:'one'})).rejects.toThrow('pipe closed');
-  expect(store.state.ui.piDialog).toBe(dialog);
-  expect(store.state.ui.toast).toContain('не доставлен');
-  await store.answerPiDialog({confirmed:true}, {key:'key',id:'old'});
-  expect(post).toHaveBeenCalledTimes(1);
-  await store.answerPiDialog({confirmed:true}, {key:'key',id:'one'});
-  expect(post).toHaveBeenLastCalledWith('key','one',{confirmed:true});
-  expect(store.state.ui.piDialog).toBeNull();
-});
-it('two Pi permission requests are queued, never overwritten or answered together', async () => {
-  const pi = store.engine('pi');
-  const request = (id: string) => ({key: id, directory:'/test/A',sessionId:id,request:{id,method:'confirm',type:'extension_ui_request'}});
-  const post = vi.spyOn(pi,'answerDialog').mockResolvedValue(undefined);
-  pi.host.onDialog(request('first')); pi.host.onDialog(request('second'));
-  expect(store.state.ui.piDialog.request.id).toBe('first');
-  await store.answerPiDialog({confirmed:true},{key:'first',id:'first'});
-  expect(store.state.ui.piDialog.request.id).toBe('second');
-  expect(post).toHaveBeenCalledTimes(1);
-  pi.host.onDialogExpired('second','second');
-  expect(store.state.ui.piDialog).toBeNull();
+it("two extension dialogs are shown in order, never overwritten or answered together, and expire by id", async () => {
+  fx.on("POST", "/dialogs/:id/reply", () => undefined);
+  fx.emit({ type: "dialog.asked", properties: { dialog: dialog("first") } } as never, "/test/A");
+  fx.emit({ type: "dialog.asked", properties: { dialog: dialog("second") } } as never, "/test/A");
+  expect(store.state.ui.agentDialog?.id).toBe("first");
+  await store.answerAgentDialog({ confirmed: true }, "first");
+  expect(store.state.ui.agentDialog?.id).toBe("second");
+  expect(fx.made("POST", "/dialogs/:id/reply").map(c => c.params.id)).toEqual(["first"]);
+  fx.emit({ type: "dialog.expired", properties: { sessionID: "ses_a", requestID: "second", by: "deadline" } } as never, "/test/A");
+  expect(store.state.ui.agentDialog ?? null).toBeNull();
 });
 
-it('acknowledges dictation text and its receipt atomically and never appends it twice',()=>{
- store.state.prefs.drafts={voice:'Existing'};const workspace=store.state.prefs.workspaceKey??store.state.prefs.endpoint;
- store.appendDictation(workspace,'voice','новая фраза','dictation-receipt');
- store.appendDictation(workspace,'voice','новая фраза','dictation-receipt');
- expect(store.state.prefs.drafts.voice).toBe('Existing новая фраза');
- expect(store.state.prefs.dictationReceipts).toContain('dictation-receipt');
-});
-it('retains the receipt after a failed draft save, so retry persists without duplicating text',()=>{
- const workspace=store.state.prefs.workspaceKey??store.state.prefs.endpoint;
- const write=vi.spyOn(localStorage,'setItem').mockImplementationOnce(()=>{throw Error('disk full');});
- expect(()=>store.appendDictation(workspace,'voice','новый текст','failed-save-receipt')).toThrow(/сохранить/);
- store.appendDictation(workspace,'voice','новый текст','failed-save-receipt');
- expect(store.state.prefs.drafts.voice).toBe('новый текст');write.mockRestore();
-});
-it('delivers dictation to its original workspace even after navigation',()=>{
- const current=store.state.prefs.workspaceKey??store.state.prefs.endpoint;
- store.state.prefs.endpointState={...store.state.prefs.endpointState,old:{drafts:{voice:'Old'}}};
- store.appendDictation('old','voice','сохранено','old-workspace-receipt');
- expect(store.state.prefs.endpointState.old.drafts.voice).toBe('Old сохранено');
- expect(store.state.prefs.drafts.voice).toBeUndefined();expect(store.state.prefs.workspaceKey??store.state.prefs.endpoint).toBe(current);
+it("acknowledges dictation text and its receipt atomically and never appends it twice", () => {
+  store.state.prefs.drafts = { voice: "Existing" };
+  const workspace = store.state.prefs.workspaceKey;
+  store.appendDictation(workspace, "voice", "новая фраза", "dictation-receipt");
+  store.appendDictation(workspace, "voice", "новая фраза", "dictation-receipt");
+  expect(store.state.prefs.drafts.voice).toBe("Existing новая фраза");
+  expect(store.state.prefs.dictationReceipts).toContain("dictation-receipt");
 });
 
-it('compaction uses the selected session only and never resumes it automatically',async()=>{
- const {modelServices}=await import('../src/models/services');
- vi.spyOn(modelServices,'ensure').mockResolvedValue(undefined);
- const summarize=vi.spyOn(store.client,'summarize').mockResolvedValue(undefined);
- const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
- store.state={...store.state,activeSessionId:'ses_a',sessions:[session('ses_a')],statuses:{},connectedProviderIds:['local-qwen-next']};
- store.setModelChoice('local-qwen-next','qwen38-flash-next','medium');
- await store.compactSession('another');expect(summarize).not.toHaveBeenCalled();
- await store.compactSession('ses_a');expect(summarize).toHaveBeenCalledExactlyOnceWith('ses_a','/test/A','local-qwen-next','qwen38-flash-next');
- expect(prompt).not.toHaveBeenCalled();
-});
-it('navigation or a new busy turn during compaction preparation prevents a late summary request',async()=>{
- const {modelServices}=await import('../src/models/services');
- let release!:()=>void;vi.spyOn(modelServices,'ensure').mockImplementation(()=>new Promise<void>(r=>release=r));
- const summarize=vi.spyOn(store.client,'summarize').mockResolvedValue(undefined);
- store.state={...store.state,activeSessionId:'ses_a',sessions:[session('ses_a')],statuses:{},connectedProviderIds:['local-qwen-next']};
- store.setModelChoice('local-qwen-next','qwen38-flash-next','medium');
- const first=store.compactSession('ses_a');await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
- store.state={...store.state,activeSessionId:'ses_b'};release();await first;expect(summarize).not.toHaveBeenCalled();
- store.state={...store.state,activeSessionId:'ses_a'};
- const next=store.compactSession('ses_a');await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
- store.observeSessionStatus('ses_a',{type:'busy'},'/test/A');release();await next;
- expect(summarize).not.toHaveBeenCalled();
+it("retains the receipt after a failed draft save, so a retry persists without duplicating text", () => {
+  const workspace = store.state.prefs.workspaceKey;
+  const write = vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => { throw Error("disk full"); });
+  expect(() => store.appendDictation(workspace, "voice", "новый текст", "failed-save-receipt")).toThrow(/сохранить/);
+  store.appendDictation(workspace, "voice", "новый текст", "failed-save-receipt");
+  expect(store.state.prefs.drafts.voice).toBe("новый текст"); write.mockRestore();
 });
 
-it('a pending compaction blocks a racing manual prompt without clearing its draft',async()=>{
- const {modelServices}=await import('../src/models/services');vi.spyOn(modelServices,'ensure').mockResolvedValue(undefined);
- let finish!:()=>void;vi.spyOn(store.client,'summarize').mockImplementation(()=>new Promise<void>(r=>finish=r));
- const prompt=vi.spyOn(store.client,'prompt').mockResolvedValue(undefined);
- store.state={...store.state,activeSessionId:'ses_a',sessions:[session('ses_a')],statuses:{},connectedProviderIds:['local-qwen-next']};
- store.setModelChoice('local-qwen-next','qwen38-flash-next','medium');store.setDraft('keep my task');
- const pending=store.compactSession('ses_a');await vi.waitFor(()=>expect(finish).toBeTypeOf('function'));
- expect(await store.sendPrompt('keep my task')).toBe(false);expect(store.getDraft()).toBe('keep my task');expect(prompt).not.toHaveBeenCalled();
- finish();await pending;
+it("delivers dictation to its original workspace even after navigation", () => {
+  const current = store.state.prefs.workspaceKey;
+  store.state.prefs.endpointState = { ...store.state.prefs.endpointState, old: { drafts: { voice: "Old" } } };
+  store.appendDictation("old", "voice", "сохранено", "old-workspace-receipt");
+  expect(store.state.prefs.endpointState.old.drafts.voice).toBe("Old сохранено");
+  expect(store.state.prefs.drafts.voice).toBeUndefined();
+  expect(store.state.prefs.workspaceKey).toBe(current);
 });
-it('switching chats cancels only the obsolete history read, preserving active agent state',async()=>{
- store.state={...store.state,activeSessionId:null,directory:'/test/A',sessions:[session('a'),session('b')]};
- let obsolete:AbortSignal|undefined;
- const messages=vi.spyOn(store.client,'messages').mockImplementation((id:any,opts:any)=>{
-   if(id==='b')return Promise.resolve({messages:[]});
-   obsolete=opts.signal;
-   return new Promise((_,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')),{once:true}));
- });
- const abort=vi.spyOn(store.client,'abort').mockResolvedValue(undefined);
- const first=store.selectSession('a');await flush();expect(obsolete?.aborted).toBe(false);
- await store.selectSession('b');await first;
- expect(obsolete?.aborted).toBe(true);expect(store.state.activeSessionId).toBe('b');
- expect(store.state.ui.historyError).toBeNull();expect(abort).not.toHaveBeenCalled();expect(messages).toHaveBeenCalledTimes(2);
+
+// Manual compaction is a current-model runtime command: the window names the
+// session only, never a model (the runtime refuses another one and leases the
+// model the SDK actually summarizes with: agent integration/model-context-hub).
+it("compaction uses the selected session only, sends no UI model and never starts a prompt", async () => {
+  choose("ses_a");
+  await store.compactSession("another");
+  expect(commands()).toEqual([]);
+  await store.compactSession("ses_a");
+  expect(commands()).toEqual([expect.objectContaining({ kind: "compact", sessionID: "ses_a", directory: "/test/A", id: expect.stringMatching(/^compact-/), payload: {} })]);
+  expect(commands().some(c => c.kind === "prompt")).toBe(false);
 });
-it('shows a cached target immediately while project metadata is still loading, and respects a newer selection',async()=>{
- const {emptySessionChat}=await import('../src/state/chatReducer');
- const cached=emptySessionChat();store.state.chat.sessions.cached=cached;
- let ready!:(value:any)=>void;
- vi.spyOn(store.client,'providers').mockImplementation(()=>new Promise(resolve=>{ready=resolve;}));
- const opening=store.openChat(session('cached','/test/B'));
- expect(store.state.directory).toBe('/test/B');expect(store.state.activeSessionId).toBe('cached');
- expect(store.state.chat.sessions.cached).toBe(cached);expect(store.state.ui.runtimeLoading).toBe(true);
- await store.selectSession('newer');
- ready({all:[],connected:[],default:{}});await opening;
- expect(store.state.activeSessionId).toBe('newer');
+
+// No awaited preparation precedes the compact command any more, so there is no
+// late window to race; the same invariant holds at submission time.
+it("a chat the user left or a busy turn never receives a summary request", async () => {
+  choose("ses_a");
+  store.state = { ...store.state, activeSessionId: "ses_b" };
+  await store.compactSession("ses_a");
+  store.state = { ...store.state, activeSessionId: "ses_a" };
+  fx.emit({ type: "session.status", properties: { sessionID: "ses_a", status: { type: "busy" } } } as never, "/test/A");
+  await store.compactSession("ses_a");
+  expect(commands()).toEqual([]);
 });
-it('invalidates shared and browser attachments on a global reload even without a session ID',async()=>{
- const capabilities=await import('../src/capabilities/integration'),browser=await import('../src/browser/integration');
- const shared=vi.spyOn(capabilities,'invalidateCapabilities'),attached=vi.spyOn(browser,'invalidateBrowserSetup');
- const backend=store.backend;let subscription:any;
- vi.spyOn(backend,'subscribeAll').mockImplementation((s:any)=>{subscription=s;});
- store.startGlobalStream(backend,store.connectionGeneration);
- subscription.onEvent({directory:'global',payload:{type:'global.disposed',properties:{}}});
- expect(shared).toHaveBeenCalledOnce();expect(attached).toHaveBeenCalledOnce();
+
+it("a pending compaction blocks a racing manual prompt without clearing its draft", async () => {
+  choose("ses_a"); store.setDraft("keep my task");
+  let finish!: () => void;
+  fx.on("POST", "/commands", c => new Promise(r => { finish = () => r(accepted((c.body as { id: string }).id)); }));
+  const pending = store.compactSession("ses_a");
+  await vi.waitFor(() => expect(commands()).toHaveLength(1));
+  expect(await store.sendPrompt("keep my task")).toBe(false);
+  expect(store.getDraft()).toBe("keep my task");
+  expect(commands().map(c => c.kind)).toEqual(["compact"]);
+  finish(); await pending;
+});
+
+it("switching chats cancels only the obsolete history read and never stops agent work", async () => {
+  store.state = { ...store.state, activeSessionId: null, sessions: [session("a"), session("b")] };
+  fx.on("GET", "/sessions/:id/messages", c => c.params.id === "b" ? { messages: [], before: null } : new Promise(() => {}));
+  const first = store.selectSession("a");
+  await vi.waitFor(() => expect(fx.made("GET", "/sessions/:id/messages").filter(c => c.params.id === "a")).toHaveLength(1));
+  const obsolete = fx.made("GET", "/sessions/:id/messages").find(c => c.params.id === "a")!.signal!;
+  expect(obsolete.aborted).toBe(false);
+  await store.selectSession("b"); await first;
+  expect(obsolete.aborted).toBe(true);
+  expect(store.state.activeSessionId).toBe("b");
+  expect(store.state.ui.historyError).toBeNull();
+  expect(fx.made("POST", "/sessions/:id/stop")).toEqual([]);
+});
+
+it("shows a cached target immediately while project metadata loads, and respects a newer selection", async () => {
+  const { emptySessionChat } = await import("../src/state/chatReducer");
+  const cached = emptySessionChat(); store.state.chat.sessions.cached = cached;
+  let ready!: () => void;
+  fx.on("GET", "/providers", () => new Promise(resolve => { ready = () => resolve({ all: [], connected: [], default: {} }); }));
+  const opening = store.openChat(session("cached", "/test/B"));
+  expect(store.state.directory).toBe("/test/B");
+  expect(store.state.activeSessionId).toBe("cached");
+  expect(store.state.chat.sessions.cached).toBe(cached);
+  expect(store.state.ui.runtimeLoading).toBe(true);
+  await store.selectSession("newer");
+  await vi.waitFor(() => expect(ready).toBeTypeOf("function"));
+  ready(); await opening;
+  expect(store.state.activeSessionId).toBe("newer");
+});
+
+it("R5: accepting a prompt preserves a new draft typed while awaiting the acknowledgement", async () => {
+  choose("ses_a");
+  let release!: () => void;
+  fx.on("POST", "/commands", c => new Promise(r => { release = () => r(accepted((c.body as { id: string }).id)); }));
+  store.setDraft("first task");
+  const pending = store.sendPrompt("first task");
+  await vi.waitFor(() => expect(commands()).toHaveLength(1));
+  store.setDraft("next task typed during request");
+  release();
+  expect(await pending).toBe(true);
+  expect(store.getDraft()).toBe("next task typed during request");
+  expect(commands()[0]).toMatchObject({ kind: "prompt", sessionID: "ses_a", directory: "/test/A", id: expect.stringMatching(/^msg_/),
+    payload: { model: { providerID: "local-qwen-next", modelID: "qwen38-flash-next", variant: "medium" }, parts: expect.arrayContaining([{ type: "text", text: "first task" }]) } });
 });

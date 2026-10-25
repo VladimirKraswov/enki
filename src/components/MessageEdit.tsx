@@ -1,15 +1,18 @@
-import {useState} from 'react';
+import {useMemo,useState} from 'react';
 import type {UserMessage} from '../api/types';
-import {store, useAppState} from '../state/store';
+import type {AppState} from '../state/types';
+import {store, useAppSelector} from '../state/store';
 import {Icon} from './Icon';
 
+/** Edit a sent message = continue in a runtime fork before it (POST /sessions/:id/fork).
+ * Hidden only for read-only imported archives, which continue through their own path. */
 export function MessageEdit({message,text}:{message:UserMessage;text:string}) {
- const s=useAppState();
+ // Per visible user message: subscribe to its own facts, not to every streamed delta.
+ const select=useMemo(()=>(s:AppState)=>{const slot=s.chat.sessions[message.sessionID];
+  return {running:store.isRunning(message.sessionID),attachments:(slot?.partsByMessage[message.id]??[]).some(id=>slot?.parts[id]?.type==='file')};},[message.sessionID,message.id]);
+ const {running,attachments}=useAppSelector(select);
  const [open,setOpen]=useState(false),[draft,setDraft]=useState(text),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const running=store.isRunning(message.sessionID);
- const attachments=(s.chat.sessions[message.sessionID]?.partsByMessage[message.id]??[])
-  .some(id=>s.chat.sessions[message.sessionID]?.parts[id]?.type==='file');
- if(store.isPiSession(message.sessionID)) return null;
+ if(store.isLegacySession(message.sessionID)) return null;
  if(!open)return <button className="message-action" aria-label="Редактировать сообщение" title={attachments?'Сообщение с вложениями: отправьте уточнение новым сообщением':'Редактировать сообщение'} disabled={running||attachments} onClick={()=>{setDraft(text);setOpen(true);}}><Icon name="edit" size={15}/></button>;
  return <div className="message-editor" role="group" aria-label="Редактирование сообщения">
   <textarea autoFocus aria-label="Исправленное сообщение" value={draft} disabled={busy} onChange={e=>setDraft(e.target.value)} rows={5}/>

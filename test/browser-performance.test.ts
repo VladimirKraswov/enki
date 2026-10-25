@@ -18,12 +18,16 @@ it("uses only the current loaded turn and unions overlapping tool intervals", ()
   expect(currentTurnPerformance(c)).toEqual({wallMs:10000,toolMs:5000,reasoningMs:1000,calls:2,failed:1,output:100,reasoning:20});
   delete c.messages.a.time.completed; expect(currentTurnPerformance(c)?.wallMs).toBeNull();
 });
+// Variants are the thinking levels the runtime publishes per model (already
+// filtered by the SDK); the window offers exactly those and invents none.
 it("never invents a model variant and scopes browser profiles to server, engine and chat", () => {
   expect(browserDefaultEffort(["medium"])).toBeNull(); expect(browserDefaultEffort(["low","medium"])).toBe("low");
-  expect(browserEfforts("pi",undefined,false)).toEqual([]); expect(browserEfforts("pi",undefined,true)).toContain("low");
-  expect(browserEfforts("pi",undefined,true)).not.toContain("xhigh");
-  expect(browserEfforts("pi",undefined,true,{xhigh:"high",low:null})).toContain("xhigh");
-  expect(browserEfforts("pi",undefined,true,{low:null})).not.toContain("low");
-  expect(browserEfforts("opencode",{medium:{}},true)).toEqual(["medium"]);
+  expect(browserDefaultEffort([])).toBeNull(); expect(browserDefaultEffort(["low","medium"],"medium")).toBe("medium");
+  expect(browserEfforts(undefined)).toEqual([]); expect(browserEfforts(null)).toEqual([]); expect(browserEfforts({})).toEqual([]);
+  expect(browserEfforts({low:{},medium:{},high:{}})).toEqual(["low","medium","high"]);
+  expect(browserEfforts({low:{},medium:{}})).not.toContain("xhigh");
+  expect(browserEfforts({medium:{}})).not.toContain("low");
+  expect(browserTaskKey("s","pi","a")).not.toBe(browserTaskKey("other","pi","a"));
+  expect(browserTaskKey("s","pi","a")).not.toBe(browserTaskKey("s","pi","b"));
   expect(browserTaskKey("s","pi","a")).not.toBe(browserTaskKey("s","opencode","a"));
 });

@@ -1,70 +1,81 @@
-import { expect, it, vi } from 'vitest';
-import accessPolicy, { fullRules, sessionAccess } from '../src-tauri/resources/browser/access-policy.mjs';
-import { accessMode, accessRules } from '../src/state/access';
-function fixture(rootPermission = accessRules('full')) {
-  const sessions: Record<string, any> = {
-    root: { id:'root', directory:'/project', permission: rootPermission },
-    child: { id:'child', directory:'/project', parentID:'root', permission:[{permission:'edit',pattern:'*',action:'deny'}] },
-    sibling: {id:'sibling',directory:'/other',permission:accessRules('read')},
-  };
-  const get = vi.fn(async ({path,query}:any) => {
-    expect(query.directory).toBe('/project'); return {data:sessions[path.id]};
-  });
-  const update = vi.fn(async ({path,body,query}:any) => {
-    expect(query.directory).toBe('/project'); sessions[path.id].permission=[...(sessions[path.id].permission??[]),...body.permission]; return {data:sessions[path.id]};
-  });
-  return {sessions,client:{session:{get,update}},update};
-}
-it('inherits full access before the child prompt and leaves other sessions intact',async()=>{
-  const f=fixture(), hook=(await accessPolicy({client:f.client,directory:'/project'}))['chat.message'];
-  await hook({sessionID:'child'});
-  expect(f.sessions.child.permission.slice(-fullRules().length)).toEqual(fullRules());
-  expect(f.sessions.sibling.permission).toEqual(accessRules('read'));
-  await hook({sessionID:'child'}); expect(f.update).toHaveBeenCalledTimes(1);
+// Chat access presets (src/state/access.ts) as the runtime actually evaluates
+// them (src-tauri/resources/agent/src/interaction/access.ts, last match wins).
+//
+// Retired with OpenCode: resources/browser/access-policy.mjs (the OpenCode
+// `chat.message` plugin that copied a parent's full access into task-tool
+// subagents and upgraded legacy rules through session.update). It is no longer
+// shipped (capabilities.rs shared_runtime_ships_no_agent_engine_plugins) and the
+// runtime starts no live subagents: child sessions exist only as read-only
+// imported archives, which never execute.
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { accessMode, accessRules, type AccessMode } from "../src/state/access";
+import { decide, evaluate, type DefaultPolicy } from "../src-tauri/resources/agent/src/interaction/access";
+
+let root: string, project: string, outside: string;
+beforeAll(() => {
+  root = mkdtempSync(path.join(os.tmpdir(), "enki-access-"));
+  project = path.join(root, "project"); outside = path.join(root, "outside");
+  mkdirSync(project); mkdirSync(outside);
 });
-it('keeps ask/read/custom policies and rejects foreign/cyclic ancestry',async()=>{
-  for (const permission of [accessRules('ask'),accessRules('read'),[{permission:'*',pattern:'*',action:'allow'},{permission:'edit',pattern:'*',action:'deny'}]]) {
-    const f=fixture(permission), hook=(await accessPolicy({client:f.client,directory:'/project'}))['chat.message'];
-    await hook({sessionID:'child'});expect(f.update).not.toHaveBeenCalled();
-  }
-  const f=fixture();await expect(sessionAccess(f.client,'/project','sibling')).rejects.toThrow('context');
-  f.sessions.root.parentID='child';await expect(sessionAccess(f.client,'/project','child')).rejects.toThrow('Cyclic');
-});
-it('recognizes existing full chats and carries an explicit external grant',()=>{
-  expect(accessMode([{permission:'*',pattern:'*',action:'allow'},{permission:'doom_loop',pattern:'*',action:'ask'}])).toBe('full');
-  expect(accessRules('full')).toEqual(fullRules());
-  expect(accessRules('full').filter(r=>r.permission==='external_directory')).toEqual([{permission:'external_directory',pattern:'*',action:'allow'}]);
-});
-it('revokes inherited full access when the parent switches to read',async()=>{
- const f=fixture(),hook=(await accessPolicy({client:f.client,directory:'/project'}))['chat.message'];
- await hook({sessionID:'child'});f.sessions.root.permission=accessRules('read');
- await hook({sessionID:'child'});expect(accessMode(f.sessions.child.permission)).toBe('read');
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+const verdict = (mode: AccessMode | null, tool: string, input: Record<string, unknown>, fallback: DefaultPolicy = "ask", rules = mode ? accessRules(mode) : []) =>
+  decide({ rules, grants: [], fallback, cwd: project, tool, input }).decision;
+
+it("full access runs tools without confirmation, including outside the project", () => {
+  expect(accessRules("full")).toEqual([{ permission: "*", pattern: "*", action: "allow" }]);
+  expect(verdict("full", "write", { path: "a.txt" })).toBe("allow");
+  expect(verdict("full", "bash", { command: "rm -rf build" })).toBe("allow");
+  expect(verdict("full", "read", { path: path.join(outside, "x.txt") })).toBe("allow");
+  expect(verdict("full", "write", { path: path.join(outside, "x.txt") })).toBe("allow");
 });
 
-it('full session rules override a loop confirmation when the engine evaluates session rules', async () => {
-  // General rule evaluation is last-match-wins; the special processor loop path
-  // omits session rules and is covered separately by adapter tests.
-  const defaults = [{permission:'doom_loop',pattern:'*',action:'ask'}];
-  const effective = (rules: any[]) => [...defaults,...rules].findLast(
-    rule => ['*','doom_loop'].includes(rule.permission) && rule.pattern === '*')?.action;
-  expect(effective(accessRules('full'))).toBe('allow');
-  expect(effective(accessRules('ask'))).toBe('ask');
-  expect(effective(accessRules('read'))).toBe('deny');
+it("ask allows observation, asks for changes, commands and anything outside the project", () => {
+  expect(verdict("ask", "read", { path: "a.txt" })).toBe("allow");
+  expect(verdict("ask", "grep", { pattern: "x" })).toBe("allow");
+  expect(verdict("ask", "write", { path: "a.txt" })).toBe("ask");
+  expect(verdict("ask", "bash", { command: "ls" })).toBe("ask");
+  expect(verdict("ask", "read", { path: path.join(outside, "x.txt") })).toBe("ask");
+  expect(verdict("ask", "some_future_tool", {})).toBe("ask");
 });
-it('upgrades both legacy full policies on root and child without duplicate updates', async () => {
-  for (const legacy of [fullRules().slice(0,2), [
-    {permission:'*',pattern:'*',action:'allow'},
-    {permission:'doom_loop',pattern:'*',action:'ask'},
-  ]]) {
-    expect(accessMode(legacy)).toBe('full');
-    const f = fixture(legacy);
-    const hook = (await accessPolicy({client:f.client,directory:'/project'}))['chat.message'];
-    await hook({sessionID:'root'});
-    expect(f.sessions.root.permission.slice(-fullRules().length)).toEqual(fullRules());
-    await hook({sessionID:'child'});
-    expect(f.sessions.child.permission.slice(-fullRules().length)).toEqual(fullRules());
-    await hook({sessionID:'root'});
-    await hook({sessionID:'child'});
-    expect(f.update).toHaveBeenCalledTimes(2);
+
+it("read only denies every mutation and command and never silently reads outside", () => {
+  expect(verdict("read", "read", { path: "a.txt" })).toBe("allow");
+  for (const [tool, input] of [["write", { path: "a.txt" }], ["edit", { path: "a.txt" }], ["bash", { command: "ls" }], ["some_future_tool", {}]] as const)
+    expect(verdict("read", tool, input), tool).toBe("deny");
+  expect(verdict("read", "read", { path: path.join(outside, "x.txt") })).not.toBe("allow");
+});
+
+it("inherit stores no rules, so the runtime default policy decides", () => {
+  expect(accessRules("inherit")).toEqual([]);
+  expect(accessMode([])).toBe("inherit");
+  expect(verdict(null, "write", { path: "a.txt" }, "ask")).toBe("ask");
+  expect(verdict(null, "write", { path: "a.txt" }, "read")).toBe("deny");
+  expect(verdict(null, "write", { path: "a.txt" }, "full")).toBe("allow");
+  expect(verdict(null, "read", { path: "a.txt" }, "read")).toBe("allow");
+});
+
+it("full representations stored by earlier versions stay full, and the runtime treats them as full", () => {
+  for (const legacy of [
+    [{ permission: "*", pattern: "*", action: "allow" }, { permission: "external_directory", pattern: "*", action: "allow" }],
+    [{ permission: "*", pattern: "*", action: "allow" }, { permission: "external_directory", pattern: "*", action: "allow" }, { permission: "doom_loop", pattern: "*", action: "allow" }],
+    [{ permission: "*", pattern: "*", action: "allow" }, { permission: "doom_loop", pattern: "*", action: "ask" }],
+  ] as const) {
+    expect(accessMode([...legacy])).toBe("full");
+    expect(verdict(null, "write", { path: "a.txt" }, "ask", [...legacy])).toBe("allow");
+    expect(verdict(null, "write", { path: path.join(outside, "x") }, "ask", [...legacy])).toBe("allow");
   }
+});
+
+it("custom rules are last-match-wins and never mistaken for a preset", () => {
+  const custom = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "edit", pattern: "*", action: "deny" as const }];
+  expect(accessMode(custom)).toBe("custom");
+  expect(verdict(null, "write", { path: "a.txt" }, "full", custom)).toBe("deny");
+  expect(verdict(null, "bash", { command: "ls" }, "ask", custom)).toBe("allow");
+  // A preset appended after older rules wins (how a mode change is stored).
+  expect(accessMode([...custom, ...accessRules("read")])).toBe("read");
+  expect(evaluate([...accessRules("full"), ...accessRules("read")], "bash", "ls")).toBe("deny");
+  expect(evaluate([...accessRules("read"), ...accessRules("full")], "bash", "ls")).toBe("allow");
 });

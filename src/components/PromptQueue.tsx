@@ -82,17 +82,22 @@ export function PromptQueue({attachments, removeFile, focusEditor, switching}: {
                 : "Приостановлена"}
             </span>
             {!store.isQueueArmed() && (
-              <button disabled={!!queueEdit || s.ui.sending || !connected || store.getQueue()[0]?.state !== "ready"} onClick={() => store.resumeQueue()}>
+              <button disabled={!!queueEdit || s.ui.sending || !connected || store.getQueue()[0]?.state !== "ready"} onClick={() => void store.resumeQueue()}>
                 Продолжить очередь
               </button>
             )}
           </div>
           {!store.isQueueArmed() && store.queueRecoveryReason() && <p className="queue-recovery" role="status">{store.queueRecoveryReason()}</p>}
-          {!store.isQueueArmed() && store.queueHasDifferentModel() && <button className="queue-model-recovery" disabled={!!queueEdit || s.ui.sending || !connected || store.getQueue()[0]?.state !== "ready"} onClick={() => store.resumeQueue(true)}>Продолжить на выбранной модели</button>}
+          {!store.isQueueArmed() && store.queueHasDifferentModel() && <button className="queue-model-recovery" disabled={!!queueEdit || s.ui.sending || !connected || store.getQueue()[0]?.state !== "ready"} onClick={() => void store.resumeQueue(true)}>Продолжить на выбранной модели</button>}
           <div className="queued-prompts" ref={list}>
           <span className="queue-announcement" role="status" aria-live="polite">{announcement}</span>
           {queue.map((item, index) => {
-            const itemFiles = queueEdit?.id === item.id ? attachments : item.attachments?.files ?? [];
+            // While editing: the item's stored files that are still kept (removal only
+            // marks them; Apply sends it atomically) plus the newly added draft files.
+            const editing = queueEdit?.id === item.id;
+            const itemFiles: { id: string; name: string; kept: boolean }[] = editing
+              ? [...store.editKeptFiles().map(file => ({ id: file.id, name: file.name, kept: true })), ...attachments.map(file => ({ id: file.id, name: file.name, kept: false }))]
+              : (item.attachments?.files ?? []).map(file => ({ id: file.id, name: file.name, kept: true }));
             return (
             <div className={`queued-prompt ${queueEdit?.id === item.id ? "queued-prompt-editing" : ""} ${drag?.id === item.id ? "queue-dragging" : ""}`} key={item.id} data-queue-id={item.id} style={rowStyle(index)}>
               <button type="button" className="queue-drag-handle" disabled={disabled || queue.length < 2}
@@ -127,12 +132,24 @@ export function PromptQueue({attachments, removeFile, focusEditor, switching}: {
                       Изменить
                     </button>
                   </>
+                ) : item.state === "sending" ? (
+                  <span>Отправляется…</span>
                 ) : (
-                  <span>
-                    {item.state === "sending"
-                      ? "Отправляется…"
-                      : "Отправка не подтверждена. Проверьте историю перед повтором."}
-                  </span>
+                  // Delivery unknown after a restart: never replayed automatically. The user
+                  // checks the chat history above and tells the runtime what happened.
+                  <>
+                    <span>Отправка не подтверждена. Проверьте историю чата.</span>
+                    <button disabled={!!queueEdit || s.ui.sending || !connected}
+                      title="Запрос виден в истории: убрать его из очереди без повтора"
+                      onClick={() => void store.acknowledgeQueued(item.id, "drop").catch(error => setAnnouncement(String(error)))}>
+                      Уже отправлен
+                    </button>
+                    <button disabled={!!queueEdit || s.ui.sending || !connected}
+                      title="Запроса нет в истории: вернуть его в очередь (очередь останется на паузе)"
+                      onClick={() => void store.acknowledgeQueued(item.id, "requeue").catch(error => setAnnouncement(String(error)))}>
+                      Вернуть в очередь
+                    </button>
+                  </>
                 )}
                 <button
                   disabled={!!queueEdit || store.isQueueLocked() || item.state === "sending"}
@@ -143,10 +160,10 @@ export function PromptQueue({attachments, removeFile, focusEditor, switching}: {
                 </button>
               </div>
               {queueFiles === item.id && <div className="queued-attachments" aria-label="Файлы запроса в очереди">
-                {itemFiles.map(file => <div className="queued-attachment" key={file.id}>
+                {itemFiles.map(file => <div className="queued-attachment" key={`${file.kept ? "kept" : "draft"}:${file.id}`}>
                   <Icon name="file" size={14}/><span title={file.name}>{file.name}</span>
-                  <button type="button" aria-label={`Убрать из запроса ${file.name}`} disabled={item.state !== 'ready' || s.ui.sending || (store.isQueueLocked() && queueEdit?.id !== item.id)}
-                    onClick={() => { if (queueEdit?.id === item.id) removeFile(file.id); else void store.removeQueuedAttachment(item.id, file.id); }}><Icon name="close" size={14}/></button>
+                  <button type="button" aria-label={`Убрать из запроса ${file.name}`} disabled={item.state !== 'ready' || s.ui.sending || (store.isQueueLocked() && !editing)}
+                    onClick={() => { if (editing && !file.kept) removeFile(file.id); else void store.removeQueuedAttachment(item.id, file.id); }}><Icon name="close" size={14}/></button>
                 </div>)}
               </div>}
             </div>

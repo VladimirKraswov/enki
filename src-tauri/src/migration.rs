@@ -302,6 +302,8 @@ pub fn bundled_defaults(root: &Path) -> Result<(), String> {
         &[
             "035cddd80f11e1fb046ea03481fe367b2301cb401e3c0f8d874c6ad689bdbcbe",
             "d0ad8129c61e6093e94ee9bb94693b13caf51c1d284e98e8d5dc7837d2c2d9d3",
+            // Pre-2.0 default (OpenCode/Pi dual-engine wording).
+            "df288d25bf19a30f00b96324e3fbfe14d8dac7df24dbfd34a49e5daf102f0dce",
         ],
         include_str!("../resources/workshop/AGENTS.md"),
     )?;

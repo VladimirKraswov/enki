@@ -71,6 +71,28 @@ pub fn terminate_group(child: &mut Child, grace: Duration) {
     let _ = child.wait();
 }
 
+/// Bounded variant for supervised lifecycles. Retain the owned Child handle
+/// when this returns false; a timeout must never authorize a second instance.
+pub fn terminate_group_until(child: &mut Child, until: Instant) -> bool {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return true;
+    }
+    #[cfg(unix)]
+    signal_group(child, libc::SIGTERM);
+    #[cfg(not(unix))]
+    let _ = child.kill();
+    let grace = until
+        .saturating_duration_since(Instant::now())
+        .min(Duration::from_millis(200));
+    if wait_until(child, grace).is_some() {
+        return true;
+    }
+    #[cfg(unix)]
+    signal_group(child, libc::SIGKILL);
+    let _ = child.kill();
+    wait_until(child, until.saturating_duration_since(Instant::now())).is_some()
+}
+
 #[cfg(unix)]
 fn signal_group(child: &Child, signal: libc::c_int) {
     // Safety: a plain syscall addressed to the group led by our own, not yet
@@ -291,6 +313,399 @@ mod windows_job {
             }
         }
     }
+
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION: u32 = 0x0400;
+    const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+    const THREAD_SUSPEND_RESUME: u32 = 0x0002;
+    const THREAD_QUERY_LIMITED_INFORMATION: u32 = 0x0800;
+    const INVALID_HANDLE_VALUE: isize = -1;
+    // Exact THREADENTRY32 layout; most fields are written by Windows only.
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct ThreadEntry32 {
+        size: u32,
+        usage: u32,
+        thread_id: u32,
+        owner_process_id: u32,
+        base_priority: i32,
+        delta_priority: i32,
+        flags: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn TerminateJobObject(job: *mut c_void, exit_code: u32) -> i32;
+        fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> *mut c_void;
+        fn Thread32First(snapshot: *mut c_void, entry: *mut ThreadEntry32) -> i32;
+        fn Thread32Next(snapshot: *mut c_void, entry: *mut ThreadEntry32) -> i32;
+        fn OpenThread(access: u32, inherit: i32, thread_id: u32) -> *mut c_void;
+        fn GetProcessIdOfThread(thread: *mut c_void) -> u32;
+        fn ResumeThread(thread: *mut c_void) -> u32;
+        fn QueryInformationJobObject(
+            job: *mut c_void,
+            class: u32,
+            info: *mut c_void,
+            length: u32,
+            returned: *mut u32,
+        ) -> i32;
+    }
+    struct Handle(*mut c_void);
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    impl KillOnCloseJob {
+        fn create(extra_flags: u32) -> Result<Self, String> {
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return Err("Windows did not create a Job Object".into());
+                }
+                let owned = KillOnCloseJob(job);
+                let mut info = Extended::default();
+                // No BREAKAWAY_OK flags: descendants cannot leave the job.
+                info.basic.flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | extra_flags;
+                if SetInformationJobObject(
+                    job,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                    &info as *const _ as *const c_void,
+                    std::mem::size_of::<Extended>() as u32,
+                ) == 0
+                {
+                    return Err("Windows rejected the kill-on-close Job limits".into());
+                }
+                Ok(owned)
+            }
+        }
+        /// Terminate every process currently in this owned job. The handle
+        /// stays open; dropping it afterwards is still required.
+        pub fn terminate(&self) -> bool {
+            unsafe { TerminateJobObject(self.0, 1) != 0 }
+        }
+        #[cfg(test)]
+        pub fn raw(&self) -> *mut c_void {
+            self.0
+        }
+        /// True once the job reports no active process before `until`.
+        /// TerminateJobObject does not wait, so this is the settlement proof.
+        pub fn wait_empty(&self, until: std::time::Instant) -> bool {
+            // Exact JOBOBJECT_BASIC_ACCOUNTING_INFORMATION layout.
+            #[repr(C)]
+            #[derive(Default)]
+            struct Accounting {
+                user: i64,
+                kernel: i64,
+                period_user: i64,
+                period_kernel: i64,
+                page_faults: u32,
+                total: u32,
+                active: u32,
+                terminated: u32,
+            }
+            const JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION: u32 = 1;
+            loop {
+                let mut info = Accounting::default();
+                let ok = unsafe {
+                    QueryInformationJobObject(
+                        self.0,
+                        JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+                        &mut info as *mut _ as *mut c_void,
+                        std::mem::size_of::<Accounting>() as u32,
+                        std::ptr::null_mut(),
+                    )
+                } != 0;
+                if !ok {
+                    return false;
+                }
+                if info.active == 0 {
+                    return true;
+                }
+                if std::time::Instant::now() >= until {
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+
+    /// Resume the only thread of a suspended process we created and still own.
+    /// The owned process handle prevents PID reuse; the thread is re-checked
+    /// against that PID after opening, and the previous suspend count must be 1.
+    fn resume_primary_thread(child: &Child) -> Result<(), String> {
+        let pid = child.id();
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snapshot as isize == INVALID_HANDLE_VALUE || snapshot.is_null() {
+                return Err("Windows thread snapshot failed".into());
+            }
+            let snapshot = Handle(snapshot);
+            let mut entry = ThreadEntry32 {
+                size: std::mem::size_of::<ThreadEntry32>() as u32,
+                usage: 0,
+                thread_id: 0,
+                owner_process_id: 0,
+                base_priority: 0,
+                delta_priority: 0,
+                flags: 0,
+            };
+            let mut threads = Vec::new();
+            let mut more = Thread32First(snapshot.0, &mut entry) != 0;
+            while more {
+                if entry.owner_process_id == pid {
+                    threads.push(entry.thread_id);
+                }
+                entry.size = std::mem::size_of::<ThreadEntry32>() as u32;
+                more = Thread32Next(snapshot.0, &mut entry) != 0;
+            }
+            let &[thread_id] = threads.as_slice() else {
+                return Err("Suspended build process does not have exactly one thread".into());
+            };
+            let thread = OpenThread(
+                THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION,
+                0,
+                thread_id,
+            );
+            if thread.is_null() {
+                return Err("Windows did not open the suspended primary thread".into());
+            }
+            let thread = Handle(thread);
+            if GetProcessIdOfThread(thread.0) != pid {
+                return Err("Primary thread ownership changed".into());
+            }
+            match ResumeThread(thread.0) {
+                1 => Ok(()),
+                u32::MAX => Err("Windows did not resume the primary thread".into()),
+                _ => Err("Primary thread had an unexpected suspend count".into()),
+            }
+        }
+    }
+
+    /// Create `command` suspended and hidden, assign it to a fresh kill-on-close
+    /// Job, and only then resume it, so no descendant can start outside the job.
+    /// Any failure terminates the never-resumed child through its own handle.
+    pub fn spawn_in_job(
+        command: &mut std::process::Command,
+    ) -> Result<(Child, KillOnCloseJob), String> {
+        use std::os::windows::process::CommandExt;
+        let job = KillOnCloseJob::create(JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)?;
+        command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("Build process did not start ({:?})", error.kind()))?;
+        let assigned = unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) != 0 };
+        let result = if assigned {
+            resume_primary_thread(&child)
+        } else {
+            Err("Windows did not assign the suspended build process to its Job".into())
+        };
+        if let Err(error) = result {
+            // Never resumed (or resume failed): terminate the owned handle, then
+            // the job, and reap. No PID-based lookup is used for cleanup.
+            let _ = child.kill();
+            job.terminate();
+            let _ = super::wait_until(&mut child, std::time::Duration::from_secs(5));
+            return Err(error);
+        }
+        Ok((child, job))
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub use windows_job::spawn_in_job;
+
+/// A started process tree owned by Desktop: a Windows kill-on-close Job created
+/// before the primary thread ran, or a Unix process group led by the child.
+pub struct OwnedTree {
+    pub child: Child,
+    #[cfg(target_os = "windows")]
+    job: KillOnCloseJob,
+}
+
+impl OwnedTree {
+    pub fn spawn(command: &mut Command) -> Result<Self, String> {
+        #[cfg(target_os = "windows")]
+        {
+            let (child, job) = spawn_in_job(command)?;
+            Ok(Self { child, job })
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            own_process_group(command);
+            let child = command
+                .spawn()
+                .map_err(|error| format!("Build process did not start ({:?})", error.kind()))?;
+            Ok(Self { child })
+        }
+    }
+    /// Whether the primary exited, WITHOUT reaping it on Unix: the zombie keeps
+    /// its PID and therefore the process-group id pinned until [`Self::settle`].
+    pub fn primary_exited(&mut self) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            observe(&self.child).map(|state| !matches!(state, Observed::Running))
+        }
+        #[cfg(not(unix))]
+        {
+            self.child.try_wait().map(|status| status.is_some())
+        }
+    }
+    /// SIGTERM to the group (Unix), a bounded grace, then [`Self::settle`].
+    pub fn stop(&mut self, grace: Duration, limit: Duration) -> Settlement {
+        #[cfg(unix)]
+        if matches!(observe(&self.child), Ok(Observed::Running)) {
+            signal_group(&self.child, libc::SIGTERM);
+            let until = Instant::now() + grace;
+            while Instant::now() < until && matches!(observe(&self.child), Ok(Observed::Running)) {
+                thread::sleep(Duration::from_millis(25));
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = grace;
+        self.settle(limit)
+    }
+    /// Stop everything still inside the owned tree, then reap the primary.
+    /// `complete` is true only when the whole owned scope is proven empty:
+    /// Windows: the Job reports no active process. Unix: the group was killed
+    /// while the unreaped primary pinned its id (never a reusable PGID), plus,
+    /// for a Linux runner that adopted orphans, every re-parented descendant
+    /// (including ones that left the group) was reaped. `scope` names what was
+    /// covered; macOS cannot see descendants that left the group (`"group"`).
+    pub fn settle(&mut self, limit: Duration) -> Settlement {
+        let until = Instant::now() + limit;
+        #[cfg(target_os = "windows")]
+        {
+            self.job.terminate();
+            let _ = self.child.kill();
+            let status = wait_until(&mut self.child, limit);
+            let empty = self.job.wait_empty(until);
+            Settlement {
+                complete: status.is_some() && empty,
+                status,
+                scope: "job",
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let signalled = match observe(&self.child) {
+                Ok(Observed::Running | Observed::Exited) => {
+                    signal_group(&self.child, libc::SIGKILL);
+                    true
+                }
+                Ok(Observed::Gone) | Err(_) => false,
+            };
+            let status = wait_until(&mut self.child, limit);
+            #[cfg(target_os = "linux")]
+            if ADOPTS_ORPHANS.load(std::sync::atomic::Ordering::Acquire) {
+                let swept = sweep_orphans(until);
+                return Settlement {
+                    complete: signalled && status.is_some() && swept,
+                    status,
+                    scope: "group+orphans",
+                };
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = until;
+            Settlement {
+                complete: signalled && status.is_some(),
+                status,
+                scope: "group",
+            }
+        }
+    }
+}
+
+pub struct Settlement {
+    pub status: Option<ExitStatus>,
+    pub complete: bool,
+    pub scope: &'static str,
+}
+
+#[cfg(unix)]
+enum Observed {
+    Running,
+    Exited,
+    Gone,
+}
+
+/// `waitid(WNOWAIT)`: report an exit without reaping. `Gone` = already reaped,
+/// so its PID/PGID must never be signalled again.
+#[cfg(unix)]
+fn observe(child: &Child) -> std::io::Result<Observed> {
+    // Safety: zeroed siginfo is the documented "no event" value for WNOHANG.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let flags = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+    if unsafe { libc::waitid(libc::P_PID, child.id() as libc::id_t, &mut info, flags) } != 0 {
+        let error = std::io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(libc::ECHILD) => Ok(Observed::Gone),
+            _ => Err(error),
+        };
+    }
+    Ok(if info.si_signo == libc::SIGCHLD {
+        Observed::Exited
+    } else {
+        Observed::Running
+    })
+}
+
+#[cfg(target_os = "linux")]
+static ADOPTS_ORPHANS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// For the single-purpose runner process only (never the desktop app): become
+/// a Linux child subreaper so descendants that leave the process group are
+/// re-parented to us, stay pinned as our own children and are settled too.
+pub fn adopt_orphans() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let ok = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } == 0;
+        ADOPTS_ORPHANS.store(ok, std::sync::atomic::Ordering::Release);
+        ok
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Reap exited adopted orphans; SIGKILL live ones. Each PID comes from our own
+/// children list and is still unreaped (only this thread reaps), so it cannot
+/// name a foreign process. False when children remain at `until` or cannot
+/// be listed.
+#[cfg(target_os = "linux")]
+fn sweep_orphans(until: Instant) -> bool {
+    loop {
+        let mut status = 0;
+        let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+        if pid > 0 {
+            continue;
+        }
+        if pid < 0 {
+            return std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD);
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        let mut children = Vec::new();
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+            return false;
+        };
+        for task in tasks.flatten() {
+            let Ok(text) = std::fs::read_to_string(task.path().join("children")) else {
+                return false;
+            };
+            children.extend(
+                text.split_whitespace()
+                    .filter_map(|p| p.parse::<i32>().ok()),
+            );
+        }
+        for pid in children {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[cfg(test)]
@@ -362,6 +777,60 @@ mod tests {
         assert!(matches!(child.try_wait(), Ok(None)));
         drop(job);
         assert_eq!(unsafe { WaitForSingleObject(grandchild.0, 5000) }, 0);
+        assert!(wait_until(&mut child, Duration::from_secs(5)).is_some());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn suspended_spawn_resumes_only_after_job_assignment_and_owns_descendants() {
+        use std::ffi::c_void;
+        use std::io::{BufRead, BufReader};
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+            fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+            fn IsProcessInJob(process: *mut c_void, job: *mut c_void, result: *mut i32) -> i32;
+            fn CloseHandle(handle: *mut c_void) -> i32;
+        }
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+        // Resume proof: a never-resumed child could not produce its exit code.
+        let mut quick = Command::new(system.join("System32/cmd.exe"));
+        quick
+            .args(["/D", "/C", "exit 7"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let (mut child, _job) = spawn_in_job(&mut quick).expect("suspended spawn");
+        let status = wait_until(&mut child, Duration::from_secs(15));
+        assert_eq!(status.and_then(|s| s.code()), Some(7));
+        // Descendant started by the child is inside the job from its first instruction.
+        let mut parent =
+            Command::new(system.join("System32/WindowsPowerShell/v1.0/powershell.exe"));
+        parent.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$p=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 60' -WindowStyle Hidden -PassThru; [Console]::WriteLine($p.Id); [Console]::Out.Flush(); Start-Sleep -Seconds 60",
+        ]);
+        parent
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let (mut child, job) = spawn_in_job(&mut parent).expect("suspended spawn");
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .expect("descendant PID");
+        let pid: u32 = line.trim().parse().expect("descendant PID");
+        // SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION on a test-owned descendant.
+        let handle = unsafe { OpenProcess(0x0010_1000, 0, pid) };
+        assert!(!handle.is_null());
+        let mut inside = 0;
+        assert_ne!(unsafe { IsProcessInJob(handle, job.raw(), &mut inside) }, 0);
+        assert_eq!(inside, 1, "descendant must be inside the owned job");
+        assert!(job.terminate());
+        assert_eq!(unsafe { WaitForSingleObject(handle, 5000) }, 0);
+        unsafe { CloseHandle(handle) };
         assert!(wait_until(&mut child, Duration::from_secs(5)).is_some());
     }
 

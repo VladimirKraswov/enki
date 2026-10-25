@@ -2,7 +2,7 @@
 
 Packaged, published through Hub and installed on macOS in 0.2.57.
 See [release acceptance](RELEASE-0.2.57.md).
-Settings → Browser → Profile and privacy is shared by OpenCode and Pi. The existing
+Settings → Browser → Profile and privacy applies to every Enki chat (in 0.2.x it was shared by OpenCode and Pi). The existing
 fast / human interaction selector remains independent of the environment profile.
 
 Three editable presets are available: standard (the existing embedded Chromium),

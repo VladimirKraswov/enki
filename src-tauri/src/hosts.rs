@@ -1,4 +1,5 @@
-//! Only app-owned directories and SSH tunnels. The OpenCode engine remains externally managed.
+//! Only app-owned directories and SSH tunnels to the Enki Runtime on remote
+//! hosts. External agent servers are never started, stopped or contacted.
 use crate::process::{hide_console, output_with_timeout, OutputTail, RunError};
 use serde::Serialize;
 use std::{
@@ -229,15 +230,144 @@ pub async fn prepare_chat_workspace(
     }).await.map_err(|e| e.to_string())?
 }
 
+/// Where the remote Linux runtime artifact is installed (see
+/// scripts/runtime/prepare.mjs, `enki-runtime-linux-x64-<version>.tar.gz` and
+/// the trusted journaled installer scripts/runtime/install-remote.mjs, which
+/// requires the authenticated manifest SHA256). Fixed path: nothing user-controlled is
+/// interpolated into the remote command. Runtime data lives separately in
+/// `~/.local/share/enki/runtime`.
+pub(crate) const REMOTE_RUNTIME: &str =
+    "$HOME/.local/share/enki/runtime-dist/current/bin/enki-runtime";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRuntime {
+    pub target: String,
+    pub endpoint: String,
+    /// Bearer for this runtime. Kept in memory only; never in a URL or a log.
+    pub token: String,
+    pub instance: String,
+    pub contract: u64,
+}
+
+/// Parse `enki-runtime ensure` output: one JSON line, strictly validated.
+fn parse_ensure(stdout: &str) -> Result<(u16, String, String, u64), String> {
+    let line = stdout.lines().rev().find(|l| l.trim_start().starts_with('{')).ok_or(
+        "На удалённой машине не найдена среда выполнения Enki. Установите её (см. docs/REMOTE-RUNTIME.md).",
+    )?;
+    let value: serde_json::Value = serde_json::from_str(line.trim())
+        .map_err(|_| "Удалённая среда выполнения вернула некорректный ответ.")?;
+    let port = value["port"]
+        .as_u64()
+        .filter(|p| (1..=65535).contains(p))
+        .ok_or("Удалённая среда выполнения не сообщила порт.")? as u16;
+    let token = value["token"]
+        .as_str()
+        .filter(|t| {
+            t.len() >= 32
+                && t.len() <= 256
+                && t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+        .ok_or("Удалённая среда выполнения не сообщила ключ доступа.")?
+        .to_string();
+    let instance = value["instance"]
+        .as_str()
+        .filter(|s| s.len() <= 128)
+        .unwrap_or_default()
+        .to_string();
+    let contract = value["contract"]
+        .as_u64()
+        .ok_or("Удалённая среда выполнения не сообщила версию контракта.")?;
+    if contract != crate::runtime::CONTRACT {
+        return Err(format!(
+            "Версия удалённой среды выполнения (контракт {contract}) несовместима с этим Enki (контракт {}). Обновите её на удалённой машине.",
+            crate::runtime::CONTRACT
+        ));
+    }
+    Ok((port, token, instance, contract))
+}
+
+/// Start (or find) the runtime daemon on the SSH host, then forward its
+/// loopback port through a strict SSH tunnel. A failure is reported as such:
+/// there is never a fallback to the local runtime for a remote project.
 #[tauri::command]
-pub async fn connect_ssh(
+pub async fn connect_remote_runtime(
     target: String,
-    port: u16,
     state: State<'_, Hosts>,
-) -> Result<String, String> {
+) -> Result<RemoteRuntime, String> {
+    let mut probe = ssh_probe(&target)?;
+    probe
+        .arg(&target)
+        .arg(format!("exec \"{REMOTE_RUNTIME}\" ensure"));
+    let stdout = tauri::async_runtime::spawn_blocking(move || {
+        output_timeout_for(probe, Duration::from_secs(45))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let (port, token, instance, contract) = parse_ensure(&stdout)?;
+    let endpoint = open_tunnel(&target, port, state.inner()).await?;
+    // The forwarded runtime must answer authenticated health with the same
+    // instance; anything else listening on that remote port is refused.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())?;
+    let health: serde_json::Value = client
+        .get(format!("{endpoint}/v1/health"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|_| {
+            "Удалённая среда выполнения не прошла проверку подлинности через туннель.".to_string()
+        })?
+        .json()
+        .await
+        .map_err(|_| "Удалённая среда выполнения вернула некорректный ответ.".to_string())?;
+    if health["contract"].as_u64() != Some(contract)
+        || (!instance.is_empty() && health["instance"].as_str() != Some(instance.as_str()))
+    {
+        if let Ok(mut tunnels) = state.0.lock() {
+            tunnels.remove(&format!("{target}:{port}"));
+        }
+        return Err("Через туннель ответил другой процесс. Подключение отменено.".into());
+    }
+    Ok(RemoteRuntime {
+        target,
+        endpoint,
+        token,
+        instance,
+        contract,
+    })
+}
+
+fn output_timeout_for(mut c: Command, limit: Duration) -> Result<String, String> {
+    let out = output_with_timeout(&mut c, limit, 64 * 1024).map_err(|error| match error {
+        RunError::TimedOut => "SSH: время ожидания истекло.".to_string(),
+        RunError::Spawn(error) => error.to_string(),
+    })?;
+    if !out.status.success() {
+        let stderr: String = String::from_utf8_lossy(&out.stderr)
+            .chars()
+            .take(1200)
+            .collect();
+        if out.status.code() == Some(127) {
+            return Err("На удалённой машине не установлена среда выполнения Enki. Установите её (см. docs/REMOTE-RUNTIME.md).".into());
+        }
+        return Err(format!("SSH: {}", stderr.trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Strict `-L 127.0.0.1:<local>:127.0.0.1:<remote>` tunnel, reused while alive.
+async fn open_tunnel(target: &str, port: u16, state: &Hosts) -> Result<String, String> {
     if port == 0 {
         return Err("Порт должен быть от 1 до 65535.".into());
     }
+    let target = target.to_string();
     let mut command = ssh(&target)?;
     let handles = state.0.clone();
     let key = format!("{target}:{port}");
@@ -320,7 +450,8 @@ pub async fn connect_ssh(
             let error: String = stderr.text().chars().take(1600).collect();
             return Err(format!("SSH: {} Проверьте ключ и известный ключ сервера командой ssh {target} в терминале.", error.trim()));
         }
-        if let Ok(response) = client.get(format!("{endpoint}/global/health")).send().await {
+        // Unauthenticated probe: the runtime answers 401 once the forward works.
+        if let Ok(response) = client.get(format!("{endpoint}/v1/health")).send().await {
             if response.status().is_success() || response.status().as_u16() == 401 {
                 return Ok(endpoint);
             }
@@ -334,7 +465,7 @@ pub async fn connect_ssh(
         .lock()
         .map_err(|e| e.to_string())?
         .remove(&format!("{target}:{port}"));
-    Err(format!("SSH подключён, но OpenCode не отвечает на 127.0.0.1:{port} удалённой машины. Запустите там opencode serve --hostname 127.0.0.1 --port {port}, затем повторите."))
+    Err(format!("SSH подключён, но среда выполнения Enki не отвечает на 127.0.0.1:{port} удалённой машины. Повторите подключение."))
 }
 
 #[cfg(test)]
@@ -357,6 +488,26 @@ mod tests {
         ] {
             assert!(!valid_target(bad));
         }
+    }
+    #[test]
+    fn remote_runtime_handshake_is_strictly_validated() {
+        let token = "a".repeat(43);
+        let good = format!("motd line\n{{\"port\":41234,\"token\":\"{token}\",\"instance\":\"i-1\",\"contract\":{}}}", crate::runtime::CONTRACT);
+        let (port, parsed, instance, _) = parse_ensure(&good).unwrap();
+        assert_eq!(
+            (port, parsed.as_str(), instance.as_str()),
+            (41234, token.as_str(), "i-1")
+        );
+        for bad in [
+            String::new(),
+            "{\"port\":0,\"token\":\"x\",\"contract\":1}".to_string(),
+            format!("{{\"port\":1,\"token\":\"{token}\",\"contract\":999}}"),
+            format!("{{\"port\":1,\"token\":\"bad token {token}\",\"contract\":1}}"),
+        ] {
+            assert!(parse_ensure(&bad).is_err(), "{bad}");
+        }
+        // The remote command is a fixed path; no target text reaches the shell.
+        assert!(!REMOTE_RUNTIME.contains(['\'', ';', '`']));
     }
     #[test]
     fn ssh_is_only_ever_launched_from_an_absolute_path() {

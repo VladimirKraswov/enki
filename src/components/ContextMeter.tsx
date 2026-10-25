@@ -6,10 +6,11 @@ export function ContextMeter() {
   const [open, setOpen] = useState(false);
   const s = useAppState(),
     c = store.contextInfo();
-  const isPi = store.engineIdFor() === "pi";
   const n = (x: number | null) =>
     x === null ? "—" : x.toLocaleString("ru-RU");
-  const title = `Контекст: ${n(c.used)} / ${n(c.limit)} токенов. ${isPi ? "Данные Pi обновляются после ответа." : c.auto ? `До автосжатия: ${n(c.remaining)}. Порог: ${n(c.threshold)}.` : "Автосжатие отключено в OpenCode."}`;
+  // The runtime (SDK) decides when to compact; the window only shows the
+  // runtime's setting (kept current by `runtime.settings`), never its own threshold.
+  const title = `Контекст: ${n(c.used)} / ${n(c.limit)} токенов. Данные обновляются после ответа. Автосжатие ${c.auto === false ? "выключено" : "включено"} в настройках агента.`;
   return (
     <div className="context-meter">
       <button ref={ref} className="context-trigger" aria-label={title} title={title}
@@ -55,16 +56,10 @@ export function ContextMeter() {
             {n(c.used)} / {n(c.limit)}
           </b>
         </div>
-        {!isPi && <>
-          <div className="kv">
-            <span>До автосжатия</span>
-            <b>{c.auto ? n(c.remaining) : "Отключено"}</b>
-          </div>
-          <div className="kv">
-            <span>Порог сжатия</span>
-            <b>{n(c.threshold)}</b>
-          </div>
-        </>}
+        <div className="kv">
+          <span>Автосжатие</span>
+          <b>{c.auto === false ? "Выключено" : "Включено"}</b>
+        </div>
         {store.conversation().capabilities.compaction && <button
           className="btn small"
           disabled={!s.activeSessionId || store.isRunning() || c.compacting}

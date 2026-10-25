@@ -6,8 +6,9 @@ import { ScheduleRuntime } from "./schedules/Runtime";
 import { HandoffDialog } from "./components/HandoffDialog";
 import { BrowserPanel, BrowserPresence } from "./components/BrowserPanel";
 import { PiDialog } from "./components/PiDialog";
-import { EngineSwitchDialog } from "./components/EngineSwitchDialog";
 import { HostDialogs } from "./components/HostDialogs";
+import { PluginUiBelowComposer, PluginUiPanel } from "./components/PluginUiPanel";
+import { RUNTIME_CAPABILITIES } from "./agent/runtime/backend";
 import { store, useAppSelector, applyTheme } from "./state/store";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
@@ -24,30 +25,8 @@ import { Palette } from "./components/Palette";
 const SettingsScreen = lazy(() => import("./components/SettingsScreen").then(m => ({default:m.SettingsScreen})));
 import { useEffect, lazy, Suspense } from "react";
 import { hasOverlayWindowControls, isNative, platform } from "./native/platform";
+import { startResize } from "./util/resize";
 
-/** Pointer-drag horizontal splitter: initial width follows movementX, clamped. */
-function startResize(opts: {
-  initial: number;
-  min: number;
-  max: number;
-  direction?: number;
-  apply: (px: number) => void;
-}) {
-  let current = opts.initial;
-  const move = (e: PointerEvent) => {
-    current = Math.min(
-      opts.max,
-      Math.max(opts.min, current + e.movementX * (opts.direction ?? 1)),
-    );
-    opts.apply(current);
-  };
-  const up = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-}
 
 const shellSnapshot = (s: import('./state/types').AppState) => ({
   prefs:s.prefs, ui:s.ui, activeSessionId:s.activeSessionId, directory:s.directory,
@@ -61,8 +40,6 @@ export default function App() {
     // connect() is idempotent, so a StrictMode double-invoke shares one attempt.
     applyTheme(store.state.prefs.theme);
     void store.connect().catch(() => {}).finally(() => store.restorePiRuntime()).catch(() => {});
-    // Detect Pi and hydrate its no-session model catalog for a restored chat.
-    void store.refreshPiInstall();
   }, []);
 
   useEffect(() => {
@@ -113,8 +90,11 @@ export default function App() {
   }, []);
 
   const layout = s.prefs.layout;
-  // Workspace tools are shared by chats; their server is independent of the agent.
-  const capabilities = store.backend.capabilities;
+  // Static runtime capabilities: `store.backend` throws before the first connection.
+  const capabilities = RUNTIME_CAPABILITIES;
+  // Read-only OpenCode archives have no SDK worker and therefore no plugin UI.
+  const pluginChat = s.activeSessionId && s.directory && !store.isLegacySession(s.activeSessionId)
+    ? { sessionId: s.activeSessionId, directory: s.directory } : null;
 
   return (
     <div
@@ -148,13 +128,12 @@ export default function App() {
               {/* Anchored to the chat column so it never covers the browser or review pane. */}
               {s.ui.contextOpen && <ContextPanel />}
               {s.connection.phase === "connected" ||
-              s.connection.phase === "connecting" ||
-              // A Pi chat runs locally: an unreachable OpenCode server must not
-              // replace it with a connection error it has nothing to do with.
-              store.engineReady() ? (
+              s.connection.phase === "connecting" ? (
                 <>
                   <ChatView />
+                  {pluginChat && <PluginUiPanel key={`${pluginChat.directory}\n${pluginChat.sessionId}`} {...pluginChat} />}
                   <Composer />
+                  {pluginChat && <PluginUiBelowComposer />}
                 </>
               ) : (
                 <ConnectionGate />
@@ -195,21 +174,14 @@ export default function App() {
                 aria-label="Resize terminal panel"
                 onPointerDown={(e) => {
                   (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-                  const initial = layout.bottomHeight;
-                  let current = initial;
-                  const move = (ev: PointerEvent) => {
-                    current = Math.min(
-                      600,
-                      Math.max(90, current - ev.movementY),
-                    );
-                    store.setLayout({ bottomHeight: current });
-                  };
-                  const up = () => {
-                    window.removeEventListener("pointermove", move);
-                    window.removeEventListener("pointerup", up);
-                  };
-                  window.addEventListener("pointermove", move);
-                  window.addEventListener("pointerup", up);
+                  startResize({
+                    initial: layout.bottomHeight,
+                    min: 90,
+                    max: 600,
+                    direction: -1,
+                    axis: "y",
+                    apply: (px) => store.setLayout({ bottomHeight: px }),
+                  });
                 }}
               />
               <div
@@ -227,7 +199,6 @@ export default function App() {
       <HostDialogs />
       {capabilities.fork && <HandoffDialog />}
       <PiDialog />
-      <EngineSwitchDialog />
       <DeleteConfirm />
       <Toast />
     </div>

@@ -17,6 +17,29 @@ use std::{
 };
 #[path = "../../native_fingerprint.rs"]
 mod native_fingerprint;
+
+/// Publisher credentials an owner shell may carry (current and legacy names,
+/// as scripts/releases/operator.mjs sets them). The app never needs them: the
+/// GUI removes them from its own environment at startup (lib.rs) and every
+/// build stage removes them again, so no downloaded source's npm/build script,
+/// runtime, tool or MCP child can inherit them.
+pub(crate) const WITHHELD_ENV: [&str; 5] = [
+    "ENKI_HUB_ADMIN_TOKEN",
+    "ARVELA_HUB_ADMIN_TOKEN",
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PATH",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+];
+
+/// A device source build compiles with at most two jobs (an explicit `1` is
+/// kept) so an update cannot saturate the owner's machine. Cargo reads the
+/// variable in every stage, including the Tauri CLI's own `cargo build`.
+fn build_jobs(inherited: Option<&str>) -> &'static str {
+    match inherited.map(str::trim) {
+        Some("1") => "1",
+        _ => "2",
+    }
+}
 pub struct Build {
     state: Mutex<Value>,
     cancel: AtomicBool,
@@ -118,6 +141,9 @@ impl Build {
                 vec!["ci", "--no-audit", "--no-fund"],
                 Duration::from_secs(15 * 60),
             ),
+            // Pinned Node.js + Pi SDK runtime artifact, verified against
+            // runtime-lock.json and the agent package-lock (fails closed).
+            ("runtime", runtime_args(), Duration::from_secs(20 * 60)),
             ("compiling", build_args(), Duration::from_secs(40 * 60)),
         ] {
             self.set(json!({"stage":stage,"version":v.packet.version}));
@@ -127,15 +153,18 @@ impl Build {
                 .current_dir(&directory)
                 .env("PATH", &tools.path)
                 .env("CARGO_TARGET_DIR", directory.join("src-tauri/target"))
+                .env(
+                    "CARGO_BUILD_JOBS",
+                    build_jobs(std::env::var("CARGO_BUILD_JOBS").ok().as_deref()),
+                )
                 .env_remove("TAURI_CONFIG")
-                .env_remove("CARGO_BUILD_TARGET");
-            // Publisher credentials are never forwarded to npm/build scripts.
-            for key in [
-                "ARVELA_HUB_ADMIN_TOKEN",
-                "TAURI_SIGNING_PRIVATE_KEY",
-                "TAURI_SIGNING_PRIVATE_KEY_PATH",
-                "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-            ] {
+                .env_remove("CARGO_BUILD_TARGET")
+                .env_remove("ENKI_BUILD_JOB_RUNNER");
+            // Windows runtime preparation compiles its own native Job runner
+            // from this authenticated packet (scripts/runtime/build-runner.mjs)
+            // before any job; no installed or packet-supplied executable is
+            // passed, so older installed builders drive the same path.
+            for key in WITHHELD_ENV {
                 cmd.env_remove(key);
             }
             self.run(&mut cmd, &log, limit)?;
@@ -155,15 +184,22 @@ impl Build {
             .stdout(out.try_clone().map_err(|e| e.to_string())?)
             .stderr(out);
         crate::process::hide_console(cmd);
-        crate::process::own_process_group(cmd);
-        let mut child = cmd
-            .spawn()
+        // Windows: created suspended and resumed only inside its kill-on-close
+        // Job; Unix: own process group. Never attach after the child is running.
+        let mut tree = crate::process::OwnedTree::spawn(cmd)
             .map_err(|e| format!("Не удалось запустить сборку: {e}"))?;
-        #[cfg(windows)]
-        let _job = crate::process::KillOnCloseJob::attach(&child)?;
         let start = Instant::now();
         loop {
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            // Observed without reaping, so the whole owned tree is settled
+            // (Job / pinned process group) before the primary is released.
+            if tree.primary_exited().map_err(|e| e.to_string())? {
+                let settled = tree.settle(Duration::from_secs(10));
+                let Some(status) = settled.status.filter(|_| settled.complete) else {
+                    return Err(format!(
+                        "Процессы сборки не завершились полностью. Лог: {}",
+                        log.display()
+                    ));
+                };
                 if status.success() {
                     return Ok(());
                 }
@@ -178,7 +214,14 @@ impl Build {
                 || start.elapsed() > limit
                 || fs::metadata(log).is_ok_and(|m| m.len() > 8 * 1024 * 1024)
             {
-                crate::process::terminate_group(&mut child, Duration::from_secs(2));
+                // Bounded: TERM grace, then the whole owned tree is killed.
+                let settled = tree.stop(Duration::from_secs(2), Duration::from_secs(10));
+                if !settled.complete {
+                    return Err(format!(
+                        "Сборку не удалось остановить полностью. Лог: {}",
+                        log.display()
+                    ));
+                }
                 return Err(if cancelled {
                     "Сборка отменена".into()
                 } else {
@@ -240,9 +283,34 @@ fn validate_identity(v: &Verified) -> Result<(), String> {
     }
     Ok(())
 }
+fn runtime_platform() -> &'static str {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    return "darwin-arm64";
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    return "win32-x64";
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return "linux-x64";
+    #[allow(unreachable_code)]
+    "unsupported"
+}
+fn runtime_args() -> Vec<&'static str> {
+    vec![
+        "run",
+        "runtime:prepare",
+        "--",
+        "--platform",
+        runtime_platform(),
+    ]
+}
 fn build_args() -> Vec<&'static str> {
     let mut args = platform_args();
-    args.extend(["--ci", "--", "--locked"]);
+    args.extend([
+        "--config",
+        "src-tauri/tauri.runtime.conf.json",
+        "--ci",
+        "--",
+        "--locked",
+    ]);
     args
 }
 fn platform_args() -> Vec<&'static str> {
@@ -408,5 +476,47 @@ mod tests {
     fn cargo_build_is_locked_and_noninteractive() {
         let args = build_args();
         assert!(args.ends_with(&["--ci", "--", "--locked"]));
+    }
+    #[test]
+    fn device_builds_bundle_the_verified_runtime_artifact() {
+        let args = build_args();
+        let at = args
+            .iter()
+            .position(|a| *a == "src-tauri/tauri.runtime.conf.json")
+            .unwrap();
+        assert_eq!(args[at - 1], "--config");
+        assert_eq!(runtime_args()[..2], ["run", "runtime:prepare"]);
+    }
+    #[test]
+    fn device_builds_are_capped_at_two_jobs() {
+        let inherited = [
+            None,
+            Some(""),
+            Some("0"),
+            Some("2"),
+            Some("16"),
+            Some("-1"),
+            Some("x"),
+        ];
+        for value in inherited {
+            assert_eq!(build_jobs(value), "2", "{value:?}");
+        }
+        assert_eq!(build_jobs(Some("1")), "1", "an explicit lower cap is kept");
+    }
+    #[test]
+    fn current_and_legacy_publisher_credentials_are_withheld() {
+        // Exactly the secret names scripts/releases/operator.mjs exports.
+        let operator = include_str!("../../../scripts/releases/operator.mjs");
+        for key in [
+            "ENKI_HUB_ADMIN_TOKEN",
+            "ARVELA_HUB_ADMIN_TOKEN",
+            "TAURI_SIGNING_PRIVATE_KEY_PATH",
+            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+        ] {
+            let exported = format!("{key}:");
+            assert!(operator.contains(&exported), "{key} is exported");
+            assert!(WITHHELD_ENV.contains(&key), "{key} is withheld");
+        }
+        assert!(WITHHELD_ENV.contains(&"TAURI_SIGNING_PRIVATE_KEY"));
     }
 }

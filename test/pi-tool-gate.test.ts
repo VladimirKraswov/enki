@@ -1,126 +1,84 @@
-// The approval gate for Pi's *built-in* tools.
+// The approval gate for every tool in an SDK-hosted Pi session.
 //
-// This is the control that stops `write`, `edit` and `bash` from running
-// unasked in a Pi chat. It is loaded into every real Pi session by the native
-// layer, so its default behaviour is a security property, not a preference.
+// Enki Runtime installs this gate into every real session, so its default
+// behaviour is a security property, not a preference. The policy now comes from
+// the session's access mode (no process environment), so two sessions in one
+// runtime can have different policies.
 
-import { afterEach, expect, it, vi } from "vitest";
-import gate, { isMutating, needsApproval } from "../src-tauri/resources/pi/tool-gate";
-
-afterEach(() => {
-  delete process.env.OCDESKTOP_PI_TOOL_POLICY;
-});
+import { expect, it, vi } from "vitest";
+import { createToolGate, describe, isMutating, needsApproval, policyVerdict, type Policy, type ToolGateOptions } from "../src-tauri/resources/pi/tool-gate";
 
 type Handler = (
-  event: { toolName: string; input?: unknown },
-  ctx: { ui: { confirm: (title: string, message: string) => Promise<boolean> } },
+  event: { toolName: string; toolCallId: string; input?: unknown },
+  ctx: { cwd: string; signal?: AbortSignal },
 ) => Promise<{ block?: boolean; reason?: string } | undefined>;
 
-function install(): { call: Handler } {
+function install(policy: () => Policy, approve: ToolGateOptions["approve"]): { call: Handler } {
   let handler: Handler | undefined;
-  gate({
-    on: (event: string, fn: Handler) => {
-      if (event === "tool_call") handler = fn;
-    },
+  createToolGate({ decide: (tool, input, _cwd, temporary) => policyVerdict(policy(), tool, input, temporary), approve })({
+    on: (event: string, fn: Handler) => { if (event === "tool_call") handler = fn; },
   } as never);
   if (!handler) throw new Error("gate did not subscribe to tool_call");
   return { call: handler };
 }
-
-const ui = (confirm: (title: string, message: string) => Promise<boolean>) => ({
-  ui: { confirm },
-});
+const ctx = { cwd: "/project" };
 
 it("asks before anything that is not a known read-only tool", () => {
-  for (const tool of ["write", "edit", "bash", "apply_patch", "fetch"])
-    expect(needsApproval(tool)).toBe(true);
-  // Unknown tools fail closed: an allowlist written today cannot know what a
-  // future built-in or an extension will add.
+  for (const tool of ["write", "edit", "bash", "apply_patch", "fetch"]) expect(needsApproval(tool)).toBe(true);
   expect(needsApproval("some_future_tool")).toBe(true);
-  for (const tool of ["read", "glob", "grep", "lsp_diagnostics"])
-    expect(needsApproval(tool)).toBe(false);
+  for (const tool of ["read", "glob", "grep", "find", "ls", "lsp_diagnostics"]) expect(needsApproval(tool)).toBe(false);
   expect(isMutating("bash")).toBe(true);
   expect(isMutating("some_future_tool")).toBe(false);
 });
 
-it("blocks a mutating tool the user declines", async () => {
-  const { call } = install();
-  const confirm = vi.fn().mockResolvedValue(false);
-  const result = await call(
-    { toolName: "write", input: { path: "src/main.rs" } },
-    ui(confirm),
-  );
-  expect(confirm).toHaveBeenCalled();
+it("blocks a mutating tool the user declines and passes an approved one untouched", async () => {
+  const declined = install(() => "ask", vi.fn().mockResolvedValue(false));
+  const result = await declined.call({ toolName: "write", toolCallId: "c1", input: { path: "src/main.rs" } }, ctx);
   expect(result?.block).toBe(true);
   expect(result?.reason).toContain("не разрешил");
-});
-
-it("lets an approved tool through untouched", async () => {
-  const { call } = install();
-  const result = await call(
-    { toolName: "bash", input: { command: "ls" } },
-    ui(vi.fn().mockResolvedValue(true)),
-  );
-  expect(result).toBeUndefined();
+  const approved = install(() => "ask", vi.fn().mockResolvedValue(true));
+  expect(await approved.call({ toolName: "bash", toolCallId: "c2", input: { command: "ls" } }, ctx)).toBeUndefined();
 });
 
 it("never asks about read-only tools", async () => {
-  const { call } = install();
-  const confirm = vi.fn();
-  expect(await call({ toolName: "read", input: { path: "a.ts" } }, ui(confirm))).toBeUndefined();
-  expect(confirm).not.toHaveBeenCalled();
+  const approve = vi.fn();
+  const { call } = install(() => "ask", approve);
+  expect(await call({ toolName: "read", toolCallId: "c", input: { path: "a.ts" } }, ctx)).toBeUndefined();
+  expect(approve).not.toHaveBeenCalled();
 });
 
-it("denies when the dialog cannot be answered at all", async () => {
-  // No window, a closed WebView or a native watchdog timeout all surface here
-  // as a rejection or a false. Silence must never read as approval.
-  const { call } = install();
-  const rejected = await call(
-    { toolName: "edit", input: { path: "x" } },
-    ui(vi.fn().mockRejectedValue(new Error("no ui"))),
-  );
-  expect(rejected?.block).toBe(true);
-
-  const cancelled = await call(
-    { toolName: "edit", input: { path: "x" } },
-    ui(vi.fn().mockResolvedValue(undefined as unknown as boolean)),
-  );
-  expect(cancelled?.block).toBe(true);
+it("denies when the approval path fails or answers anything but true", async () => {
+  expect((await install(() => "ask", vi.fn().mockRejectedValue(new Error("no client"))).call({ toolName: "edit", toolCallId: "c", input: { path: "x" } }, ctx))?.block).toBe(true);
+  expect((await install(() => "ask", vi.fn().mockResolvedValue(undefined as unknown as boolean)).call({ toolName: "edit", toolCallId: "c", input: { path: "x" } }, ctx))?.block).toBe(true);
 });
 
-it("treats a missing policy as ask, and only an explicit value as full access", async () => {
-  const { call } = install();
-  const confirm = vi.fn().mockResolvedValue(false);
-
-  delete process.env.OCDESKTOP_PI_TOOL_POLICY;
-  expect((await call({ toolName: "write", input: {} }, ui(confirm)))?.block).toBe(true);
-
-  process.env.OCDESKTOP_PI_TOOL_POLICY = "";
-  expect((await call({ toolName: "write", input: {} }, ui(confirm)))?.block).toBe(true);
-
-  process.env.OCDESKTOP_PI_TOOL_POLICY = "nonsense";
-  expect((await call({ toolName: "write", input: {} }, ui(confirm)))?.block).toBe(true);
-
-  process.env.OCDESKTOP_PI_TOOL_POLICY = "full";
-  expect(await call({ toolName: "write", input: {} }, ui(confirm))).toBeUndefined();
+it("a decision failure is a denial, not a pass-through", async () => {
+  let handler: Handler | undefined;
+  createToolGate({ decide: () => { throw new Error("corrupt rules"); }, approve: vi.fn() })({ on: (_e: string, fn: Handler) => { handler = fn; } } as never);
+  expect((await handler!({ toolName: "write", toolCallId: "c", input: {} }, ctx))?.block).toBe(true);
 });
 
-it("shows the user what is actually about to happen", async () => {
-  const { call } = install();
-  const confirm = vi.fn().mockResolvedValue(false);
-  await call({ toolName: "bash", input: { command: "rm -rf build" } }, ui(confirm));
-  const [title, message] = confirm.mock.calls[0];
-  expect(title).toContain("изменить файлы или выполнить команду");
-  expect(message).toContain("rm -rf build");
+it("full allows every tool; read blocks mutations without approval dialogs", async () => {
+  let policy: Policy = "full";
+  const approve = vi.fn().mockResolvedValue(true);
+  const { call } = install(() => policy, approve);
+  for (const toolName of ["bash", "edit", "mesh_custom_tool", "desktop_browser_browser_file_upload"])
+    expect(await call({ toolName, toolCallId: "c", input: {} }, ctx)).toBeUndefined();
+  policy = "read";
+  expect((await call({ toolName: "bash", toolCallId: "c", input: {} }, ctx))?.block).toBe(true);
+  expect(await call({ toolName: "read", toolCallId: "c", input: {} }, ctx)).toBeUndefined();
+  expect(approve).not.toHaveBeenCalled();
 });
 
-it("full allows every tool; read blocks mutations without showing approval dialogs", async () => {
-  const { call } = install(), confirm = vi.fn().mockResolvedValue(true);
-  process.env.OCDESKTOP_PI_TOOL_POLICY = "full";
-  for (const toolName of ["bash", "edit", "mesh_custom_tool", "browser_file_upload"])
-    expect(await call({toolName,input:{}},ui(confirm))).toBeUndefined();
-  process.env.OCDESKTOP_PI_TOOL_POLICY = "read";
-  expect((await call({toolName:"bash",input:{}},ui(confirm)))?.block).toBe(true);
-  expect(await call({toolName:"read",input:{}},ui(confirm))).toBeUndefined();
-  expect(confirm).not.toHaveBeenCalled();
+it("shows the user what is actually about to happen and forwards the tool signal", async () => {
+  const approve = vi.fn().mockResolvedValue(false);
+  const { call } = install(() => "ask", approve);
+  const signal = new AbortController().signal;
+  await call({ toolName: "bash", toolCallId: "call-7", input: { command: "rm -rf build" } }, { cwd: "/p", signal });
+  const [request] = approve.mock.calls[0];
+  expect(request.title).toContain("изменить файлы или выполнить команду");
+  expect(request.summary).toContain("rm -rf build");
+  expect(request.toolCallId).toBe("call-7");
+  expect(request.signal).toBe(signal);
+  expect(describe("write", { path: "x".repeat(500) })).toContain("…");
 });

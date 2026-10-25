@@ -1,14 +1,18 @@
 import { expect, it } from "vitest";
 import { browserEnabled, browserNodeProgram } from "../src/browser/preferences";
 
-it("uses one Node.js rule everywhere: browser path, then Pi path, then native discovery", () => {
+// The former Pi CLI bridge's Node.js setting launches nothing any more; when
+// the browser has no own path, native discovery chooses (it prefers the Node.js
+// bundled with the Enki Runtime).
+it("uses one Node.js rule everywhere: the browser's own path, else native discovery", () => {
+  const legacy = (value: object) => value as Parameters<typeof browserNodeProgram>[0];
   expect(browserNodeProgram({})).toBeNull();
-  expect(browserNodeProgram({ pi: { nodeProgram: "/opt/homebrew/bin/node" } })).toBe("/opt/homebrew/bin/node");
-  expect(browserNodeProgram({ browser: { nodeProgram: " /Users/example/Node Runtime/node " }, pi: { nodeProgram: "/opt/homebrew/bin/node" } }))
+  expect(browserNodeProgram(legacy({ pi: { nodeProgram: "/opt/homebrew/bin/node" } }))).toBeNull();
+  expect(browserNodeProgram(legacy({ browser: { nodeProgram: " /Users/example/Node Runtime/node " }, pi: { nodeProgram: "/opt/homebrew/bin/node" } })))
     .toBe("/Users/example/Node Runtime/node");
-  // A blank browser value must not hide the Pi fallback (it previously could).
-  expect(browserNodeProgram({ browser: { nodeProgram: "   " }, pi: { nodeProgram: "/usr/bin/node" } })).toBe("/usr/bin/node");
-  expect(browserNodeProgram({ browser: { nodeProgram: "" }, pi: { nodeProgram: "  " } })).toBeNull();
+  // A blank value is "not set", never an empty program path.
+  expect(browserNodeProgram({ browser: { nodeProgram: "   " } })).toBeNull();
+  expect(browserNodeProgram({ browser: { nodeProgram: "" } })).toBeNull();
 });
 
 it("treats an absent preference as enabled and only an explicit false as disabled", () => {

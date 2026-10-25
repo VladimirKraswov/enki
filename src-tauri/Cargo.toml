@@ -1,7 +1,7 @@
 [package]
 name = "enki"
-version = "0.2.115"
-description = "Desktop client for OpenCode and Pi"
+version = "2.0.0"
+description = "Enki desktop with the bundled Pi SDK agent runtime"
 authors = ["Enki contributors"]
 edition = "2021"
 default-run = "enki"
@@ -32,6 +32,7 @@ serde_json = "1"
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "=2.3.3"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
@@ -42,14 +43,15 @@ base64 = "0.22"
 url = "2"
 fs2 = "0.4"
 sha2 = "0.10"
+unicode-normalization = "=0.1.25"
 semver = "1"
 rusqlite = { version = "0.38", features = ["bundled", "hooks"] }
 tauri-plugin-updater = "2"
 minisign-verify = "0.2.5"
 getrandom = "0.3"
 
-# Unix only, and only for process-*group* signalling: a Pi agent spawns language
-# servers, and killing just the direct child would orphan them.
+# Unix only, and only for process-*group* signalling: the agent runtime spawns
+# language servers and tools, and killing just the direct child would orphan them.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

@@ -1,0 +1,166 @@
+{
+  "status": "PROPOSAL, SOURCE ONLY, NOT RUN. Nothing was deleted. The coordinator audits and applies deletions separately (git rm on the Mac) only after the mapped replacement tests ran green or were accepted as documented REDs.",
+  "format": "deleteNow=true: every independent invariant is mapped to a named test of its actual new owner (or is engine/process-specific and listed under retired). Gaps are listed explicitly; none is hidden as 'covered by runtime'. Test names are exact it()/test() titles.",
+  "root": "frontend tests: test/*.test.ts; runtime tests: src-tauri/resources/agent/test/**",
+  "tests": [
+    {
+      "path": "test/client.test.ts",
+      "deleteNow": true,
+      "retired": ["OpenCodeClient default-endpoint fallback (RuntimeClient refuses instead)", "ws:// PTY URL and PTY CSRF ticket header", "/vcs/diff mandatory mode wire constant of OpenCode 1.18.18", "nested OpenCode error decoding", "/session/:id/message parent request id wire", "x-next-cursor header"],
+      "mapping": [
+        { "invariant": "isAllowedBaseUrl: loopback v4/v6/localhost only; port 0/out-of-range; non-loopback; HTTPS/file/ws/data/javascript; userinfo; path/query/fragment; malformed", "coveredBy": ["test/http.test.ts › isAllowedBaseUrl (7 cases)"] },
+        { "invariant": "bad origins rejected before any fetch, including a refreshed off-loopback connection", "coveredBy": ["test/runtime-client-transport.test.ts › refuses every non-loopback or non-origin endpoint at construction", "› a refreshed connection that points off-loopback is refused and never contacted"] },
+        { "invariant": "ApiError vs ConnectionError; error redaction and bounding; filesystemDenied", "coveredBy": ["test/http.test.ts › ApiError keeps status/detail and flags only real filesystem denials", "test/runtime-client-transport.test.ts › an HTTP error is an ApiError carrying only the runtime's message", "› long error messages are bounded", "› a filesystem denial is flagged…", "› an unreachable runtime is a ConnectionError, never an ApiError"] },
+        { "invariant": "caller abort reason (already aborted, mid-flight, during body read); timeout is a ConnectionError", "coveredBy": ["test/runtime-client-transport.test.ts › an already-aborted caller signal…", "› aborting mid-flight rejects with the caller's reason…", "› a client timeout is a ConnectionError and the request is sent exactly once", "› a read times out at the client default…", "test/transport-reliability.test.ts › classifies %s while reading the response body correctly"] },
+        { "invariant": "malformed JSON is an API fault; JSON-required endpoint answering 204/empty is an ApiError; legitimate 204 resolves", "coveredBy": ["test/runtime-client-transport.test.ts › a malformed 200 body is an API fault…", "› a legitimate empty mutation reply (204) resolves without a body", "› a JSON-required endpoint answering 204 or an empty body is an ApiError (EXPECTED RED: RequestOptions.empty is not enforced in src/agent/runtime/client.ts)"] },
+        { "invariant": "exact directory/ID/cursor scoping; opaque cursor returned verbatim; absent scope omitted; bearer never in URLs", "coveredBy": ["test/runtime-client-transport.test.ts › encodes IDs as one path segment…", "› returns the runtime's opaque history cursor verbatim…", "› omits absent scope…", "› never puts the bearer in a URL, including stream URLs", "test/sidebar.test.ts › paginates recent sessions across projects…", "test/acceptance.test.ts › paginates beyond 200 messages with the runtime's opaque cursor…"] },
+        { "invariant": "no blind replay of ambiguous mutations; 401 refresh repeats the identical request once; commands retried only under the same ledger id", "coveredBy": ["test/runtime-client-transport.test.ts › a network failure after sending a mutation is reported once, never re-sent", "› a server error on a mutation is not retried", "› a 401 refreshes once and repeats the identical request; a second 401 is final", "› a lost command acknowledgement is retried once under the same id…", "src-tauri/resources/agent/test/integration/commands.test.ts › duplicate command ids return the same receipt and run exactly once"] },
+        { "invariant": "health/session normalization on the way out", "coveredBy": ["test/runtime-client-transport.test.ts › health keeps only the identity fields the store uses; sessions keep origin, workshop and model"] },
+        { "invariant": "long compaction not replayed after a client limit", "coveredBy": ["test/store-regressions.test.ts › compaction uses the selected session and model only and never starts a prompt (POST /commands kind compact, durable receipt)", "src-tauri/resources/agent/test/integration/commands.test.ts › a lost ACK during a tool turn cannot repeat the tool"] }
+      ],
+      "gaps": []
+    },
+    {
+      "path": "test/agent-backend.test.ts",
+      "deleteNow": true,
+      "retired": ["OpenCode registry default and escape hatch", "second-engine registration", "OpenCode capability declaration"],
+      "mapping": [
+        { "invariant": "strict known-backend lookup; one default", "coveredBy": ["test/runtime-store-sync.test.ts › keys workspaces stably and never confuses local with remote", "› resolves every folder and chat to the runtime"] },
+        { "invariant": "endpoint rejection", "coveredBy": ["test/runtime-client-transport.test.ts › refuses every non-loopback or non-origin endpoint at construction"] },
+        { "invariant": "declared capabilities gate the paths that use them (projectlessChat, compaction, fork)", "coveredBy": ["test/workspaces.test.ts › the first projectless send creates an isolated runtime workspace and routes the real prompt there", "test/store-regressions.test.ts › compaction uses the selected session and model only and never starts a prompt", "test/message-edit.test.ts › forks before the edited message, preserves access/profile and the original draft, without auto execution"] }
+      ],
+      "gaps": ["No test drives a backend whose capability flag is false (RUNTIME_CAPABILITIES is a constant with every flag true); the 'agent does not accept attachments/fork' messages are unexercised."]
+    },
+    {
+      "path": "test/opencode-live.test.ts",
+      "deleteNow": true,
+      "retired": ["opt-in execution of an installed external OpenCode server"],
+      "mapping": [
+        { "invariant": "reducer busy/completion over a live stream", "coveredBy": ["test/acceptance.test.ts › preserves a completion received before the prompt acknowledgement", "test/store-regressions.test.ts › R4: a reconnect replaces stale busy status…", "src-tauri/resources/agent/test/integration/reconnect.test.ts › work continues while no client is attached and replays from the cursor"] }
+      ],
+      "gaps": []
+    },
+    {
+      "path": "test/local-server.test.ts",
+      "deleteNow": true,
+      "retired": ["OpenCode autostart and health polling"],
+      "mapping": [
+        { "invariant": "a remote failure never starts or uses this computer", "coveredBy": ["test/workspaces.test.ts › a failed remote connection disables sending and never silently executes on this computer"] },
+        { "invariant": "an HTTP API error never triggers another runtime", "coveredBy": ["test/workspaces.test.ts › an HTTP error from the runtime never starts or switches to another runtime"] },
+        { "invariant": "bounded native runtime start", "coveredBy": ["src-tauri/src/runtime.rs #[test] owned_child_drop_is_bounded_and_unconfirmed_cleanup_blocks_idle", "every_stop_request_is_counted_so_a_restart_cannot_override_it", "src-tauri/resources/agent/test/runtime-lifecycle.node.ts › own daemon child exiting before readiness fails promptly…"] }
+      ],
+      "gaps": ["No test asserts that the native supervisor starts the local runtime exactly once for concurrent connect calls (store.connect coalesces its own promise; the native side is not exercised by frontend tests)."]
+    },
+    {
+      "path": "test/full-access-loop.test.ts",
+      "deleteNow": true,
+      "retired": ["window-side permission auto-reply loop (by design: the window is not an approval authority)", "OpenCode root/child full-policy inheritance through session.update"],
+      "mapping": [
+        { "invariant": "full access executes without a permission request; other presets ask/deny", "coveredBy": ["src-tauri/resources/agent/test/integration/access.test.ts › full access runs the built-in write tool without a permission request", "› ask mode: reject blocks the tool, approve once runs it", "› read mode blocks mutations without a dialog and still allows reading", "test/access-inheritance.test.ts › full access runs tools without confirmation, including outside the project", "› ask allows observation…", "› read only denies every mutation…", "› inherit stores no rules…"] },
+        { "invariant": "unknown/revoked/stale-context policy fails closed", "coveredBy": ["src-tauri/resources/agent/test/protocol.test.ts › access decisions: presets, external paths and session grants (some_future_tool → ask)", "src-tauri/resources/agent/test/interaction-hardening.test.ts › once never creates persistent authority; legacy untyped rows cannot authorize arbitrary future tools", "› remembered MCP permission binds all arguments, is scoped to the session, and cannot override a later deny", "src-tauri/resources/agent/test/integration/extension-ui.test.ts › an unanswered dialog is denied at its deadline; silence is never approval", "src-tauri/resources/agent/test/integration/access.test.ts › plugin tools pass the same gate; Stop denies a pending request"] },
+        { "invariant": "an ambiguous reply is never resent", "coveredBy": ["test/runtime-client-transport.test.ts › a network failure after sending a mutation is reported once, never re-sent (replyPermission)", "test/store-regressions.test.ts › an extension dialog stays visible on transport failure, is tied to its exact request and is never auto-answered", "src-tauri/resources/agent/test/interaction-hardening.test.ts › reply event storage failure settles the waiting tool and clears its timer"] },
+        { "invariant": "legacy full representations stay full", "coveredBy": ["test/access-inheritance.test.ts › full representations stored by earlier versions stay full, and the runtime treats them as full"] },
+        { "invariant": "duplicate event/snapshot delivery produces no duplicate action", "coveredBy": ["test/runtime-store-sync.test.ts › shows dialogs in arrival order and removes them only on replied/expired", "› is authoritative for the folder's queues and dialogs only"] }
+      ],
+      "gaps": ["'rechecks a pending request when the user later grants full access': the runtime gate does not re-evaluate an already pending permission when the chat's rules change; the user answers it. Behaviour change, not covered by any test."]
+    },
+    {
+      "path": "test/pi-backend.test.ts",
+      "deleteNow": true,
+      "retired": ["Pi CLI RPC process lifecycle (spawn/reuse/kill), filename-safe CLI session ids, CLI health/missing-binary", "Pi model id form for custom catalog matching"],
+      "mapping": [
+        { "invariant": "bounded failed start never sends a prompt; shutdown never publishes a late worker", "coveredBy": ["src-tauri/resources/agent/test/sdk-worker-ui.node.ts › failed mandatory inline Enki policy never admits a worker or invokes a model", "› registry shutdown while open awaits resources never publishes a late worker"] },
+        { "invariant": "Stop withdraws pending work and keeps queued items", "coveredBy": ["src-tauri/resources/agent/test/runtime-lifecycle.node.ts › dispatcher reserves real worker opening, rejects concurrent turns and Stop prevents eventual dispatch", "src-tauri/resources/agent/test/integration/queue.test.ts › Stop disarms and keeps queued items; resume continues; steering targets the running turn", "src-tauri/resources/agent/test/queue-unit.test.ts › Stop disarms; a withdrawn gated item returns to ready…"] },
+        { "invariant": "a late receipt cannot resurrect a settled run", "coveredBy": ["src-tauri/resources/agent/test/sdk-worker-ui.node.ts › a real SDK run settles once and correlates its receipt with the actual persisted user entry", "› Stop during actual asynchronous model selection fences the prompt before SDK dispatch", "src-tauri/resources/agent/test/scheduler-unit.test.ts › a gated receipt completes only through its own command id"] },
+        { "invariant": "leaving a project / reconnect / UI reload never aborts work; activity stays tracked", "coveredBy": ["src-tauri/resources/agent/test/integration/reconnect.test.ts › work continues while no client is attached and replays from the cursor", "test/activity.test.ts › shows work in progress, then unread completion only after leaving…", "test/store-regressions.test.ts › switching chats cancels only the obsolete history read and never stops agent work", "test/runtime-store-sync.test.ts › is authoritative for the folder's queues and dialogs only"] },
+        { "invariant": "wrong-host / wrong-directory events are ignored", "coveredBy": ["src-tauri/resources/agent/test/integration/isolation.test.ts › isolates events and transcripts by directory and session across two clients", "test/activity.test.ts › a delayed event from the previous host cannot mark the new host unread"] },
+        { "invariant": "a busy prompt is not dropped and Now steers without aborting", "coveredBy": ["test/acceptance.test.ts › does not submit a second prompt to a busy session", "test/queue-access.test.ts › Now steers the running turn through the runtime, never stops it… (double-click part EXPECTED RED)", "src-tauri/resources/agent/test/queue-unit.test.ts › steers a running turn without aborting it…", "src-tauri/resources/agent/test/integration/queue.test.ts › a queued correction is steered into the running turn and marked as steering"] },
+        { "invariant": "draft/attachments retained on failure; rejected prompt is an error", "coveredBy": ["test/store-regressions.test.ts › a refused first command after creating the chat leaves the prompt in that chat's draft", "test/workspaces.test.ts › keeps an attachment and the text draft after a refused send", "test/runtime-client-transport.test.ts › a refused durable command is a definite ApiError (409), never reported as sent"] },
+        { "invariant": "attachments: refuse unsupported, forward images and prepared text", "coveredBy": ["src-tauri/resources/agent/test/integration/attachments.test.ts › sends image and text attachments to a vision model", "› refuses unprepared binary formats before anything is sent"] },
+        { "invariant": "blocking dialogs are visible, never auto-approved, denied when nobody answers; notifications are notices", "coveredBy": ["test/store-regressions.test.ts › two extension dialogs are shown in order, never overwritten or answered together, and expire by id", "src-tauri/resources/agent/test/integration/extension-ui.test.ts › routes dialogs to clients, delivers answers back to the extension and reports TUI-only surfaces", "› an unanswered dialog is denied at its deadline; silence is never approval"] },
+        { "invariant": "durable ids, history paging from the end, history re-read replaced by durable publication", "coveredBy": ["src-tauri/resources/agent/test/sdk-translate.test.ts › streams reasoning, text and tools under a provisional id, then converges on the durable entry id", "› pages from the end with an opaque cursor that names a real message", "src-tauri/resources/agent/test/integration/isolation.test.ts › history uses durable entry ids: live provisional ids are replaced in the stream"] },
+        { "invariant": "capability probe leaves no chat", "coveredBy": ["src-tauri/resources/agent/test/integration/model-check.test.ts › a successful probe answers once and leaves no chat, session file or transcript behind"] },
+        { "invariant": "access policy reaches every session; model switch explicit; compaction on the confirmed model; forks keep identity", "coveredBy": ["src-tauri/resources/agent/test/integration/access.test.ts (all)", "src-tauri/resources/agent/test/turn-policy.test.ts › appends the session's language, tool workflow and timer blocks to every turn…", "test/model-selection.test.ts › a failed selection keeps the previous model and the draft", "src-tauri/resources/agent/test/integration/model-context-hub.test.ts › manual compaction runs on the current model and refuses a different requested model", "test/message-edit.test.ts › forks before the edited message, preserves access/profile and the original draft, without auto execution", "src-tauri/resources/agent/test/sdk-worker-ui.node.ts › read-only history and branching preserve original bytes without repairing its missing newline"] }
+      ],
+      "gaps": ["'does not register a fork cancelled by an extension': no runtime test forks a session whose extension cancels the fork.", "'does not report intentional close or late closed-session events as an agent failure': covered only indirectly (translator ignores unknown events; worker shutdown tests), not as a named runtime test."]
+    },
+    {
+      "path": "test/pi-live.test.ts",
+      "deleteNow": true,
+      "retired": ["opt-in execution of an installed Pi CLI against a paid model (no live model acceptance in this pass)"],
+      "mapping": [
+        { "invariant": "protocol end to end", "coveredBy": ["src-tauri/resources/agent/test/integration/*.test.ts (scripted SDK provider, pinned SDK 0.85.1)"] }
+      ],
+      "gaps": ["Live model acceptance is intentionally out of scope; it is not replaced by any automated test."]
+    },
+    {
+      "path": "test/pi-translate.test.ts",
+      "deleteNow": true,
+      "retired": ["frontend Pi CLI stream translator and its needsHistoryResync flag", "pi_exited process-death notice (no agent process; runtime stop/crash → uncertain receipts)"],
+      "mapping": [
+        { "invariant": "durable transcript mapping: roles, reasoning/text/tool parts, tool result completes its call, finish/cost", "coveredBy": ["src-tauri/resources/agent/test/sdk-translate.test.ts › maps a transcript with entry ids as message ids and tool results completing their call"] },
+        { "invariant": "tool error / provider error / abort are distinct", "coveredBy": ["src-tauri/resources/agent/test/sdk-translate.test.ts › marks a failed tool result as an error, a provider failure and an abort distinctly", "› a tool error keeps the failing output as the error text"] },
+        { "invariant": "unknown entries, events and deltas are ignored; non-text output summarized; details bounded", "coveredBy": ["src-tauri/resources/agent/test/sdk-translate.test.ts › ignores entry kinds it does not model and hidden custom messages", "› summarizes non-text tool output and bounds large details", "› settles to idle, forgets provisional state and ignores unknown events and deltas"] },
+        { "invariant": "streaming through the reducer, retry/final failure status, settled reducer semantics", "coveredBy": ["src-tauri/resources/agent/test/sdk-translate.test.ts › streams reasoning, text and tools under a provisional id, then converges on the durable entry id", "› reports retry as retrying, a final failure as an error and a provider error message once", "test/task-diagnostics.test.ts › links actual runtime translator events to actual durable entries without retaining user content"] },
+        { "invariant": "policy/archive/steering text hidden in live and durable user entries only", "coveredBy": ["test/prompt-language.test.ts › the runtime hides the policy in live and durable user entries only", "› the UI and the runtime hide byte-identical policy blocks", "test/workshop-policy.test.ts › the runtime hides the exact app reminder…", "test/archive-references.test.ts › runtime live echo, durable publication and history restore the same archive reference…", "test/schedule-wakeups.test.ts › the runtime wake marker and the UI guidance are hidden by the runtime history exactly as by the UI"] }
+      ],
+      "gaps": ["'keeps an extension fault out of the conversation transcript': no runtime test asserts that an extension runtime error becomes a notice, not a transcript message.", "Static caution, not a test: sdk/history.ts entriesToMessages reads entry.message.role without a guard; a message entry without a message would throw (whether the SDK can load such an entry was not verified)."]
+    },
+    {
+      "path": "test/pi-probe-id.test.ts",
+      "deleteNow": true,
+      "retired": ["CLI probe process ids"],
+      "mapping": [
+        { "invariant": "concurrent probes never share an identity; probes leave no session/transcript", "coveredBy": ["src-tauri/resources/agent/test/integration/model-check.test.ts › concurrent probes never share a session identity or a transcript", "› a successful probe answers once and leaves no chat, session file or transcript behind"] }
+      ],
+      "gaps": []
+    },
+    {
+      "path": "test/engine-routing.test.ts",
+      "deleteNow": true,
+      "retired": ["two-engine routing, per-folder engine choice, engine pinning, OpenCode↔Pi handoff on engine change, OpenCode-unreachable-while-Pi-runs cases"],
+      "mapping": [
+        { "invariant": "late model check/readiness never commits, also not to another chat", "coveredBy": ["test/model-selection.test.ts › a late readiness answer does not commit the model to the chat the user moved to", "› a newer selection wins over an older one that finishes later"] },
+        { "invariant": "failed selection (health, readiness, unconfigured) keeps the previous model and draft; no silent fallback", "coveredBy": ["test/model-selection.test.ts › a failed selection keeps the previous model and the draft", "test/state-policy.test.ts › projectless policy and disconnected providers cannot select a stale saved model"] },
+        { "invariant": "access evidence recorded/revoked, configured models stay visible", "coveredBy": ["test/model-selection.test.ts › the access check is a runtime probe that records or revokes evidence and creates nothing"] },
+        { "invariant": "former Pi model choices remain separate and resolvable", "coveredBy": ["test/state-policy.test.ts › former Pi chats keep their saved choice; a plain key wins and an unconfigured provider is never chosen"] },
+        { "invariant": "source-model compaction before a smaller target; failed compaction keeps model/history; cancellation never commits a late target", "coveredBy": ["src-tauri/resources/agent/test/integration/model-transition.test.ts › compacts with the larger source model, then switches to the smaller target (baseline RED: fixture under-provisioned, owned by the runtime fixture author)", "› does not commit the target when the summary does not fit", "src-tauri/resources/agent/test/integration/model-context.test.ts › a failed source summary keeps the model and history; the retry runs once without replay", "src-tauri/resources/agent/test/integration/model-context-hub.test.ts › Stop during the source summary cancels; the target is never selected and a retry runs once", "› manual compaction runs on the current model and refuses a different requested model"] },
+        { "invariant": "a racing prompt is blocked while compaction/transition runs, keeping the draft", "coveredBy": ["test/store-regressions.test.ts › a pending compaction blocks a racing manual prompt without clearing its draft"] },
+        { "invariant": "projectless chat and remote workspaces route to their own runtime", "coveredBy": ["test/workspaces.test.ts › the first projectless send creates an isolated runtime workspace…", "› remote workspace creation happens on the selected SSH runtime, never on this computer"] }
+      ],
+      "gaps": ["'retains the previous catalog when a rescan fails' (store.refreshModelCatalog) is not tested.", "'does not compact fitting history' and 'does not start a transfer while the authoritative engine is busy' (store.transferContext guards) are not tested at the store level.", "Continuing an imported OpenCode chat with visible provenance (store.continueLegacySession) has no frontend test; runtime continuation is covered by legacy-qualified/continuation*.node.ts."]
+    },
+    {
+      "path": "test/global-policy.test.ts",
+      "deleteNow": true,
+      "retired": ["OpenCode JSONC global cache invalidation and v2 drain inventory"],
+      "mapping": [
+        { "invariant": "foreign config and comments preserved by remaining config editors", "coveredBy": ["test/configEditor.test.ts (unchanged, passing in the qualified baseline)"] },
+        { "invariant": "maintenance/admission refuses mutation while work is active; busy/unknown/dedup fences", "coveredBy": ["src-tauri/resources/agent/test/runtime-lifecycle.node.ts › retained bearer cannot mutate during maintenance; reads and scoped client identities remain usable", "› an accepted incomplete HTTP body blocks maintenance before its handler starts", "src-tauri/resources/agent/test/sdk-worker-ui.node.ts › maintenance fences mutation synchronously while retaining authenticated snapshots and SSE", "src-tauri/resources/agent/test/mcp-hardening.test.ts › maintenance admission fences new calls and acquisitions while retaining idle leases", "src-tauri/resources/agent/test/pty-activity.test.ts › the admission fence refuses new shells, including one still loading the module", "src-tauri/resources/agent/test/control-maintenance-status.test.ts (3)"] }
+      ],
+      "gaps": []
+    },
+    {
+      "path": "test/config-reload.test.ts",
+      "deleteNow": true,
+      "retired": ["OpenCode global.disposed reload wire"],
+      "mapping": [
+        { "invariant": "wait for real completion, not an HTTP ACK", "coveredBy": ["src-tauri/resources/agent/test/integration/commands.test.ts › duplicate command ids return the same receipt and run exactly once (durable receipts)", "test/handoff.test.ts › prepares from a full fork with tools denied, then archives only that fork (polls the receipt)"] },
+        { "invariant": "changed-connection fencing; no retry of uncertain mutations", "coveredBy": ["test/pi-settings.test.ts › adds an extension only through the runtime settings and only on an explicit action", "test/runtime-client-transport.test.ts › a server error on a mutation is not retried", "test/schedules.test.ts › a late list from the previous runtime cannot overwrite the current one"] },
+        { "invariant": "stream cleanup", "coveredBy": ["test/transport-reliability.test.ts › cancels and releases an idle stream reader on subscription disposal"] }
+      ],
+      "gaps": ["The runtime announces settings changes as runtime.settings; the store does not react to it (the old global.disposed invalidation path in store.startGlobalStream has no producer). Not covered by any test."]
+    },
+    {
+      "path": "test/schedule-preflight.test.ts",
+      "deleteNow": true,
+      "retired": ["window-owned timer preflight authority", "'an empty catalog means safe' inference (not carried over)"],
+      "mapping": [
+        { "invariant": "waits for the user (permission/question/dialog), busy turn, queued work, maintenance", "coveredBy": ["src-tauri/resources/agent/test/scheduler-unit.test.ts › waits while the chat is busy or has a pending question, without a backlog, then sends once", "› a closed admission (maintenance) dispatches nothing", "src-tauri/resources/agent/test/integration/schedules.test.ts › waits while the chat is busy and pauses for a deleted chat", "production host: core/runtime.ts scheduler.bind blocker (dispatcher.inFlight, interactions.hasPending, queue.hasWork, admission)"] },
+        { "invariant": "invalid target (deleted/archived/moved chat, unknown model) pauses with its reason; never sent", "coveredBy": ["src-tauri/resources/agent/test/scheduler-unit.test.ts › an invalid target (deleted/archived chat, unknown model) pauses with its reason and is never sent"] },
+        { "invariant": "the scheduled prompt uses its saved model; a transition is source-first", "coveredBy": ["src-tauri/resources/agent/test/scheduler-unit.test.ts › sends a due wake-up once with a stable command id and the hidden wake marker…", "src-tauri/resources/agent/test/integration/model-context.test.ts › a queued prompt and a timer wake use the same source-first transition (baseline RED: reused fixture ids)"] }
+      ],
+      "gaps": ["Runtime.scheduleProblem (removed model, disconnected provider, dropped variant) is only exercised through an owned host stub; no test drives the real implementation with a vanished model or variant."]
+    }
+  ]
+}

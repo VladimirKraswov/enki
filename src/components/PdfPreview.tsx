@@ -3,7 +3,8 @@ import type {PDFDocumentProxy,PDFDocumentLoadingTask,RenderTask} from 'pdfjs-dis
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 export function PdfPreview({blob}:{blob:Blob}){
  const canvas=useRef<HTMLCanvasElement>(null);const [pdf,setPdf]=useState<PDFDocumentProxy|null>(null),[page,setPage]=useState(1),[error,setError]=useState(''),[busy,setBusy]=useState(true);
- useEffect(()=>{let alive=true,task:PDFDocumentLoadingTask|undefined;void(async()=>{const bytes=new Uint8Array(await blob.arrayBuffer());if(!alive)return;if(new TextDecoder().decode(bytes.slice(0,1024)).indexOf('%PDF-')<0)throw Error('Invalid PDF');const lib=await import('pdfjs-dist');if(!alive)return;lib.GlobalWorkerOptions.workerSrc=workerUrl;task=lib.getDocument({data:bytes,useSystemFonts:true});const doc=await task.promise;if(alive)setPdf(doc);})().catch(()=>{if(alive){setError('Не удалось открыть PDF.');setBusy(false);}});
+ // A new document never renders through the previous (destroyed) proxy or its page number.
+ useEffect(()=>{let alive=true,task:PDFDocumentLoadingTask|undefined;setPdf(null);setPage(1);setError('');setBusy(true);void(async()=>{const bytes=new Uint8Array(await blob.arrayBuffer());if(!alive)return;if(new TextDecoder().decode(bytes.slice(0,1024)).indexOf('%PDF-')<0)throw Error('Invalid PDF');const lib=await import('pdfjs-dist');if(!alive)return;lib.GlobalWorkerOptions.workerSrc=workerUrl;task=lib.getDocument({data:bytes,useSystemFonts:true});const doc=await task.promise;if(alive)setPdf(doc);})().catch(()=>{if(alive){setError('Не удалось открыть PDF.');setBusy(false);}});
  // The asynchronous loader and worker are owned by this preview only.
  // Catch at the task boundary without publishing document contents.
  return()=>{alive=false;void task?.destroy();};},[blob]);

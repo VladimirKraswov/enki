@@ -146,7 +146,7 @@ pub async fn workshop_prepare(
         let local = fs::canonicalize(crate::paths::user_home()?).map_err(|e| e.to_string())?;
         if fs::canonicalize(&server_home).ok().as_ref() != Some(&local) {
             return Err(
-                "OpenCode использует другую файловую систему. Выберите локальный сервер.".into(),
+                "Среда выполнения работает на другой машине. Мастерская доступна только на этом компьютере.".into(),
             );
         }
         prepare(

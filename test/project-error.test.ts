@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ApiError } from "../src/api/client";
+import { ApiError } from "../src/api/http";
 import { projectErrorText } from "../src/api/projectError";
 it("distinguishes confirmed filesystem denial from an opaque server error", () => {
   expect(projectErrorText(new ApiError(500, "EPERM: lstat /private/secret"))).toContain("отказ доступа");

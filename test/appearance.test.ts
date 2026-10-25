@@ -40,19 +40,20 @@ it("keeps the CPU helper address global when switching OpenCode servers", () => 
   const back = switchEndpointPrefs(remote, DEFAULT_PREFS.endpoint);
   expect(back.helperEndpoint).toBe("http://127.0.0.1:18109");
 });
-it("keeps local engine paths when switching to and from a remote workspace", () => {
+// The local OpenCode program path no longer exists; this computer's agent and
+// browser settings and the legacy Pi import metadata stay computer-wide.
+it("keeps local agent, browser and legacy Pi settings when switching to and from a remote workspace", () => {
   const current = {
     ...DEFAULT_PREFS,
-    localOpenCodeProgram: "/opt/homebrew/bin/opencode",
+    agent: { lspServerPaths: ["/opt/homebrew/bin/rust-analyzer"] },
+    browser: { nodeProgram: "/opt/homebrew/bin/node", mode: "human" as const },
     pi: { program: "/opt/homebrew/bin/pi", nodeProgram: "/opt/homebrew/bin/node" },
-    endpointState: { remote: { localOpenCodeProgram: "/stale/opencode", pi: { program: "/stale/pi" } } },
+    endpointState: { remote: { agent: { lspServerPaths: ["/stale"] }, browser: { enabled: false }, pi: { program: "/stale/pi" } } },
   };
   const remote = switchEndpointPrefs(current, "http://127.0.0.1:5000", "remote");
-  expect(remote.localOpenCodeProgram).toBe(current.localOpenCodeProgram);
-  expect(remote.pi).toEqual(current.pi);
+  for (const key of ["agent", "browser", "pi"] as const) expect(remote[key]).toEqual(current[key]);
   const back = switchEndpointPrefs(remote, DEFAULT_PREFS.endpoint);
-  expect(back.localOpenCodeProgram).toBe(current.localOpenCodeProgram);
-  expect(back.pi).toEqual(current.pi);
+  for (const key of ["agent", "browser", "pi"] as const) expect(back[key]).toEqual(current[key]);
 });
 it("keeps model service bindings global across OpenCode workspace switches", () => {
   const modelServices = [{ id: "gpu", providerID: "local", endpoint: "http://127.0.0.1:18008", bindings: { qwen: "qwen-v100" } }];

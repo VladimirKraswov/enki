@@ -46,10 +46,20 @@ export function releaseWithOperator(channel,run,credentials,mode='operator') {
   const tests=workers?['test','--','--maxWorkers='+workers]:['test'];
   run('git',['diff','--exit-code']);
   for(const args of [tests,['run','build'],['run','check:architecture'],['run','check:bundle'],['run','test:releases']])run('npm',args);
+  // Bundled Pi runtime: every 2.0 source update ships it, so UI-only releases
+  // gate it too. Exact SDK/Node pins, reviewed-lock install, real SDK/legacy
+  // suites, artifact/installer/first-update entry/bootstrap tests.
+  const agent='src-tauri/resources/agent';
+  for(const args of [['run','sdk:check'],['ci','--prefix',agent,'--ignore-scripts'],['rebuild','--prefix',agent,'node-pty'],
+    ['--prefix',agent,'run','typecheck'],['run','test:runtime'],['run','test:runtime-artifact']])run('npm',args);
   run(process.platform==='win32'?'py':'python3', [...(process.platform==='win32'?['-3']:[]),'-m','unittest','discover','-s','services/hub/tests']);
   run(process.platform==='win32'?'py':'python3', [...(process.platform==='win32'?['-3']:[]),'-m','unittest','discover','-s','services/asr/tests']);
-  for(const args of [['fmt','--check'],['test'],['clippy','--all-targets','--','-D','warnings']])
-    run('cargo',[...args.slice(0,1),'--manifest-path','src-tauri/Cargo.toml',...args.slice(1)]);
+  // App crate and standalone bootstrap runner (same process.rs/build_job.rs
+  // compiled by first-update preparation), both locked exactly like CI: a gate
+  // must never re-resolve Cargo.lock into something other than the reviewed lock.
+  for(const manifest of ['src-tauri/Cargo.toml','src-tauri/build-runner/Cargo.toml'])
+    for(const args of [['fmt','--check'],['test','--locked'],['clippy','--locked','--all-targets','--','-D','warnings']])
+      run('cargo',[args[0],'--manifest-path',manifest,...args.slice(1)]);
   // Only the publisher receives credentials, and only after all gates passed.
   if(mode==='device')run('node',['scripts/releases/device.mjs',channel]);
   else run('node',['scripts/releases/publish.mjs',channel],credentials());

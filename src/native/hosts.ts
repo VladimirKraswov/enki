@@ -1,14 +1,19 @@
+// Saved SSH hosts. The bundled Enki Runtime installed on the host is reached by
+// the native side only (`connect_remote_runtime`: strict known-host SSH, runtime
+// `ensure`, forwarded loopback port); see src/agent/runtime/connection.ts.
 export interface RemoteHost {
   id: string;
   name: string;
   target: string;
+  /**
+   * Identity only. Part of the saved workspace key (`ssh:<target>:<port>`) that
+   * scopes drafts, queues, timers and history of this host; the runtime chooses
+   * its own loopback port on the host, so this value is never dialled.
+   */
   port: number;
 }
-export interface ChatWorkspace {
-  directory: string;
-  root: string;
-}
-export const LOCAL_HOST = "local";
+/** Identity port of hosts added since the external engine was retired (old default). */
+export const DEFAULT_REMOTE_IDENTITY_PORT = 4096;
 export function remoteKey(host: RemoteHost): string {
   return `ssh:${host.target}:${host.port}`;
 }
@@ -26,45 +31,4 @@ export async function sshAliases(): Promise<string[]> {
   if (!("__TAURI_INTERNALS__" in window)) return [];
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke("ssh_aliases");
-}
-export async function connectSsh(host: RemoteHost): Promise<string> {
-  if (!validRemote(host))
-    throw new Error(
-      "Укажите SSH-алиас или user@host и корректный порт OpenCode.",
-    );
-  if (!("__TAURI_INTERNALS__" in window))
-    throw new Error(
-      "SSH-подключения доступны в установленном Enki.",
-    );
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke("connect_ssh", { target: host.target, port: host.port });
-}
-export async function prepareChat(
-  host: RemoteHost | undefined,
-  serverHome: string,
-): Promise<ChatWorkspace> {
-  if (!("__TAURI_INTERNALS__" in window))
-    throw new Error(
-      "Для создания отдельной рабочей папки чата откройте установленный Enki.",
-    );
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke("prepare_chat_workspace", {
-    id: crypto.randomUUID(),
-    sshTarget: host?.target ?? null,
-    serverHome,
-  });
-}
-// OpenCode HTTP passwords stay only in memory, never in preferences or URLs.
-const credentials = new Map<string, string>();
-export function setHostPassword(key: string, password: string) {
-  if (!password) {
-    credentials.delete(key);
-    return;
-  }
-  const bytes = new TextEncoder().encode(`opencode:${password}`);
-  credentials.set(key, `Basic ${btoa(String.fromCharCode(...bytes))}`);
-}
-export function hostHeaders(key: string): Record<string, string> {
-  const auth = credentials.get(key);
-  return auth ? { Authorization: auth } : {};
 }

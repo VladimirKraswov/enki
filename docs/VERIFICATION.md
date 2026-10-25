@@ -1,3 +1,40 @@
+# Enki 2.0 — maintained verification gates (sole bundled Pi SDK runtime)
+
+This section is maintained; every section below it is the historical evidence
+log of 0.2.x releases (OpenCode/Pi external-engine era) and is kept as history.
+
+Canonical order is `scripts/releases/operator.mjs` (tested by
+`scripts/releases/operator.test.mjs`); every gate runs before any publisher
+credential is read. CI (`.github/workflows/desktop.yml`) runs the same suites on
+Linux, macOS and Windows. `CARGO_BUILD_JOBS` is 2.
+
+| Gate | Command | Covers |
+|---|---|---|
+| Clean tree | `git diff --exit-code` | reviewed source only |
+| UI | `npm test`, `npm run build`, `npm run check:architecture`, `npm run check:bundle` | frontend, module boundaries, bundle budget |
+| Release transport | `npm run test:releases` | gate order, signatures, device publish/lost ACK |
+| SDK contract | `npm run sdk:check` | every SDK/Node/data-schema pin agrees with `scripts/runtime/sdk-contract.mjs` |
+| Runtime deps | `npm ci --prefix src-tauri/resources/agent --ignore-scripts`, `npm rebuild … node-pty`, `npm --prefix … run typecheck` | reviewed lock, native PTY ABI, strict types |
+| Runtime | `npm run test:runtime` | Vitest + every guarded real-SDK/legacy `*.node.ts` suite |
+| Packaging | `npm run test:runtime-artifact` | artifact/manifest, preparation, remote installer + paired rollback, first 0.2→2.0 `npm run tauri` entry, host-Node guard, bootstrap runner |
+| Services | `python3 -m unittest discover -s services/hub/tests`, `… services/asr/tests` | Hub releases/catalog/model services (durable publication on POSIX and Windows), ASR |
+| Native app | `cargo fmt --check`, `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings` (`src-tauri/Cargo.toml`) | supervisor, config/vault authority, updates/builder, browser, profiles |
+| Bootstrap runner | same three on `src-tauri/build-runner/Cargo.toml` | Windows Job / NTFS directory flush runner used by first-update preparation |
+
+CI additionally runs `npm run eval:check` (fixture self-check + evaluation
+adapter contract), `test:faults`, strata/v100 service tests, the live native
+runner protocol checks, the Windows build through the exact old 0.2 builder
+command (`npm run tauri -- build --bundles nsis --ci -- --locked`) with
+verification that the bundled runtime equals the prepared artifact, and the
+platform package checks.
+
+Not covered by these gates (separate acceptance required and reported
+separately): live models/GPU, an installed ordinary-user Mac/Windows/Linux
+upgrade 0.2.x→2.0 with history resume, the remote Linux host procedure
+(`docs/REMOTE-RUNTIME.md`), Windows Job/NTFS behaviour on real hardware beyond
+CI, and macOS PTY descendants that escape their process group (reported as
+cleanup-unknown by design).
+
 # Paired-device release and Windows browser review (0.2.104)
 
 Imported six source/test files from the supplied Windows0.2.103 browser package.

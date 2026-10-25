@@ -41,6 +41,45 @@ class ReleaseTests(unittest.TestCase):
         self.h.releases.collect()
         for a in bridge['artifacts'].values():self.assertIsNotNone(self.call('GET','/artifacts/'+a['digest']))
         with self.assertRaises(m.Fault):self.call('GET','/enki/unknown')
+    def test_failure_after_the_head_rename_is_reported_uncertain_and_reconcilable(self):
+        first=self.publish()
+        durable=type(self.h.releases).atomic.__globals__['durable']
+        real=self.h.releases.atomic
+        def flush_denied(_directory):raise PermissionError('directory flush denied')
+        def atomic(path,value):
+            if path.name!='stable.json':return real(path,value)
+            raw=json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()
+            return durable.publish(path,raw,replace=lambda s,t:durable.posix_replace(s,t,sync=flush_denied))
+        self.h.releases.atomic=atomic
+        with self.assertRaises(m.Fault) as e:self.publish('1.0.1',first['revision'])
+        self.assertEqual(e.exception.status,503)
+        self.assertIn('возможно, уже опубликована',e.exception.message)
+        self.assertNotIn('сохранён',e.exception.message)
+        # Reconciliation reads what is served: the new head with BOTH envelopes intact.
+        self.h.releases.atomic=real
+        served=self.call('GET','/stable')
+        self.assertEqual(served['version'],'1.0.1')
+        for artifact in served['artifacts'].values():
+            envelope=self.call('GET','/artifacts/'+artifact['digest'])
+            self.assertEqual(hashlib.sha256(base64.b64decode(envelope['payload'])).hexdigest(),artifact['digest'])
+        # The previous immutable envelopes are untouched.
+        for artifact in first['artifacts'].values():
+            self.assertIsNotNone(self.call('GET','/artifacts/'+artifact['digest']))
+    def test_uncertain_artifact_write_keeps_the_head_and_is_safely_repeatable(self):
+        first=self.publish()
+        durable=type(self.h.releases).atomic.__globals__['durable']
+        real=self.h.releases.atomic
+        def flush_denied(_directory):raise PermissionError('directory flush denied')
+        def atomic(path,value):
+            if path.name in ('stable.json','legacy-stable.json'):return real(path,value)
+            raw=json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()
+            return durable.publish(path,raw,replace=lambda s,t:durable.posix_replace(s,t,sync=flush_denied))
+        self.h.releases.atomic=atomic
+        with self.assertRaises(m.Fault) as e:self.publish('1.0.1',first['revision'])
+        self.assertEqual(e.exception.status,503)
+        self.assertEqual(self.call('GET','/stable'),first)
+        self.h.releases.atomic=real
+        self.assertEqual(self.publish('1.0.1',first['revision'])['version'],'1.0.1')
     def test_cas_monotonic_version_and_incomplete_pair_preserve_head(self):
         head=self.publish()
         for body in [dict(channel='stable',expectedRevision=None,hot=package('hot','2.0.0'),source=package('source','2.0.0')),dict(channel='stable',expectedRevision=head['revision'],hot=package('hot','1.0.1'),source=package('source','1.0.2'))]:

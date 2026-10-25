@@ -1,0 +1,108 @@
+{
+  "fixtureVersion": 1,
+  "syntheticOnly": true,
+  "executed": false,
+  "schemaSource": {
+    "openCodeVersion": "1.18.18",
+    "openCodeCommit": "31406ccc51b4bd2a4e1e086b2bcaa5f7f804f26d",
+    "piSdkVersion": "0.85.1"
+  },
+  "universalAssertions": {
+    "ownerDataNeverRequired": true,
+    "originalSourceMustRemainUnchanged": true,
+    "zeroModelRequests": true,
+    "zeroToolExecutions": true,
+    "zeroNetworkAttachmentFetches": true,
+    "zeroProjectCommandExecutions": true,
+    "zeroAutomaticPendingInputResumes": true,
+    "stableMappingAcrossRepeatedImportAndRestart": true,
+    "sameOriginSameIdSamePayloadDoesNotDuplicate": true,
+    "differentOriginSameIdDoesNotMerge": true,
+    "newTargetMessagesNeverOverwrittenByReimport": true,
+    "targetIdsAreNotPrescribedButMappingMustBeComplete": true,
+    "lexicographicIdsAreNotChronologicalOrder": true
+  },
+  "v1.sql": {
+    "sourceRowCounts": {"project": 2, "session": 3, "message": 9, "part": 17, "todo": 1},
+    "topLevelJsonFieldsAbsent": {
+      "message.data": ["id", "sessionID"],
+      "part.data": ["id", "messageID", "sessionID"]
+    },
+    "sourceSessionIds": ["ses_fixture_main", "ses_fixture_branch", "ses_fixture_windows"],
+    "messageOrderBySession": {
+      "ses_fixture_main": ["msg_fixture_010", "msg_fixture_020", "msg_fixture_030", "msg_fixture_040", "msg_fixture_050", "msg_fixture_060"],
+      "ses_fixture_branch": ["msg_fixture_070", "msg_fixture_080"],
+      "ses_fixture_windows": ["msg_fixture_090"]
+    },
+    "sameTimestampRequiresStableTieBreak": ["msg_fixture_010", "msg_fixture_020"],
+    "branch": {"sessionId": "ses_fixture_branch", "parentSessionId": "ses_fixture_main", "archivedAt": 1767225609000, "metadataBranchPoint": "msg_fixture_010"},
+    "revert": {"sessionId": "ses_fixture_main", "messageID": "msg_fixture_060", "partID": "prt_fixture_060_pending", "mustPreserveWithoutExecuting": true},
+    "summary": {"messageId": "msg_fixture_040", "summaryFlag": true, "textMarker": "SUMMARY_MARKER", "compactionPartId": "prt_fixture_030_compaction", "tailStartId": "msg_fixture_010", "tailMarker": "KEPT_TAIL_MARKER"},
+    "tools": [
+      {"sourcePartId": "prt_fixture_020_completed", "callID": "call_fixture_completed", "name": "fixture_read", "status": "completed", "input": {"path": "/enki-fixtures/local/fixture-only.txt"}, "output": "fixture-only\n", "nestedAttachmentId": "prt_fixture_tool_attachment", "nestedAttachmentCount": 1, "mustMapCallAndResult": true},
+      {"sourcePartId": "prt_fixture_020_error", "callID": "call_fixture_error", "name": "fixture_fail", "status": "error", "error": "SYNTHETIC_TOOL_FAILURE", "resultIsError": true},
+      {"sourcePartId": "prt_fixture_060_pending", "callID": "call_fixture_pending", "name": "fixture_write", "status": "pending", "mustNeverExecute": true, "mustNotInventCompletedResult": true}
+    ],
+    "attachments": {
+      "topLevelFilePartCount": 2,
+      "toolNestedFilePartCount": 1,
+      "inlineDataUri": "data:text/plain;base64,Zml4dHVyZS1vbmx5Cg==",
+      "decodedText": "fixture-only\n",
+      "foreignUri": "file:///C:/Synthetic/Enki/foreign-only.txt",
+      "foreignUriMustRemainOpaqueWithoutExplicitHostMapping": true
+    },
+    "foreignPath": {"originHost": "fixture-windows", "directory": "C:/Synthetic/Enki/demo", "mustNotBecomeMacLocalCwd": true},
+    "preserveMarkers": ["Ёж", "日本語", "🦔", "IGNORED_SYNTHETIC_MARKER", "BRANCH_ONLY_MARKER", "BRANCH_REPLY_MARKER", "FOREIGN_PATH_MARKER"],
+    "ignoredPart": {"id": "prt_fixture_010_ignored", "synthetic": true, "ignored": true, "mustNotBecomeVisibleHumanPromptOrRuntimeInstruction": true},
+    "usage": {"assistantMsg020Cost": 0.125, "stepFinishRepeatsSameCost": 0.125, "mustNotDoubleCountStepAndMessage": true, "summaryInput100IsNotResultingContextLength": true},
+    "neverExecuteMarkers": ["NEVER_RUN_PROJECT_COMMAND", "NEVER_REPLAY_PENDING_TOOL", "SYNTHETIC_TODO_DO_NOT_EXECUTE"]
+  },
+  "v2.sql": {
+    "sourceRowCounts": {"project": 1, "session": 1, "message": 1, "part": 1, "session_message": 6, "session_input": 2, "session_context_epoch": 1},
+    "sessionId": "ses_fixture_v2",
+    "projectionTopLevelJsonFieldsAbsent": ["id", "type"],
+    "v2ProjectionOrder": ["msg_fixture_v2_900", "msg_fixture_v2_800", "msg_fixture_v2_700", "msg_fixture_v2_600", "msg_fixture_v2_500", "msg_fixture_v2_100"],
+    "v2Sequence": [10, 11, 20, 21, 22, 23],
+    "v2Types": ["user", "assistant", "compaction", "user", "shell", "assistant"],
+    "latestProjectionId": "msg_fixture_v2_100",
+    "latestHumanProjectionId": "msg_fixture_v2_600",
+    "v1Shadow": {"messageId": "msg_fixture_v2_shadow", "marker": "V1_SHADOW_DO_NOT_MERGE", "rawMustPreserve": true, "mustNotMergeIntoV2Projection": true},
+    "promotedInput": {"id": "msg_fixture_v2_900", "admittedSeq": 9, "promotedSeq": 10, "mustNotDuplicateExistingProjectionMessage": true},
+    "pendingInput": {"id": "msg_fixture_v2_pending", "admittedSeq": 24, "promotedSeq": null, "delivery": "queue", "marker": "NEVER_REPLAY_PENDING_INPUT", "mustNeverAutoExecute": true, "mustNotCountAsCompletedTranscript": true, "mustRemainVisibleAsPreservedPendingOrExplicitDiagnostic": true},
+    "shell": {"callID": "call_v2_shell_fixture", "command": "NEVER_REPLAY_SHELL_FIXTURE", "output": "SYNTHETIC_RECORDED_SHELL_OUTPUT", "mustPreserveWithoutExecution": true},
+    "contextEpoch": {"baselineSeq": 9, "snapshotKey": "fixture/context", "preserveRaw": true, "mustNotAutomaticallyTrustLegacyBaselineAsNewRuntimeSystemPrompt": true},
+    "summaryMarkers": ["V2_SUMMARY_MARKER", "V2_RECENT_MARKER", "V2_KEPT_TAIL_MARKER"],
+    "unsupportedV2Policy": "Fail closed with an explicit preserved read-only archive and exact unsupported schema diagnostic; never silently import the one V1 shadow row as the whole conversation."
+  },
+  "oldPi.jsonl": {
+    "sourceVersion": 2,
+    "sourceSessionId": "fixture.pi.old",
+    "sourceLineCount": 11,
+    "entryCountExcludingHeader": 10,
+    "messageEntryCount": 6,
+    "entryIdsInFileOrder": ["f0000000", "ffffffff", "eeeeeeee", "dddddddd", "cccccccc", "bbbbbbbb", "aaaaaaab", "aaaaaaaa", "0000000f", "0000000e"],
+    "messageIdsInFileOrder": ["ffffffff", "eeeeeeee", "dddddddd", "cccccccc", "bbbbbbbb", "aaaaaaaa"],
+    "selectedLeaf": "0000000e",
+    "activePathIds": ["f0000000", "ffffffff", "aaaaaaaa", "0000000f", "0000000e"],
+    "activeContextUserMarkers": ["PI_ROOT_USER_MARKER", "PI_ACTIVE_BRANCH_MARKER"],
+    "otherBranchMustRemainInArchiveOrFullTree": ["eeeeeeee", "dddddddd", "cccccccc", "bbbbbbbb", "aaaaaaab"],
+    "toolPair": {"assistantEntryId": "eeeeeeee", "resultEntryId": "dddddddd", "callID": "call_pi_fixture", "mustNotReplay": true},
+    "v2HookMessage": {"entryId": "bbbbbbbb", "sourceRole": "hookMessage", "targetSdkRole": "custom", "customType": "fixture-note", "mustPreserveContentAndDetails": true},
+    "compaction": {"entryId": "aaaaaaab", "firstKeptEntryId": "dddddddd", "tokensBefore": 42, "onInactiveBranch": true},
+    "label": {"entryId": "0000000f", "targetId": "aaaaaaaa", "text": "Синтетическая ветка"},
+    "name": "Pi v2 synthetic migration",
+    "sdkMayOpenOnlyTargetCopy": true,
+    "sourceMustRemainVersion2AndByteExact": true,
+    "dotInSessionIdMustBeMappedSafely": true
+  },
+  "corruptPi.jsonl": {
+    "sourceVersion": 3,
+    "sourceSessionId": "fixture.pi.corrupt",
+    "sourceLineCount": 4,
+    "malformedJsonLinesOneBased": [3],
+    "validMessageMarkersBeforeAfterError": ["KEEP_BEFORE_CORRUPTION", "KEEP_AFTER_CORRUPTION"],
+    "mustNotSilentlySkipLineAndClaimComplete": true,
+    "mustKeepSourceUnchanged": true,
+    "acceptablePolicy": "Reject conversion atomically or quarantine incomplete import with explicit line-3 diagnostic and preserved raw archive; no complete-success manifest or automatic execution."
+  }
+}

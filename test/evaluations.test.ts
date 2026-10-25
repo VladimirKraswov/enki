@@ -132,13 +132,25 @@ describe('reproducible evaluation fixtures', () => {
     expect(flood.stopped).toBe('output-limit');
   });
   it('child environments exclude owner credentials, provider variables and configuration', () => {
-    const previous = process.env.DEEPSEEK_API_KEY;
+    const keys = ['DEEPSEEK_API_KEY', 'OPENCODE_CONFIG', 'PI_CODING_AGENT_DIR'] as const;
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
     process.env.DEEPSEEK_API_KEY = 'synthetic-secret';
+    process.env.OPENCODE_CONFIG = '/owner/opencode.json';
+    process.env.PI_CODING_AGENT_DIR = '/owner/.pi';
     try {
       const env = cleanEnvironment('/test-home');
-      expect(env.DEEPSEEK_API_KEY).toBeUndefined(); expect(env.HOME).toBe('/test-home');
-      expect(env.OPENCODE_TEST_HOME).toBe('/test-home'); expect(env.PI_CODING_AGENT_DIR).toBe(join('/test-home','pi'));
-    } finally { if (previous === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = previous; }
+      expect(env.DEEPSEEK_API_KEY).toBeUndefined(); expect(env.HOME).toBe('/test-home'); expect(env.USERPROFILE).toBe('/test-home');
+      // Sole Pi SDK: the isolated private Pi directory and XDG roots live under the
+      // trial home; no OpenCode-specific variable (owner config or test home) is passed.
+      expect(env.PI_CODING_AGENT_DIR).toBe(join('/test-home','pi'));
+      for (const [key, dir] of [['XDG_CONFIG_HOME','config'],['XDG_DATA_HOME','data'],['XDG_CACHE_HOME','cache'],['XDG_STATE_HOME','state']])
+        expect(env[key]).toBe(join('/test-home', dir));
+      expect(Object.keys(env).filter(key => key.startsWith('OPENCODE_'))).toEqual([]);
+      expect(Object.values(env)).not.toContain('synthetic-secret');
+      expect(Object.values(env)).not.toContain('/owner/.pi');
+    } finally {
+      for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+    }
   });
   it('counts only terminal usage events, not streaming snapshots or duplicated agent_end', () => {
     const message = { role: 'assistant', usage: { input: 12, output: 4, cacheRead: 8 }, stopReason: 'stop' };
