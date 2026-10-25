@@ -626,10 +626,10 @@ function occurrences(haystack: Buffer, needle: Buffer, limit = 1_000): { count: 
   return { count, first };
 }
 
-async function removeOwned(file: string, owned: fs.BigIntStats): Promise<boolean> {
+async function removeOwned(file: string, owned: fs.BigIntStats, expectedParent: string): Promise<boolean> {
   try {
     // A replaced ancestor must not redirect cleanup to another directory.
-    if (await fs.promises.realpath(path.dirname(file)) !== path.dirname(file)) return false;
+    if (await fs.promises.realpath(path.dirname(file)) !== expectedParent) return false;
     const now = await fs.promises.lstat(file, { bigint: true });
     if (now.ino !== owned.ino || now.dev !== owned.dev) return false;
     await fs.promises.unlink(file);
@@ -695,6 +695,9 @@ async function replaceOnce(cwd: string, request: SafeEditRequest, located: Proje
     throw new ProjectToolError("Файл принадлежит другому пользователю: замена сменила бы владельца. Используйте edit.");
   signal?.throwIfAborted();
   const directory = path.dirname(target);
+  // Capture the native spelling before staging; a later replaced ancestor
+  // must not redirect cleanup, while Windows short/long aliases remain equal.
+  const cleanupParent = fs.realpathSync.native(directory);
   const staged = path.join(directory, `.enki-safe-edit-${randomBytes(8).toString("hex")}.tmp`);
   let handle: fs.promises.FileHandle | undefined, owned: fs.BigIntStats | undefined, created = false, published = false;
   try {
@@ -727,7 +730,7 @@ async function replaceOnce(cwd: string, request: SafeEditRequest, located: Proje
     published = true;
   } finally {
     if (handle) await handle.close().catch(() => undefined);
-    if (!published && created && (!owned || !await removeOwned(staged, owned))) {
+    if (!published && created && (!owned || !await removeOwned(staged, owned, cleanupParent))) {
       const cleanup = { state: "unknown" as const, temporary: path.basename(staged),
         message: `Удаление собственного временного файла ${path.basename(staged)} не подтверждено (возможно, папка перемещена). Автоматический поиск и удаление в других местах не выполнялись.` };
       if (outcome.conflict) {

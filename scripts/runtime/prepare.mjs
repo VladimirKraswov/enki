@@ -228,15 +228,35 @@ export function pruneEmptyPackageDirectories(artifact, { maxEntries = 200_000, m
   }
   return empty.map(directory => path.relative(root, directory).split(path.sep).join('/'));
 }
+/** Hardened ad-hoc binaries have no team identity to share with their native
+ * addons. Only this exact local signing mode gets the Node-specific exception;
+ * Developer ID keeps library validation and signs every addon with its team. */
+export function runtimeNodeEntitlements(repo, identity) {
+  return path.join(repo, 'src-tauri', identity === '-' ? 'runtime-node-adhoc.entitlements' : 'runtime-node.entitlements');
+}
 async function sign(artifact, platform, identity, repo, env, signal) {
   if (platform !== 'darwin-arm64') return;
   const magic = new Set(['feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca']);
   for (const relative of listFiles(artifact)) {
     const file = path.join(artifact, ...relative.split('/')), fd = fs.openSync(file, 'r'), head = Buffer.alloc(4);
     try { fs.readSync(fd, head, 0, 4, 0); } finally { fs.closeSync(fd); } if (!magic.has(head.toString('hex'))) continue;
-    const extra = relative === 'node/bin/node' ? ['--entitlements', path.join(repo, 'src-tauri/runtime-node.entitlements')] : [];
+    const extra = relative === 'node/bin/node' ? ['--entitlements', runtimeNodeEntitlements(repo, identity)] : [];
     await run('/usr/bin/codesign', ['--force', '--timestamp=none', '--options', 'runtime', ...extra, '--sign', identity, file], { env, signal, timeoutMs: 60_000 });
   }
+}
+/** Test the actual final interpreter and its own packaged native module after
+ * pruning and signing. A pre-sign build-host import cannot detect a signing
+ * policy rejection. Refusal leaves staging unpromoted, preserving current. */
+export async function verifyPackagedNodePty(artifact, nodeRelative, { env, signal } = {}) {
+  if (!safeRelative(nodeRelative)) throw new Error('Unsafe packaged interpreter path');
+  const app = path.join(artifact, 'app');
+  const probe = `import fs from 'node:fs';import path from 'node:path';import {createRequire} from 'node:module';
+const app=fs.realpathSync.native(process.cwd());const expected=path.join(app,'node_modules/node-pty');const root=fs.realpathSync.native(expected);
+if(root!==expected)throw Error('Packaged node-pty directory is not physical');
+const require=createRequire(path.join(app,'package.json'));const entry=fs.realpathSync.native(require.resolve('node-pty'));
+if(!entry.startsWith(root+path.sep))throw Error('node-pty resolved outside its packaged directory');
+const pty=require(entry);if(typeof pty.spawn!=='function')throw Error('Invalid packaged node-pty ABI');`;
+  await run(path.join(artifact, ...nodeRelative.split('/')), ['--input-type=module', '-e', probe], { cwd: app, env, signal, capture: true, timeoutMs: 30_000 });
 }
 /** Windows: compile the native runner from THIS authenticated source into a
  * fresh private directory, then bind it for jobs and durable directory flushes
@@ -250,7 +270,7 @@ async function configureNativePort(repo, signal) {
   return () => { setDirectoryFlushPort(undefined); windowsRunner = undefined; discardRunner(identity); };
 }
 const RECEIPT = 'preparation-receipt.json';
-const PREPARATION_CODE = ['scripts/runtime/prepare.mjs', 'scripts/runtime/artifact.mjs', 'src-tauri/runtime-node.entitlements'];
+const PREPARATION_CODE = ['scripts/runtime/prepare.mjs', 'scripts/runtime/artifact.mjs', 'src-tauri/runtime-node.entitlements', 'src-tauri/runtime-node-adhoc.entitlements'];
 /** Digest of everything that determines the prepared artifact's bytes: the
  * staged resource trees (exact copyTree SKIP semantics; links/special files
  * refused), the preparation code, Mac runtime entitlements and the options. */
@@ -335,6 +355,7 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
     if (remote) { if (platform !== 'linux-x64') throw new Error('Remote tarball requires Linux x64'); fs.mkdirSync(path.join(artifact, 'bin')); fs.writeFileSync(path.join(artifact, 'bin/enki-runtime'), REMOTE_LAUNCHER, { mode: 0o755 }); }
     pruneEmptyPackageDirectories(artifact);
     await sign(artifact, platform, signingIdentity, repo, env, signal);
+    await verifyPackagedNodePty(artifact, nodeRelative, { env, signal });
     const manifest = buildManifest(artifact, { version, contract: lock.contract, node: nodeRelative, entry: 'app/dist/main.js' }); fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest, null, 2) + '\n');
     const errors = verifyArtifact(artifact); if (errors.length) throw new Error(errors.slice(0, 5).join('; '));
     if (remote) {

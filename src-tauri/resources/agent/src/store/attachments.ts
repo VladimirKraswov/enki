@@ -35,10 +35,9 @@ export class AttachmentStore {
     const file = path.join(this.dir, sha256);
     if (!fs.existsSync(file)) {
       const temporary = `${file}.${randomUUID()}.part`;
-      fs.writeFileSync(temporary, bytes, { mode: 0o600 });
-      const fd = fs.openSync(temporary, "r");
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
+      const fd = fs.openSync(temporary, "wx", 0o600);
+      try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
       fs.renameSync(temporary, file);
     }
     const id = randomUUID();

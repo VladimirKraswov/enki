@@ -145,3 +145,87 @@ it("rolls back an import interrupted between steps on restart and keeps original
   expect(h.runtime.db.get("SELECT state FROM migration_journal WHERE id=?", job)?.state).toBe("rolled_back");
   expect(h.runtime.recoveryIssues).toEqual([]);
 });
+
+
+it("resolves a saved old ID from the supervised source beyond the UI's largest session page, without dispatch or duplicate continuation", async () => {
+  const project = tempDir("large-workshop-source"), { file, writer } = openCodeFixture(project);
+  try {
+    const insert = writer.prepare("INSERT INTO session VALUES(?,?,?,?,?,?,?,?,?)");
+    writer.exec("BEGIN");
+    for (let i = 0; i < 2101; i++) insert.run(`ses_noise_${i}`, "p", null, project, "Мастерская", 10 + i, 10 + i, null, null);
+    writer.exec("COMMIT");
+    h = await harness({ legacy: { opencodeDb: file } });
+    const before = [hash(file), hash(`${file}-wal`)];
+    await h.runtime.importer.import(file);
+    const id = archiveId(file, "ses_workshop");
+    const page = await h.request<Array<{ id: string }>>("GET", `/sessions?directory=${encodeURIComponent(project)}&limit=2000`);
+    expect(page.body).toHaveLength(2000);expect(page.body.some(s => s.id === id)).toBe(false);
+    expect((await h.request("GET", `/sessions/ses_workshop?directory=${encodeURIComponent(project)}`)).status).toBe(404);
+    const lookup = () => h.request<{ id: string; origin: { kind: string; legacyId: string; continuedBy?: string } }>("POST", "/migrations/opencode/session", { legacyID: "ses_workshop", directory: project });
+    const resolved = await lookup();
+    expect(resolved.status).toBe(200);expect(resolved.body).toMatchObject({ id, origin: { kind: "opencode", legacyId: "ses_workshop" } });
+    const first = await h.request<{ id: string }>("POST", `/sessions/${resolved.body.id}/continue`, {});
+    expect(first.status).toBe(200);
+    const again = await lookup();expect(again.body.origin.continuedBy).toBe(first.body.id);
+    const same = await h.request<{ id: string }>("POST", `/sessions/${again.body.id}/continue`, {});
+    expect(same.body.id).toBe(first.body.id);
+    expect((await h.request("POST", "/sessions/ses_workshop/continue", {})).status).toBe(404);
+    expect(h.scripted.calls()).toBe(0);expect([hash(file), hash(`${file}-wal`)]).toEqual(before);
+  } finally { writer.close(); }
+});
+
+it("lookup distinguishes the supervised source from a different imported installation with the same raw ID and directory", async () => {
+  const project = tempDir("source-bound-workshop"), local = openCodeFixture(project), foreign = openCodeFixture(project);
+  try {
+    h = await harness({ legacy: { opencodeDb: local.file } });
+    await h.runtime.importer.import(foreign.file);await h.runtime.importer.import(local.file);
+    const result = await h.request<{ id: string }>("POST", "/migrations/opencode/session", { legacyID: "ses_workshop", directory: project });
+    expect(result.status).toBe(200);expect(result.body.id).toBe(archiveId(local.file, "ses_workshop"));
+    expect(result.body.id).not.toBe(archiveId(foreign.file, "ses_workshop"));expect(h.scripted.calls()).toBe(0);
+  } finally { local.writer.close();foreign.writer.close(); }
+});
+
+it("a missing import, source or exact directory never resolves a same-title archive or creates a replacement", async () => {
+  const project = tempDir("not-ready-workshop"), { file, writer } = openCodeFixture(project);
+  try {
+    h = await harness({ legacy: { opencodeDb: file } });
+    const before = h.runtime.catalog.all().length;
+    expect((await h.request("POST", "/migrations/opencode/session", { legacyID: "ses_workshop", directory: project })).status).toBe(409);
+    expect(h.runtime.catalog.all()).toHaveLength(before);
+    await h.runtime.importer.import(file);
+    const other = h.project("wrong-workshop-directory");
+    expect((await h.request("POST", "/migrations/opencode/session", { legacyID: "ses_workshop", directory: other })).status).toBe(409);
+    expect((await h.request("POST", "/migrations/opencode/session", { legacyID: "ses_missing", directory: project })).status).toBe(409);
+    const count = h.runtime.catalog.all().length;
+    delete h.runtime.config.legacy.opencodeDb;
+    expect((await h.request("POST", "/migrations/opencode/session", { legacyID: "ses_workshop", directory: project })).status).toBe(409);
+    expect(h.runtime.catalog.all()).toHaveLength(count);expect(h.scripted.calls()).toBe(0);
+  } finally { writer.close(); }
+});
+
+it("lookup refuses ambiguous source-bound catalog records and does not choose a canonical ID by preference", async () => {
+  const project = tempDir("ambiguous-workshop"), { file, writer } = openCodeFixture(project);
+  try {
+    h = await harness({ legacy: { opencodeDb: file } });await h.runtime.importer.import(file);
+    const original = h.runtime.catalog.get(archiveId(file, "ses_workshop"))!;
+    h.runtime.catalog.insert({ ...original, id: randomUUID() });
+    const before = h.runtime.catalog.all().length;
+    const result = await h.request<{ message: string }>("POST", "/migrations/opencode/session", { legacyID: "ses_workshop", directory: project });
+    expect(result.status).toBe(409);expect(result.body.message).toMatch(/несколько архивов/);
+    expect(h.runtime.catalog.all()).toHaveLength(before);expect(h.scripted.calls()).toBe(0);
+  } finally { writer.close(); }
+});
+
+it("lookup revalidates the archive bytes and refuses caller-supplied source or origin", async () => {
+  const project = tempDir("verified-workshop"), { file, writer } = openCodeFixture(project);
+  try {
+    h = await harness({ legacy: { opencodeDb: file } });const imported = await h.runtime.importer.import(file);
+    const body = { legacyID: "ses_workshop", directory: project };
+    expect((await h.request("POST", "/migrations/opencode/session", { ...body, source: file })).status).toBe(400);
+    expect((await h.request("POST", "/migrations/opencode/session", { ...body, origin: "other" })).status).toBe(400);
+    const archive = h.runtime.importer.archiveFile(imported.archive.id);
+    fs.chmodSync(archive, 0o600);fs.appendFileSync(archive, "tampered");
+    const result = await h.request<{ message: string }>("POST", "/migrations/opencode/session", body);
+    expect(result.status).toBe(409);expect(result.body.message).toMatch(/не прошёл проверку/);expect(h.scripted.calls()).toBe(0);
+  } finally { writer.close(); }
+});

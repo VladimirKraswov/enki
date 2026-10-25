@@ -191,7 +191,7 @@ function preparedRepo(t) {
   const repo = temporary(t), write = (relative, text) => { const file = path.join(repo, ...relative.split('/')); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
   for (const name of ['agent', 'shared', 'browser', 'pi']) write(`src-tauri/resources/${name}/index.txt`, name);
   write('src-tauri/resources/agent/node_modules/dep/index.js', 'not staged by copyTree');
-  for (const relative of ['scripts/runtime/prepare.mjs', 'scripts/runtime/artifact.mjs', 'src-tauri/runtime-node.entitlements']) write(relative, relative);
+  for (const relative of ['scripts/runtime/prepare.mjs', 'scripts/runtime/artifact.mjs', 'src-tauri/runtime-node.entitlements', 'src-tauri/runtime-node-adhoc.entitlements']) write(relative, relative);
   const current = path.join(repo, 'src-tauri/target/enki-agent/current'), identity = { platform: 'darwin-arm64', signingIdentity: '-' };
   write('src-tauri/target/enki-agent/current/node/bin/node', 'node'); write('src-tauri/target/enki-agent/current/app/dist/main.js', 'main');
   const manifest = () => fs.writeFileSync(path.join(current, MANIFEST), JSON.stringify(buildManifest(current, { version: '0.85.1-fixture', contract: 1, node: 'node/bin/node', entry: 'app/dist/main.js' })));
@@ -210,6 +210,8 @@ test('reuse requires the manifest-bound receipt, unchanged sources and a fully v
   write('src-tauri/resources/pi/index.txt', 'edited'); assert.match(problems(), /sources changed/);
   write('src-tauri/resources/pi/index.txt', 'pi'); write('scripts/runtime/prepare.mjs', 'new preparation code'); assert.match(problems(), /sources changed/);
   write('scripts/runtime/prepare.mjs', 'scripts/runtime/prepare.mjs'); assert.equal(problems(), '');
+  write('src-tauri/runtime-node-adhoc.entitlements', 'changed ad-hoc signing policy'); assert.match(problems(), /sources changed/);
+  write('src-tauri/runtime-node-adhoc.entitlements', 'src-tauri/runtime-node-adhoc.entitlements'); assert.equal(problems(), '');
   fs.writeFileSync(path.join(current, 'app/dist/main.js'), 'tampered'); assert.match(problems(), /hash mismatch/);
   manifest(); assert.match(problems(), /unexpected manifest sha256/, 'a regenerated manifest is not the prepared one');
   fs.rmSync(receipt); assert.match(problems(), /no usable preparation receipt/);

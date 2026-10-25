@@ -5,6 +5,7 @@
 // read SDK entry/event shapes through these aliases. Verified against the
 // published declarations of @earendil-works/pi-coding-agent 0.85.1.
 
+import { syncOwnedFile } from "../platform/owned-sync.ts";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -471,8 +472,7 @@ export function seedSession(cwd: string, sessionDir: string, id: string, intro: 
   const persisted = SessionManager.open(file, sessionDir, cwd);
   persisted.appendCustomMessageEntry(intro.customType, intro.text, true, intro.details);
   const entryIds = messages.map(message => persisted.appendMessage(message));
-  const saved = fs.openSync(file, "r");
-  try { fs.fsyncSync(saved); } finally { fs.closeSync(saved); }
+  syncOwnedFile(file);
   return { file, entryIds };
 }
 

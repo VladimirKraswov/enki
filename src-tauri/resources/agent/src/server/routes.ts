@@ -563,6 +563,17 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     if (body.source !== undefined && body.source !== source) throw new HttpError(400, "Можно импортировать только базу прежней версии этого компьютера.");
     return runtime.importer.import(source);
   });
+  // Read-only identity lookup, not a raw-ID alias for execution. A caller can
+  // name the saved ID/directory but cannot choose an origin or database path.
+  r("POST", "/migrations/opencode/session", (request) => {
+    const body = object(request.body), source = runtime.config.legacy.opencodeDb;
+    if (Object.keys(body).some(key => key !== "legacyID" && key !== "directory"))
+      throw new HttpError(400, "Укажите только исходный идентификатор и каталог чата.");
+    const legacyID = textParam(body.legacyID, "legacyID", 512), directory = directoryParam(body.directory);
+    if (runtime.config.host !== "local" || !source) throw new HttpError(409, "Источник истории этого компьютера пока недоступен. Прежняя привязка мастерской сохранена.");
+    try { return sessionDTO(runtime.importer.resolveSession(source, legacyID, directory)); }
+    catch (error) { throw new HttpError(409, error instanceof Error ? error.message : "Не удалось проверить архив мастерской."); }
+  }, { mutation: false });
   // Former Pi CLI chats from this host's explicit root only. Each chat is a
   // separate journaled import (immutable original + owned working copy); a
   // failure is reported per chat with a code and never skips silently.

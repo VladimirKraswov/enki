@@ -130,6 +130,7 @@ export class RuntimeBackend implements AgentBackend {
     const map = await this.client.sessionStatuses(directory, signal);
     return Object.fromEntries(Object.entries(map).map(([id, status]) => [id, normalizeStatusType(status)]));
   }
+  async resolveLegacySession(legacyID: string, directory: string) { return sessionOf(await this.client.resolveLegacySession(legacyID, directory)); }
   async continueLegacy(sessionID: string, directory: string) { return sessionOf(await this.client.continueLegacy(sessionID, directory)); }
 
   // ---- history / execution ----

@@ -82,6 +82,7 @@ jobs:
         shell: bash
         run: |
           python scripts/test-shared-skills.py
+          python scripts/test-verify-macos.py
           python scripts/test-skill-catalog.py
           python scripts/test-download-transfer.py
           python scripts/test-model-tunnel-supervisor.py

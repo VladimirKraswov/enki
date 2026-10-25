@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import type { StopResult } from './lifecycle.ts';
 import type { UpdateBackup } from './core/runtime.ts';
+import { syncOwnedDirectory } from './platform/owned-sync.ts';
 // The trusted installer takes the LIVE data layout and the paired session
 // snapshot verifier/restorer only from this verified, SDK-free bundle: the same
 // source the runtime itself uses (platform/paths.ts, platform/update-snapshot.ts).
@@ -91,10 +92,8 @@ function readPrivate(root: string, name: string): string {
   try { return fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
 }
 function syncDirectory(root: string): void {
-  let fd: number | undefined;
-  try { fd = fs.openSync(root, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)); fs.fsyncSync(fd); }
+  try { syncOwnedDirectory(root); }
   catch (cause) { throw new Error('Private daemon metadata requires supported directory synchronization; platform not qualified', { cause }); }
-  finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 export function writePrivate(root: string, name: string, value: string): void {
   if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid daemon metadata name');

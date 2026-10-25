@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { syncOwnedDirectory, syncOwnedFile } from "../platform/owned-sync.ts";
 
 export const HASH = /^[a-f0-9]{64}$/;
 export const JOB = /^[a-f0-9-]{36}$/;
@@ -45,18 +46,14 @@ export function directory(dir: string, create = false): string {
   return fs.realpathSync(dir);
 }
 export function syncFile(file: string): void {
-  const descriptor = openRegular(file); try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  syncOwnedFile(file);
 }
 export function syncDirectory(dir: string): void {
-  let descriptor: number | undefined;
-  try { descriptor = fs.openSync(dir, "r"); fs.fsyncSync(descriptor); }
-  catch (error) {
-    if (process.platform !== "win32" || !["EINVAL", "EPERM", "EACCES", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-  } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+  syncOwnedDirectory(dir);
 }
 export function writeOwned(file: string, bytes: string | Uint8Array, immutable: boolean): void {
-  fs.writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
-  syncFile(file);
+  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   if (immutable) fs.chmodSync(file, 0o400);
 }
 export function identity(file: string): fs.BigIntStats {
