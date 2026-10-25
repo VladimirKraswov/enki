@@ -113,7 +113,10 @@ test("an inline Bash override wins and keeps the same collision result across re
 
 test("without overrides the host Bash fallback spawns with the original environment, PI_SESSION metadata and HOME", async t => {
   const f = await foundation(t), worker = await f.open();
-  const output = await f.runTool(worker, "bash", `printf '%s|%s|%s|%s|%s' "\${PI_CODING_AGENT_DIR-unset}" "\${PI_OFFLINE-unset}" "\${GOOGLE_APPLICATION_CREDENTIALS-unset}" "\${HOME-unset}" "\${PI_SESSION_ID-unset}"`);
+  // Git Bash converts HOME to an MSYS path; compare its native spelling, not
+  // a byte format the shell itself changes before executing any command.
+  const home = process.platform === "win32" ? '$(cygpath -w "${HOME-unset}")' : '${HOME-unset}';
+  const output = await f.runTool(worker, "bash", `printf '%s|%s|%s|%s|%s' "\${PI_CODING_AGENT_DIR-unset}" "\${PI_OFFLINE-unset}" "\${GOOGLE_APPLICATION_CREDENTIALS-unset}" "${home}" "\${PI_SESSION_ID-unset}"`);
   const env = projectToolEnvironment(process.env);
   const expected = [env.PI_CODING_AGENT_DIR ?? "unset", env.PI_OFFLINE ?? "unset", env.GOOGLE_APPLICATION_CREDENTIALS ?? "unset", process.env.HOME ?? "unset", f.record.id].join("|");
   assert.ok(output.includes(expected), `fallback output ${output} lacks ${expected}`);

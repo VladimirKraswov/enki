@@ -48,16 +48,23 @@ function setup(t: TestContext, baseUrl = "http://127.0.0.1:9/v1") {
   write("keybindings.json", Object.fromEntries(Array.from({ length: 6000 }, (_, i) => [`action.${i}`, [`ctrl+${i}`, `alt+shift+${i}`]])));
   const before = Object.fromEntries(fs.readdirSync(source).map(name => [name, fs.readFileSync(path.join(source, name))]));
   const saved = { VAR: process.env.VAR, SENTINEL_TOKEN: process.env.SENTINEL_TOKEN };
+  const resources: Array<() => void | Promise<void>> = [];
   process.env.VAR = "ENV-LEAK"; process.env.SENTINEL_TOKEN = "ENV-LEAK";
-  t.after(() => {
-    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  t.after(async () => {
+    // This hook owns the directory: close resources registered later before
+    // deleting it. Node after hooks run in registration order, not LIFO.
+    try { for (const close of resources.reverse()) await close(); }
+    finally {
+      for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   });
   const unchanged = () => {
     assert.deepEqual(fs.readdirSync(source).sort(), Object.keys(before).sort());
     for (const [name, bytes] of Object.entries(before)) assert.deepEqual(fs.readFileSync(path.join(source, name)), bytes, `source ${name} changed`);
   };
-  return { root, source, generations, agentDir, unchanged, broker: new FakeAuthority(generations) };
+  return { root, source, generations, agentDir, unchanged, broker: new FakeAuthority(generations),
+    onCleanup(close: () => void | Promise<void>) { resources.push(close); } };
 }
 async function imported(t: TestContext, baseUrl?: string) {
   const f = setup(t, baseUrl);
@@ -261,7 +268,7 @@ test("Runtime.importPiConfig reports the committed generation as pending until r
   const create = () => Runtime.create({ dataDir: data, agentDir: f.agentDir, host: "local", broker: f.broker, credentials: "vault", userPiAgentDir: f.source,
     legacy: {}, allowModelNetwork: false, version: "private-build", settingsInMemory: true, capabilities: async () => null });
   let runtime = await create();
-  t.after(() => runtime.shutdown());
+  f.onCleanup(() => runtime.shutdown());
   const before = runtime.configStatus();
   assert.equal(before.state, "none"); assert.equal(before.pendingRestart, undefined);
   const imported = await runtime.importPiConfig();
@@ -283,7 +290,7 @@ test("an explicit isolated profile without a configured Pi source refuses the im
   const f = setup(t);
   const runtime = await Runtime.create({ dataDir: path.join(f.root, "data"), agentDir: f.agentDir, host: "local", broker: f.broker, credentials: "vault",
     legacy: {}, allowModelNetwork: false, version: "private-build", settingsInMemory: true, capabilities: async () => null });
-  t.after(() => runtime.shutdown());
+  f.onCleanup(() => runtime.shutdown());
   const configCalls = () => f.broker.calls.filter(c => c.method.startsWith("config.")).length, calls = configCalls();
   await assert.rejects(runtime.importPiConfig(), /^Error: CONFIG_SOURCE_UNCONFIGURED:/);
   assert.equal(configCalls(), calls, "no native config call");

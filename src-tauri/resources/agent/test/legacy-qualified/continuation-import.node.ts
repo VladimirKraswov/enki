@@ -16,7 +16,12 @@ function continuedBy(record: SessionRecord): string | undefined {
 type RmSync = typeof fs.rmSync;
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "enki-continuation-publish-")), f = setup(root);
-  t.after(() => { try { f.db.close(); } catch { /* explicitly closed for child crash proof */ } fs.rmSync(root, { recursive: true, force: true }); }); return { ...f, root };
+  const databases = new Set([f.db]);
+  t.after(() => {
+    for (const database of databases) if (database.db.isOpen) database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return { ...f, root, trackDatabase(database: typeof f.db) { databases.add(database); } };
 }
 test("continuation commits a genuine user-only seed, source link, workshop transfer and exact entry map together", async t => {
   const f = fixture(t), made = await f.importer.continue(f.record(), f.reader, { directory: f.project });
@@ -74,7 +79,14 @@ test("child death immediately after filesystem publication rolls back the verifi
   const f = fixture(t); f.db.close();
   const child = fileURLToPath(new URL("./fixtures/continuation-crash.ts", import.meta.url));
   const result = spawnSync(process.execPath, ["--experimental-transform-types", child, f.root], { env: process.env, encoding: "utf8", timeout: 5000 });
-  assert.equal(result.signal, "SIGKILL", result.stderr); const recovered = setup(f.root, true); t.after(() => recovered.db.close());
+  assert.equal(result.error, undefined);
+  assert.match(result.stdout, /^ENKI_CONTINUATION_PUBLICATION_FAULT$/m);
+  if (process.platform === "win32") {
+    // TerminateProcess does not provide a POSIX signal. The phase marker and
+    // exact orphan/journal checks below still prove the abrupt publication gap.
+    assert.equal(result.signal, null); assert.notEqual(result.status, null); assert.notEqual(result.status, 0);
+  } else assert.equal(result.signal, "SIGKILL", result.stderr);
+  const recovered = setup(f.root, true); f.trackDatabase(recovered.db);
   assert.equal(fs.readdirSync(recovered.sessions).filter(name => name.endsWith(".jsonl")).length, 1); recovered.importer.recover();
   assert.deepEqual(fs.readdirSync(recovered.sessions).filter(name => name.endsWith(".jsonl")), []); assert.equal(recovered.catalog.all().length, 1);
   assert.equal(recovered.db.get("SELECT state FROM migration_journal WHERE kind='continuation'")?.state, "rolled_back");

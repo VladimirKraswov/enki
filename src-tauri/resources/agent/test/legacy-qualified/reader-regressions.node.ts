@@ -1,4 +1,4 @@
-// Source-only proposal. Not executed. Copy beside runtime tests after review.
+// Read-only archive regression fixtures.
 // The fixtures are synthetic; no owner database, model or tool is needed.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -12,20 +12,27 @@ import { OpenCodeArchiveReader } from "../../src/legacy/opencode-reader.ts";
 
 const fixtures = fileURLToPath(new URL("./fixtures/legacy/", import.meta.url));
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const ownedReaders = new Map<string, Set<OpenCodeArchiveReader>>();
 
 function source(t: TestContext, fixture: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "enki-legacy-reader-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, "synthetic.sqlite");
+  const opened = new Set<OpenCodeArchiveReader>(); ownedReaders.set(file, opened);
+  t.after(() => {
+    for (const instance of opened) instance.close();
+    ownedReaders.delete(file);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
   const db = new DatabaseSync(file);
   try { db.exec(fs.readFileSync(path.join(fixtures, fixture), "utf8")); }
   finally { db.close(); }
   return file;
 }
 
-function reader(t: TestContext, file: string): OpenCodeArchiveReader {
+function reader(_t: TestContext, file: string): OpenCodeArchiveReader {
+  assert.ok(ownedReaders.has(file), "reader must belong to an owned fixture");
   const instance = new OpenCodeArchiveReader(file);
-  t.after(() => instance.close());
+  ownedReaders.get(file)!.add(instance);
   return instance;
 }
 

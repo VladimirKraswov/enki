@@ -163,7 +163,7 @@ test("live import ownership fences recovery and a second importer on the same Da
   assert.doesNotThrow(() => second.recover(), "a completed import must not leave a permanent recovery gate");
 });
 
-test("replacement of an owned staging snapshot during a page yield cannot publish a complete archive", async t => {
+test("late tampering with an owned staging snapshot during a page yield cannot publish a complete archive", async t => {
   const f = setup(t), chmod = fs.chmodSync;
   const before = hash(f.source);
   let scheduled = false, mutated = false;
@@ -171,7 +171,7 @@ test("replacement of an owned staging snapshot during a page yield cannot publis
   const mock = t.mock.method(fs, "chmodSync", (...args: Parameters<typeof fs.chmodSync>) => {
     chmod(...args);
     const file = String(args[0]);
-    if (scheduled || args[1] !== 0o400 || !file.startsWith(f.staging + path.sep) || !file.endsWith("/snapshot.sqlite")) return;
+    if (scheduled || args[1] !== 0o400 || !file.startsWith(f.staging + path.sep) || path.basename(file) !== "snapshot.sqlite") return;
     scheduled = true;
     setImmediate(() => {
       try {
@@ -180,7 +180,11 @@ test("replacement of an owned staging snapshot during a page yield cannot publis
         const writer = new DatabaseSync(replacement);
         try { writer.prepare("UPDATE session SET title=? WHERE id=?").run("LATE_REPLACEMENT", "ses_fixture_main"); } finally { writer.close(); }
         chmod(replacement, 0o400);
-        fs.renameSync(replacement, file);
+        if (process.platform === "win32") {
+          // Windows can deny replacing an open SQLite file. Exercise an actual
+          // late write instead; integrity/metadata must reject it just as well.
+          chmod(file, 0o600); fs.writeFileSync(file, fs.readFileSync(replacement));
+        } else fs.renameSync(replacement, file);
         mutated = true;
       } catch (error) { mutationError = error; }
     });
@@ -189,7 +193,7 @@ test("replacement of an owned staging snapshot during a page yield cannot publis
   finally { mock.mock.restore(); }
   assert.equal(scheduled, true);
   assert.equal(mutationError, undefined);
-  assert.equal(mutated, true, "the test actually replaced the path while its old SQLite handle was open");
+  assert.equal(mutated, true, "the test actually tampered with staging while its old SQLite handle was open");
   assert.equal(f.importer.archives().length, 0);
   assert.equal(f.catalog.all().length, 0);
   assert.equal(hash(f.source), before);
