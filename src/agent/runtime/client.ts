@@ -280,7 +280,9 @@ export class RuntimeClient {
     return this.request<SessionDTO>("POST", `/sessions/${encodeURIComponent(id)}/fork`, { query: { directory }, body: { messageID, ...(title ? { title } : {}) } });
   }
   continueLegacy(id: string, directory: string) {
-    return this.request<SessionDTO>("POST", `/sessions/${encodeURIComponent(id)}/continue`, { query: { directory }, body: {} });
+    // A verified large archive needs two bounded streaming passes before the
+    // SDK seed is committed. Ordinary HTTP reads keep their shorter deadline.
+    return this.request<SessionDTO>("POST", `/sessions/${encodeURIComponent(id)}/continue`, { query: { directory }, body: {}, timeoutMs: 120000 });
   }
   messages(id: string, opts: { directory?: string | null; limit?: number; before?: string; signal?: AbortSignal } = {}) {
     return this.request<{ messages: MessageDTO[]; before: string | null }>("GET", `/sessions/${encodeURIComponent(id)}/messages`, {

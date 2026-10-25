@@ -2,7 +2,7 @@
 
 - [x] Actual owner archive imported read-only:255 sessions/47239 messages/211229 parts.
 - [x] UI archive reads now project one tail page, preserving cursors and V1/V2 order without expanding the complete transcript; full import validation remains strict. Five reader regressions, ten integration checks and167 public SDK tests pass. Actual200-message tail:5.607s,~121MiB peak RSS.
-- [x] Lost import acknowledgement follows its exact durable job/source/archive with bounded read-only reconciliation and connection fencing; no repeated POST. Six focused UI checks pass.
+- [x] Lost import acknowledgement follows its exact durable job/source/archive with bounded read-only reconciliation and connection fencing; no repeated POST. Six focused UI checks pass. A separate continuation deadline allows the measured25-second seed and fails boundedly at120seconds without replay; its regression passes.
 - [ ] Canonical2.0.1 publication, fresh runtime/native package/current CI and actual owner archive/workshop/continuation acceptance.
 
 # Enki roadmap
