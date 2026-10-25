@@ -37,7 +37,13 @@ async function foundation(t: TestContext, options: Partial<Pick<RuntimeConfig, "
     : runtime.registry.create({ directory: project, title: "Private fixture", model: { providerID: faux.provider.id, modelID: "one" } });
   const command = (): PromptCommand => ({ id: randomUUID(), kind: "prompt", sessionID: session.id, directory: project, payload: { parts: [{ type: "text", text: "Do not call a real provider" }], model: { providerID: faux.provider.id, modelID: "one" } } });
   let stopped = false;
-  t.after(async () => { if (!stopped) await runtime.shutdown(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    if (!stopped) await runtime.shutdown();
+    // Windows can retain a transient sharing violation after handles close.
+    // Retry only this owned fixture, finitely; a final failure still fails QA.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    assert.equal(fs.existsSync(root), false);
+  });
   return { root, data, project, runtime, faux, session, command, markStopped: () => { stopped = true; } };
 }
 function json(port: number, token: string, method: string, pathname: string, body?: unknown, client?: string): Promise<{ status: number; body: unknown }> {

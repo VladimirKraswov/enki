@@ -35,7 +35,9 @@ export async function scriptedRuntime(agentDir: string): Promise<ScriptedRuntime
       { id: "scripted-vision", name: "Scripted vision", contextWindow: 64_000, maxTokens: 2_000, reasoning: false, input: ["text", "image"] },
     ],
     tokensPerSecond: 100_000,
-    // SCRATCH experiment: same real deltas, fewer sub-millisecond timers.
+    // Exercise the real SDK delta stream without thousands of sub-millisecond
+    // sleeps: Windows rounds them to ~15 ms. Turn ordering/cancellation tests
+    // use explicit gates rather than depending on simulated model bandwidth.
     tokenSize: { min: 16, max: 32 },
   });
   modelRuntime.registerNativeProvider(faux.provider);

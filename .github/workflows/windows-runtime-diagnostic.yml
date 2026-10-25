@@ -51,9 +51,9 @@ jobs:
         working-directory: src-tauri/resources/agent
         run: node node_modules/vitest/vitest.mjs run test/queue-unit.test.ts test/integration/turn-outcome.test.ts test/profile-env.test.ts test/project-tools.test.ts test/owned-sync.test.ts test/integration/owned-output.test.ts test/legacy-import.test.ts test/integration/model-context.test.ts test/integration/model-transition.test.ts --reporter=verbose --maxWorkers=1 --bail=1
 
-      - name: Original finite paired-backup and daemon lifecycle cases
+      - name: Original complete guarded public Node suites
         if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.pty.outcome == 'success' && steps.types.outcome == 'success' }}
-        run: npm --prefix src-tauri/resources/agent run test:node -- runtime-lifecycle
+        run: npm --prefix src-tauri/resources/agent run test:node
 
 # Diagnostic scratch branch only: no production package/install/publication,
 # credentials, owner profiles, external model calls, Hub or real providers.
