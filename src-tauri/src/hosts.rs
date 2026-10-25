@@ -58,7 +58,7 @@ fn ssh_program() -> PathBuf {
         let system_root = std::env::var_os("SystemRoot")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-        return system_root.join(r"System32\OpenSSH\ssh.exe");
+        system_root.join(r"System32\OpenSSH\ssh.exe")
     }
     #[cfg(unix)]
     SSH_PROGRAMS

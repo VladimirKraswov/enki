@@ -280,6 +280,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn temp_dir(tag: &str) -> PathBuf {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
