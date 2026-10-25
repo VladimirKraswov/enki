@@ -1,28 +1,22 @@
 name: Windows runtime diagnostic (scratch only)
-
 on:
   push:
     branches: [diagnostic/windows-runtime-20261025]
-
 permissions:
   contents: read
-
-concurrency:
-  group: windows-runtime-diagnostic-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   diagnostic:
     runs-on: windows-2022
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, same as desktop CI
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, same as desktop CI
-        with:
-          node-version: 24.22.1
-          cache: npm
-          cache-dependency-path: src-tauri/resources/agent/package-lock.json
-      - name: Complete original Hub suite with private owned fixtures
-        run: python -m unittest discover -s services/hub/tests -v
-
-# Scratch only: no app/runtime/model/Hub service calls or credentials.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Compile the unchanged owned-process test and independent command control
+        run: |
+          rustc --edition=2021 --test src-tauri/src/process.rs -o process-original-tests.exe
+          rustc --edition=2021 scripts/windows-native-probe.rs -o process-command-probe.exe
+      - name: Compare ordinary Windows commands with the same suspended Job launch
+        run: .\process-command-probe.exe
+      - name: Preserve the original failing case as diagnostic evidence only
+        continue-on-error: true
+        run: .\process-original-tests.exe --exact tests::suspended_spawn_resumes_only_after_job_assignment_and_owns_descendants --nocapture
+# Diagnostic branch only. This is not a production release gate or an acceptance pass.
