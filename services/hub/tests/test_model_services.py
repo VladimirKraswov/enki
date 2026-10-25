@@ -1,9 +1,11 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 spec = importlib.util.spec_from_file_location("hub", Path(__file__).parents[1] / "server.py")
@@ -43,10 +45,35 @@ class Coordination(unittest.TestCase):
         self.a = self.hub.authenticate(self.hub.provision("A", "macos")["token"])
         self.b = self.hub.authenticate(self.hub.provision("B", "windows")["token"])
         self.hub.model_catalog.put({"models": [entry("qwen"), entry("artemis")]}, {"name": "Owner"})
-        token = self.root / "gateway.key"
+        FixturePath = Path
+        if os.name == "nt":
+            # The deployed Hub has a Linux private-file policy. Windows chmod
+            # exposes only a readonly attribute, so this coordinator fixture
+            # models POSIX modes for its TWO owned files. Reads, symlink/type,
+            # size checks, SQLite and gateway calls remain real. Production
+            # refuses insecure files unchanged; no Windows ACL claim is made.
+            private_modes = {}
+            tracked = {os.path.normcase(str(self.root / name))
+                       for name in ("gateway.key", "services.json")}
+            class FixturePath(type(Path())):
+                def chmod(file, mode, **kwargs):
+                    super().chmod(mode, **kwargs)
+                    key = os.path.normcase(str(file))
+                    if key in tracked:
+                        private_modes[key] = mode & 0o777
+                def stat(file, **kwargs):
+                    info = super().stat(**kwargs)
+                    mode = private_modes.get(os.path.normcase(str(file)))
+                    return (os.stat_result(((info.st_mode & ~0o777) | mode, *info[1:]))
+                            if mode is not None else info)
+            native_path = patch.object(m._services_module, "Path", FixturePath)
+            native_path.start()
+            self.addCleanup(native_path.stop)
+        token = FixturePath(self.root / "gateway.key")
+        self.token = token
         token.write_text("test-private-control")
         token.chmod(0o600)
-        self.config = self.root / "services.json"
+        self.config = FixturePath(self.root / "services.json")
         self.config.write_text(json.dumps({"services": {"v100": {"resource": "tesla-v100", "label": "V100", "endpoint": "http://192.168.1.3:8080", "tokenFile": str(token)}}}))
         self.config.chmod(0o600)
         self.gateway = Gateway()
@@ -155,6 +182,13 @@ class Coordination(unittest.TestCase):
         self.config.chmod(0o644)
         with self.assertRaises(m.Fault):
             self.prepare("qwen", "run")
+
+    def test_broad_gateway_key_permissions_are_refused_before_gateway_io(self):
+        self.token.chmod(0o644)
+        with self.assertRaises(m.Fault) as error:
+            self.prepare("qwen", "private-key-policy")
+        self.assertEqual(error.exception.status, 503)
+        self.assertEqual(self.gateway.selected, [])
 
     def test_inspect_never_selects_or_creates_a_reservation(self):
         result = self.broker.api("POST", "inspect", self.a, dict(providerID="local-artemis", modelID="artemis", agent="opencode"))
