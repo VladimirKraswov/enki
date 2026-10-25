@@ -357,6 +357,9 @@ describe("safe_edit", () => {
     const held = new Promise<void>(resolve => { release = resolve; });
     let staging = 0;
     const first = safeEdit(f.project, { path: "src/a.txt", expected_sha256: expected, old: "one", new: "ONE" }, undefined, { beforePublish: async () => { staging++; await held; } });
+    // Path scope checks are asynchronous: establish the first lock holder
+    // before introducing the competing writer, rather than assuming I/O order.
+    await until(() => staging === 1);
     const second = safeEdit(f.project, { path: "src/a.txt", expected_sha256: expected, old: "two", new: "TWO" }, undefined, { beforePublish: () => { staging++; } });
     await until(() => staging === 1);
     await new Promise(resolve => setTimeout(resolve, 30));
