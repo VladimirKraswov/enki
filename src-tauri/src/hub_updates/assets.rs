@@ -249,14 +249,18 @@ impl<R: Runtime> Assets<R> for Empty {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Windows may return the same wall-clock tick to concurrent test threads.
+    // Keep create_dir exclusive while assigning every fixture a distinct suffix.
+    static FIXTURE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     fn fixture() -> (HotAssets, std::path::PathBuf) {
         let p = std::env::temp_dir().join(format!(
-            "arvela-hot-{}-{}",
+            "arvela-hot-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir(&p).unwrap();
         (
