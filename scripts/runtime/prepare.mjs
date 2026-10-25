@@ -234,6 +234,22 @@ export function pruneEmptyPackageDirectories(artifact, { maxEntries = 200_000, m
 export function runtimeNodeEntitlements(repo, identity) {
   return path.join(repo, 'src-tauri', identity === '-' ? 'runtime-node-adhoc.entitlements' : 'runtime-node.entitlements');
 }
+/** The pinned macOS prebuild ships spawn-helper without an executable bit.
+ * Normalize only owned physical helpers, before signing. Libraries stay as-is. */
+export function normalizePtyHelpers(app, platform) {
+  if (platform !== 'darwin-arm64') return;
+  const base = path.join(app, 'node_modules/node-pty');
+  if (physical(base) !== base) throw new Error('Packaged node-pty directory is not physical');
+  let found = false;
+  for (const suffix of ['build/Release', 'build/Debug', `prebuilds/${platform}`]) {
+    const directory = path.join(base, ...suffix.split('/')), file = path.join(directory, 'spawn-helper');
+    let stat;
+    try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (!stat.isFile() || physical(directory) !== directory || physical(file) !== file) throw new Error('Packaged PTY helper is not a physical file');
+    fs.chmodSync(file, 0o755); found = true;
+  }
+  if (!found) throw new Error('Packaged PTY spawn-helper is missing');
+}
 async function sign(artifact, platform, identity, repo, env, signal) {
   if (platform !== 'darwin-arm64') return;
   const magic = new Set(['feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca']);
@@ -255,7 +271,11 @@ const app=fs.realpathSync.native(process.cwd());const expected=path.join(app,'no
 if(root!==expected)throw Error('Packaged node-pty directory is not physical');
 const require=createRequire(path.join(app,'package.json'));const entry=fs.realpathSync.native(require.resolve('node-pty'));
 if(!entry.startsWith(root+path.sep))throw Error('node-pty resolved outside its packaged directory');
-const pty=require(entry);if(typeof pty.spawn!=='function')throw Error('Invalid packaged node-pty ABI');`;
+const pty=require(entry);if(typeof pty.spawn!=='function')throw Error('Invalid packaged node-pty ABI');
+if(process.platform==='darwin'){const native=require(path.join(root,'lib/utils.js')).loadNativeModule('pty');
+const helper=path.resolve(path.dirname(entry),native.dir,'spawn-helper');
+if(!helper.startsWith(root+path.sep)||!fs.lstatSync(helper).isFile()||fs.realpathSync.native(helper)!==helper)throw Error('Packaged PTY helper escaped');
+fs.accessSync(helper,fs.constants.X_OK);}`;
   await run(path.join(artifact, ...nodeRelative.split('/')), ['--input-type=module', '-e', probe], { cwd: app, env, signal, capture: true, timeoutMs: 30_000 });
 }
 /** Windows: compile the native runner from THIS authenticated source into a
@@ -354,6 +374,7 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
     const nodeRelative = `node/${pin.binary}`; materializeBinLinks(artifact, nodeRelative);
     if (remote) { if (platform !== 'linux-x64') throw new Error('Remote tarball requires Linux x64'); fs.mkdirSync(path.join(artifact, 'bin')); fs.writeFileSync(path.join(artifact, 'bin/enki-runtime'), REMOTE_LAUNCHER, { mode: 0o755 }); }
     pruneEmptyPackageDirectories(artifact);
+    normalizePtyHelpers(path.join(artifact, 'app'), platform);
     await sign(artifact, platform, signingIdentity, repo, env, signal);
     await verifyPackagedNodePty(artifact, nodeRelative, { env, signal });
     const manifest = buildManifest(artifact, { version, contract: lock.contract, node: nodeRelative, entry: 'app/dist/main.js' }); fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest, null, 2) + '\n');

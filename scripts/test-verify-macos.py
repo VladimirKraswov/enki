@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import subprocess
@@ -73,6 +74,8 @@ class NodeSigningPolicy(unittest.TestCase):
             file = root / relative
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_bytes(data)
+            if relative == "node/bin/node":
+                file.chmod(0o755)
         manifest = {"schema": 1, "node": "node/bin/node", "version": "fixture",
                     "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
         (root / "runtime-manifest.json").write_text(json.dumps(manifest))
@@ -103,6 +106,24 @@ class NodeSigningPolicy(unittest.TestCase):
             with patch.object(macos.subprocess, "run", side_effect=codesign):
                 with self.assertRaisesRegex(ValueError, "changed after manifest"):
                     macos.verify_runtime(app)
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable-mode fixture")
+    def test_final_bundle_rejects_a_non_executable_interpreter_or_pty_helper(self):
+        for relative in ["node/bin/node", "app/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"]:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory(prefix="verify-macos-fixture-") as directory:
+                app, root, codesign = self.runtime_fixture(directory, ADHOC, ADHOC_NODE)
+                target = root / relative
+                if not target.exists():
+                    target.parent.mkdir(parents=True)
+                    target.write_bytes(b"owned helper")
+                    manifest_path = root / "runtime-manifest.json"
+                    manifest = json.loads(manifest_path.read_text())
+                    manifest["files"][relative] = hashlib.sha256(target.read_bytes()).hexdigest()
+                    manifest_path.write_text(json.dumps(manifest))
+                target.chmod(0o644)
+                with patch.object(macos.subprocess, "run", side_effect=codesign):
+                    with self.assertRaisesRegex(ValueError, "no execute permission"):
+                        macos.verify_runtime(app)
 
 
 if __name__ == "__main__":

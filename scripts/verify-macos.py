@@ -4,6 +4,7 @@ Run on macOS after bundling: python3 scripts/verify-macos.py /path/to/App.app
 """
 import pathlib
 import plistlib
+import os
 import re
 import subprocess
 import sys
@@ -57,6 +58,9 @@ def verify_runtime(app):
         path = root / relative
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"Bundled runtime file is not a regular file: {relative}")
+        executable = relative == "node/bin/node" or relative.startswith("app/node_modules/node-pty/") and relative.endswith("/spawn-helper")
+        if os.name != "nt" and executable and not path.stat().st_mode & 0o111:
+            raise ValueError(f"Bundled runtime executable has no execute permission: {relative}")
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise ValueError(f"Bundled runtime file changed after manifest: {relative}")
         with path.open("rb") as file:

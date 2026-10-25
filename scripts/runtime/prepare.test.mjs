@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { buildEnvironment, download, materializeBinLinks, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, windowsWrapper } from './prepare.mjs';
+import { buildEnvironment, download, materializeBinLinks, normalizePtyHelpers, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, windowsWrapper } from './prepare.mjs';
 import { buildManifest, MANIFEST, verifyArtifact } from './artifact.mjs';
 const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'prepare-case-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -122,6 +122,22 @@ test('only the exact ad-hoc identity selects the Node library-validation excepti
   for (const identity of ['Developer ID Application: Example (TEAM123)', 'Apple Development: Example', ' - '])
     assert.equal(runtimeNodeEntitlements(repo, identity), path.join(repo, 'src-tauri/runtime-node.entitlements'));
 });
+test('macOS PTY helper becomes executable without changing addon bytes or accepting linked helpers', { skip: process.platform === 'win32' && 'POSIX executable-mode fixture' }, t => {
+  const root = temporary(t), app = path.join(root, 'app'), pkg = path.join(app, 'node_modules/node-pty');
+  const directory = path.join(pkg, 'prebuilds/darwin-arm64'); fs.mkdirSync(directory, { recursive: true });
+  const helper = path.join(directory, 'spawn-helper'), addon = path.join(directory, 'pty.node');
+  fs.writeFileSync(helper, 'owned helper', { mode: 0o644 }); fs.writeFileSync(addon, 'owned addon', { mode: 0o644 });
+  const bytes = hash(fs.readFileSync(helper));
+  normalizePtyHelpers(app, 'darwin-arm64');
+  assert.equal(fs.statSync(helper).mode & 0o777, 0o755); assert.equal(hash(fs.readFileSync(helper)), bytes);
+  assert.equal(fs.statSync(addon).mode & 0o777, 0o644);
+  fs.unlinkSync(helper);
+  assert.throws(() => normalizePtyHelpers(app, 'darwin-arm64'), /missing/);
+  const outside = path.join(root, 'outside'); fs.writeFileSync(outside, 'external', { mode: 0o600 }); fs.symlinkSync(outside, helper);
+  assert.throws(() => normalizePtyHelpers(app, 'darwin-arm64'), /physical file/);
+  assert.equal(fs.statSync(outside).mode & 0o777, 0o600);
+  normalizePtyHelpers(path.join(root, 'absent'), 'linux-x64'); normalizePtyHelpers(path.join(root, 'absent'), 'win32-x64');
+});
 test('final native-module probe uses the packaged interpreter and propagates actual load rejection', { skip: process.platform === 'win32' && 'POSIX copied-interpreter fixture; Windows preparation uses its native job runner' }, async t => {
   const root = temporary(t), artifact = path.join(root, 'artifact');
   fs.mkdirSync(path.join(artifact, 'node/bin'), { recursive: true });
@@ -130,6 +146,11 @@ test('final native-module probe uses the packaged interpreter and propagates act
   fs.writeFileSync(path.join(app, 'package.json'), '{"name":"owned-probe-fixture"}');
   fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"node-pty","main":"index.cjs"}');
   fs.writeFileSync(path.join(pkg, 'index.cjs'), `if(process.execPath!==${JSON.stringify(path.join(artifact, 'node/bin/node'))})throw Error('EXTERNAL_INTERPRETER');module.exports={spawn(){}};`);
+  const helperDir = path.join(pkg, 'prebuilds/darwin-arm64'); fs.mkdirSync(helperDir, { recursive: true });
+  const helper = path.join(helperDir, 'spawn-helper'); fs.writeFileSync(helper, 'owned helper', { mode: 0o644 });
+  fs.mkdirSync(path.join(pkg, 'lib')); fs.writeFileSync(path.join(pkg, 'lib/utils.js'), "exports.loadNativeModule=()=>({dir:'prebuilds/darwin-arm64'});");
+  if (process.platform === 'darwin') await assert.rejects(verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } }), /EACCES/);
+  normalizePtyHelpers(app, 'darwin-arm64');
   await verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } });
   fs.writeFileSync(path.join(pkg, 'index.cjs'), "throw Error('OWN_POST_SIGN_LOAD_REJECTED');");
   await assert.rejects(verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } }), /OWN_POST_SIGN_LOAD_REJECTED/);
