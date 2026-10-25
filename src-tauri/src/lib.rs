@@ -27,6 +27,7 @@ mod storage_info;
 mod tray;
 mod updates;
 mod usage_store;
+mod webview_profile;
 pub mod workshop;
 use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -59,15 +60,17 @@ pub fn run() {
     }
     let hot = hub_updates::assets::HotAssets::load();
     let mut context = tauri::generate_context!();
+    let mut profile_windows = Vec::new();
+    let mut webview_profile = None;
     if let Some(profile) = &profile {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(profile.to_string_lossy().as_bytes());
-        let mut identifier = [0_u8; 16];
-        identifier.copy_from_slice(&hash[..16]);
-        for window in &mut context.config_mut().app.windows {
-            window.data_directory = Some(profile.join("webview"));
-            window.data_store_identifier = Some(identifier);
-        }
+        webview_profile = Some(
+            webview_profile::WebviewProfile::new(profile.clone())
+                .expect("Не удалось изолировать WebView тестового профиля"),
+        );
+        profile_windows =
+            webview_profile::WebviewProfile::defer_windows(&mut context.config_mut().app.windows);
         // Also isolate OS/application identity-dependent caches of test profiles.
         context.config_mut().identifier = format!(
             "dev.enki.profile.{}",
@@ -94,7 +97,14 @@ pub fn run() {
         .manage(capabilities::SharedRuntime::default())
         .manage(browser::BrowserRuntime::default())
         .manage(control::AgentControl::default())
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(profile) = &webview_profile {
+                for window in &profile_windows {
+                    profile
+                        .apply(tauri::WebviewWindowBuilder::from_config(app, window)?)
+                        .build()?;
+                }
+            }
             // Agent Control is optional. A socket that cannot be created (for
             // example a data path beyond the OS socket-name limit) must not stop
             // Desktop from starting; its status then reports it as unavailable.

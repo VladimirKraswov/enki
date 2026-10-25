@@ -63,11 +63,11 @@ pub async fn browser_monitor(
             let monitor = if let Some(existing) = app.get_webview_window(LABEL) {
                 existing
             } else {
-                let monitor = WebviewWindowBuilder::new(
+                let monitor = crate::webview_profile::apply_current(WebviewWindowBuilder::new(
                     &app,
                     LABEL,
                     WebviewUrl::App("index.html?view=browser-monitor".into()),
-                )
+                ))?
                 .title("Браузер · Enki")
                 .inner_size(438.0, 334.0)
                 .resizable(false)

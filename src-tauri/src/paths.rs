@@ -250,6 +250,7 @@ pub fn opencode_data_dir() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "windows"))]
     use std::fs;
     use std::path::Path;
     use std::sync::{Mutex, MutexGuard};
