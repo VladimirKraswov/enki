@@ -260,6 +260,12 @@ pub(crate) fn npm_cli(node: &Path) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
+    fn fixture_path(relative: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join("enki-node-logical-fixture")
+            .join(relative)
+    }
+
     #[test]
     fn version_manager_directories_are_ordered_newest_first() {
         let root = std::env::temp_dir().join(format!(
@@ -325,7 +331,7 @@ mod tests {
         };
         let walked = Arc::new(AtomicBool::new(false));
         let flag = walked.clone();
-        let bundled = PathBuf::from("/fixture/enki/node/bin/node");
+        let bundled = fixture_path("enki/node/bin/node");
         let chosen = select(
             vec![
                 Box::new({
@@ -334,9 +340,7 @@ mod tests {
                 }),
                 Box::new(move || {
                     flag.store(true, Ordering::SeqCst);
-                    vec![PathBuf::from(
-                        "/fixture/home/.nvm/versions/node/v24.1.0/bin/node",
-                    )]
+                    vec![fixture_path("home/.nvm/versions/node/v24.1.0/bin/node")]
                 }),
             ],
             |_| true,
@@ -346,11 +350,11 @@ mod tests {
         assert!(!walked.load(Ordering::SeqCst), "later group was evaluated");
 
         // Normal discovery is kept: an unusable bundled Node falls through.
-        let user = PathBuf::from("/fixture/home/.nvm/versions/node/v24.1.0/bin/node");
+        let user = fixture_path("home/.nvm/versions/node/v24.1.0/bin/node");
         let mut probed = Vec::new();
         let chosen = select(
             vec![
-                Box::new(|| vec![PathBuf::from("/fixture/enki/node/bin/node")]),
+                Box::new(|| vec![fixture_path("enki/node/bin/node")]),
                 Box::new({
                     let user = user.clone();
                     move || vec![user]
@@ -369,7 +373,7 @@ mod tests {
     #[test]
     fn production_groups_put_the_bundled_node_first_and_stat_no_home_path_after_it() {
         let home = fixture_home("lazy");
-        let bundled = PathBuf::from("/fixture/enki/node/bin/node");
+        let bundled = fixture_path("enki/node/bin/node");
         let mut first = groups(Some(bundled.clone()), Some(home.clone()));
         assert_eq!(first.remove(0)(), vec![bundled.clone()]);
         let asked = std::cell::RefCell::new(Vec::new());
@@ -397,11 +401,9 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         assert!(owner_candidates.contains(&home.join(".nvm/versions/node/v24.1.0/bin/node")));
         // An isolated profile considers no path below the owner's HOME.
-        let profile = crate::paths::discovery_home_for(
-            Ok(Some(PathBuf::from("/fixture/profile"))),
-            Ok(home.clone()),
-        )
-        .unwrap();
+        let profile =
+            crate::paths::discovery_home_for(Ok(Some(fixture_path("profile"))), Ok(home.clone()))
+                .unwrap();
         assert!(profile.is_none());
         let isolated = evaluate(groups(None, profile));
         assert!(
@@ -418,7 +420,7 @@ mod tests {
 
     #[test]
     fn probing_is_bounded_and_duplicates_are_probed_once() {
-        let same = PathBuf::from("/fixture/node");
+        let same = fixture_path("node");
         let mut probes = 0;
         let result = select(
             vec![
@@ -428,7 +430,7 @@ mod tests {
                 }),
                 Box::new(|| {
                     (0..20)
-                        .map(|i| PathBuf::from(format!("/fixture/old-{i}/node")))
+                        .map(|i| fixture_path(&format!("old-{i}/node")))
                         .collect()
                 }),
                 Box::new(|| vec![PathBuf::from("relative/node")]),

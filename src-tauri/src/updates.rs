@@ -108,7 +108,11 @@ fn snapshot(dir: &Path, data: &str) -> Result<(), String> {
     private(dir)?;
     let temp = dir.join("data.partial");
     fs::write(&temp, data).map_err(|e| e.to_string())?;
-    fs::File::open(&temp)
+    // FlushFileBuffers requires write access on Windows, even after fs::write.
+    fs::OpenOptions::new()
+        .read(true)
+        .write(cfg!(target_os = "windows"))
+        .open(&temp)
         .and_then(|f| f.sync_all())
         .map_err(|e| e.to_string())?;
     fs::rename(temp, dir.join("data.json")).map_err(|e| e.to_string())

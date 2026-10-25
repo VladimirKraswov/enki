@@ -55,21 +55,28 @@ pub fn config_path() -> Result<PathBuf, String> {
 /// explicit profile (see [`crate::paths::discovery_home`]).
 fn candidates(data: Option<&Path>, home: Option<&Path>) -> Vec<(LspServer, Vec<PathBuf>)> {
     // A language server installed by an earlier Enki build is still usable.
-    let mut typescript: Vec<PathBuf> = data
+    let typescript: Vec<PathBuf> = data
         .map(|d| d.join("pi-runtime/node_modules/.bin/typescript-language-server"))
         .into_iter()
         .collect();
-    typescript.push(PathBuf::from("/usr/local/bin/typescript-language-server"));
-    typescript.push(PathBuf::from(
-        "/opt/homebrew/bin/typescript-language-server",
-    ));
-    let mut rust = vec![
+    #[cfg(not(target_os = "windows"))]
+    let typescript = {
+        let mut paths = typescript;
+        paths.extend([
+            PathBuf::from("/usr/local/bin/typescript-language-server"),
+            PathBuf::from("/opt/homebrew/bin/typescript-language-server"),
+        ]);
+        paths
+    };
+    let mut rust = Vec::new();
+    #[cfg(not(target_os = "windows"))]
+    rust.extend([
         PathBuf::from("/usr/bin/rust-analyzer"),
         PathBuf::from("/usr/local/bin/rust-analyzer"),
         PathBuf::from("/opt/homebrew/bin/rust-analyzer"),
-    ];
+    ]);
     if let Some(home) = home {
-        rust.insert(0, home.join(".cargo/bin/rust-analyzer"));
+        rust.insert(0, home.join(rust_analyzer_relative()));
     }
     vec![
         (
@@ -95,6 +102,14 @@ fn candidates(data: Option<&Path>, home: Option<&Path>) -> Vec<(LspServer, Vec<P
             rust,
         ),
     ]
+}
+
+fn rust_analyzer_relative() -> &'static str {
+    if cfg!(target_os = "windows") {
+        ".cargo/bin/rust-analyzer.exe"
+    } else {
+        ".cargo/bin/rust-analyzer"
+    }
 }
 
 /// `#!/usr/bin/env node` servers must find the bundled interpreter.
@@ -206,7 +221,12 @@ mod tests {
             .into_iter()
             .flat_map(|(_, paths)| paths)
             .collect();
-        assert!(owner.contains(&home.join(".cargo/bin/rust-analyzer")));
+        let expected = if cfg!(target_os = "windows") {
+            ".cargo/bin/rust-analyzer.exe"
+        } else {
+            ".cargo/bin/rust-analyzer"
+        };
+        assert!(owner.contains(&home.join(expected)));
         let profile =
             crate::paths::discovery_home_for(Ok(Some(data.clone())), Ok(home.clone())).unwrap();
         let isolated: Vec<PathBuf> = candidates(Some(&data), profile.as_deref())
