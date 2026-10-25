@@ -7,7 +7,10 @@ export function generatedFileUrl(value:unknown,archive=false):value is string{
 }
 export function imageResult(output:unknown):ImageResult|null{
  if(typeof output!=='string'||output.length>32768||!output.includes('"enkiImages"'))return null;
- try{const r=JSON.parse(output);if(r.enkiImages!==1||typeof r.status!=='string'||!Array.isArray(r.images)||r.images.length>8||!r.images.every((i:GeneratedImage)=>i&&typeof i.name==='string'&&/^(?:image-\d{2}|normal|height|roughness|metallic|relight|relight-right|tile-preview)\.png$/.test(i.name)&&generatedFileUrl(i.url)&&(i.previewUrl===undefined||generatedFileUrl(i.previewUrl)))||(r.archive!==undefined&&!generatedFileUrl(r.archive,true)))return null;return r}catch{return null}
+ // SDK history projects Vision blocks as these exact trailing markers. Keep
+ // the original size/path limits and reject every other non-JSON suffix.
+ const json=output.replace(/(?:\n\[изображение\]){1,8}$/u,'');
+ try{const r=JSON.parse(json);if(r.enkiImages!==1||typeof r.status!=='string'||!Array.isArray(r.images)||r.images.length>8||!r.images.every((i:GeneratedImage)=>i&&typeof i.name==='string'&&/^(?:image-\d{2}|normal|height|roughness|metallic|relight|relight-right|tile-preview)\.png$/.test(i.name)&&generatedFileUrl(i.url)&&(i.previewUrl===undefined||generatedFileUrl(i.previewUrl)))||(r.archive!==undefined&&!generatedFileUrl(r.archive,true)))return null;return r}catch{return null}
 }
 
 // A streamed turn re-renders on every delta: parse each tool output once. The
