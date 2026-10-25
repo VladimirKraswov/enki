@@ -1,0 +1,53 @@
+name: Windows runtime diagnostic (scratch only)
+
+on:
+  push:
+    branches: [diagnostic/windows-runtime-20261025]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-runtime-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, same as desktop CI
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, same as desktop CI
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: src-tauri/resources/agent/package-lock.json
+      # This stdlib-only probe runs before installing/importing the SDK. Every
+      # failed syscall is recorded independently; an expected syscall failure
+      # is evidence, not a successful fsync or a reason to skip the other modes.
+      - name: Owned file/directory fsync modes (no SDK)
+        id: probe
+        run: node scripts/diagnostics/windows-fsync-probe.cjs
+      - name: Locked runtime dependencies (no lifecycle hooks)
+        id: deps
+        run: npm ci --prefix src-tauri/resources/agent --ignore-scripts
+      - name: Locked node-pty lifecycle (same command as desktop CI)
+        id: pty
+        run: npm rebuild --prefix src-tauri/resources/agent node-pty
+      - name: Runtime typecheck (same command as desktop CI)
+        id: types
+        run: npm --prefix src-tauri/resources/agent run typecheck
+      - name: One real SDK prompt and direct attachment error
+        id: actual
+        working-directory: src-tauri/resources/agent
+        run: node node_modules/vitest/vitest.mjs run test/integration/windows-diagnostic-owned.test.ts --reporter=verbose --maxWorkers=1
+      # Keep the original assertions, default 30s per-test bound, worker count
+      # and public SDK profile setup. Stop this finite original subset at its
+      # first failure; never repeat the full runtime suite on this branch.
+      - name: Original finite regression subset (first failure only)
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.pty.outcome == 'success' && steps.types.outcome == 'success' }}
+        working-directory: src-tauri/resources/agent
+        run: node node_modules/vitest/vitest.mjs run test/queue-unit.test.ts test/integration/turn-outcome.test.ts test/profile-env.test.ts test/project-tools.test.ts --reporter=verbose --maxWorkers=1 --bail=1
+
+# Diagnostic scratch branch only: no production package/install/publication,
+# credentials, owner profiles, external model calls, Hub or real providers.
