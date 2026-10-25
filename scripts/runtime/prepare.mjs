@@ -177,13 +177,15 @@ function pruneForeignNative(app, platform) {
   const native = path.join(app, 'node_modules/@earendil-works/pi-tui/native');
   if (fs.existsSync(native)) for (const item of ['darwin', 'win32']) if (!platform.startsWith(item)) fs.rmSync(path.join(native, item), { recursive: true, force: true });
 }
-/** npm prune may leave empty scope directories. Normalize only the owned,
- * quiescent app/node_modules staging tree before signing/inventory. Validate the
- * entire bounded tree first; never follow links or remove files/nonempty dirs. */
+/** npm prune and official Node archives may contain empty package directories.
+ * Normalize the owned, quiescent app dependencies and bundled Node tree before
+ * signing/inventory. Validate both bounded trees before removing anything;
+ * never follow links or remove files/nonempty dirs. */
 export function pruneEmptyPackageDirectories(artifact, { maxEntries = 200_000, maxDepth = 64 } = {}) {
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 200_000 ||
       !Number.isSafeInteger(maxDepth) || maxDepth < 1 || maxDepth > 64) throw new Error('Invalid package cleanup bounds');
   const root = path.resolve(artifact), packages = path.join(root, 'app/node_modules'), directories = new Map(), empty = [];
+  const roots = new Set([packages]);
   const inspect = directory => {
     const stat = fs.lstatSync(directory, { bigint: true });
     if (stat.isSymbolicLink() || !stat.isDirectory() || physical(directory) !== directory) throw new Error('Package cleanup requires physical directories');
@@ -194,6 +196,9 @@ export function pruneEmptyPackageDirectories(artifact, { maxEntries = 200_000, m
     if (!before || stat.dev !== before.dev || stat.ino !== before.ino) throw new Error('Package directory changed during cleanup');
   };
   for (const directory of [root, path.join(root, 'app')]) directories.set(directory, inspect(directory));
+  const bundledNode = path.join(root, 'node');
+  try { inspect(bundledNode); roots.add(bundledNode); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   let entries = 0;
   const walk = (directory, depth) => {
     if (depth > maxDepth) throw new Error('Package cleanup exceeds depth limit');
@@ -213,10 +218,10 @@ export function pruneEmptyPackageDirectories(artifact, { maxEntries = 200_000, m
       }
     } finally { dir.closeSync(); }
     unchanged(directory);
-    if (removable && directory !== packages) empty.push(directory);
+    if (removable && !roots.has(directory)) empty.push(directory);
     return removable;
   };
-  walk(packages, 0);
+  for (const directory of roots) walk(directory, 0);
   // Postorder, non-recursive removal. Recheck every owned ancestor's identity;
   // a newly nonempty directory makes rmdir fail rather than deleting its files.
   for (const directory of empty) {

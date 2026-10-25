@@ -61,7 +61,7 @@ test('npm-pruned empty scopes are removed before strict manifest verification wi
   const removed = pruneEmptyPackageDirectories(artifact);
   for (const scope of scopes) assert.ok(removed.includes(`app/node_modules/${scope}`), scope);
   assert.equal(fs.existsSync(path.join(modules, '@empty')), false, 'empty parents disappear after their children');
-  assert.ok(fs.statSync(unrelated).isDirectory(), 'only artifact/app/node_modules is normalized');
+  assert.ok(fs.statSync(unrelated).isDirectory(), 'cleanup stays inside the owned artifact');
   assert.ok(fs.statSync(modules).isDirectory(), 'the staging node_modules root remains');
   for (const [relative, data] of Object.entries(contents)) {
     const file = path.join(artifact, relative), after = fs.statSync(file);
@@ -72,6 +72,37 @@ test('npm-pruned empty scopes are removed before strict manifest verification wi
   assert.deepEqual(buildManifest(artifact, manifest), manifest, 'manifest-covered bytes are identical');
   assert.deepEqual(verifyArtifact(artifact), [], 'strict inventory now passes without any verifier exception');
   assert.deepEqual(pruneEmptyPackageDirectories(artifact), [], 'normalization is idempotent');
+});
+for (const packages of ['node/node_modules', 'node/lib/node_modules']) test(`official Node empty npm directories are normalized in ${packages} without changing packaged files`, t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact');
+  const contents = {
+    'node/bin/node': Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+    'app/dist/main.js': Buffer.from('export const runtime = true;\n'),
+    'app/node_modules/.package-lock.json': Buffer.from('{}'),
+    [`${packages}/npm/LICENSE`]: Buffer.from('npm license fixture'),
+  };
+  for (const [relative, data] of Object.entries(contents)) {
+    const file = path.join(artifact, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data);
+  }
+  const empty = `${packages}/npm/tap-snapshots/workspaces/arborist`;
+  fs.mkdirSync(path.join(artifact, empty), { recursive: true });
+  const manifest = buildManifest(artifact, { version: '0.85.1-0123', contract: 1, node: 'node/bin/node', entry: 'app/dist/main.js' });
+  fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest));
+  assert.ok(verifyArtifact(artifact).includes(`unlisted empty directory ${empty}`));
+  assert.ok(pruneEmptyPackageDirectories(artifact).includes(empty));
+  for (const [relative, data] of Object.entries(contents)) assert.deepEqual(fs.readFileSync(path.join(artifact, relative)), data);
+  assert.deepEqual(buildManifest(artifact, manifest), manifest, 'all inventory-covered bytes remain identical');
+  assert.deepEqual(verifyArtifact(artifact), [], 'the original strict verifier accepts the normalized tree');
+  assert.deepEqual(pruneEmptyPackageDirectories(artifact), []);
+});
+test('a link in bundled Node refuses cleanup before any app dependency directory is removed', t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact'), empty = path.join(artifact, 'app/node_modules/empty'), outside = path.join(root, 'outside');
+  fs.mkdirSync(empty, { recursive: true }); fs.mkdirSync(path.join(artifact, 'node')); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'LICENSE'), 'OUTSIDE_UNCHANGED');
+  fs.symlinkSync(outside, path.join(artifact, 'node/escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => pruneEmptyPackageDirectories(artifact), /symbolic links/);
+  assert.ok(fs.statSync(empty).isDirectory(), 'both trees are validated before any removal');
+  assert.equal(fs.readFileSync(path.join(outside, 'LICENSE'), 'utf8'), 'OUTSIDE_UNCHANGED');
 });
 for (const dangling of [false, true]) test(`empty-package cleanup refuses ${dangling ? 'dangling' : 'escaping'} links before removing anything`, t => {
   const root = temporary(t), artifact = path.join(root, 'artifact'), modules = path.join(artifact, 'app/node_modules');

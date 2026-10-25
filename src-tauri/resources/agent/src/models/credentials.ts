@@ -12,6 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Broker } from "../control/broker.ts";
 import type { SdkAuthOptions, SdkCredential, SdkCredentialInfo, SdkCredentialStore } from "../sdk/adapter.ts";
 import { ConfigProjection } from "./config.ts";
+import { readCredential } from "./credential-reads.ts";
 
 function isCredential(value: unknown): value is SdkCredential {
   if (!value || typeof value !== "object") return false;
@@ -41,7 +42,7 @@ export class VaultCredentialStore implements SdkCredentialStore {
     if (!validProvider(providerId)) return { credential: undefined, revision: 0, stored: false };
     // Before any provider request: unresolved bindings refuse, no ambient key.
     this.config.assertAdmissible(providerId);
-    const result = await this.broker.call<{ value: string | null; revision: number }>("vault.credentialRead", { providerId }, signal);
+    const result = await readCredential(this.broker, providerId, signal, () => this.config.assertAdmissible(providerId));
     if (result.value === null) {
       // SDK precedence: a stored credential wins; models.json apiKey is the fallback.
       const key = this.config.apiKey(providerId);

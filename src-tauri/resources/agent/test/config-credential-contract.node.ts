@@ -140,3 +140,34 @@ test("fake broker contract: a reused CAS operation id with a changed value or nu
   await assert.rejects(cas("B"), /CONFIG_OPERATION_CONFLICT/);
   await assert.rejects(cas(null), /CONFIG_OPERATION_CONFLICT/);
 });
+
+test("actual SDK parallel provider auth across stores does not overflow the native broker", async () => {
+  let active = 0, maximum = 0;
+  const seen: string[] = [];
+  const broker: Broker = {
+    kind: "supervisor", available: () => true,
+    async call<T>(method: BrokerMethod, params: Record<string, unknown>): Promise<T> {
+      assert.equal(method, "vault.credentialRead");
+      active++; maximum = Math.max(maximum, active);
+      try {
+        if (active > 4) throw Error("native broker capacity exceeded");
+        await Promise.resolve();
+        const id = String(params.providerId); seen.push(id);
+        return { value: JSON.stringify({ type: "api_key", key: `fixture-${id}` }), revision: 1 } as T;
+      } finally { active--; }
+    },
+  };
+  const models = [new VaultCredentialStore(broker), new VaultCredentialStore(broker)].map(credentials =>
+    createModels({ credentials, authContext: { env: async () => undefined, fileExists: async () => false } }));
+  const ids = Array.from({ length: 100 }, (_, i) => `burst-${i}`);
+  for (const id of ids) {
+    const faux = fauxProvider({ provider: id, models: [{ id: "fixture-model", contextWindow: 8192, maxTokens: 64 }] });
+    for (const collection of models) collection.setProvider({ ...faux.provider, auth: { apiKey: {
+      name: "Fixture credential", resolve: async ({ credential }) => credential?.key ? { auth: { apiKey: credential.key }, source: "fixture" } : undefined,
+    } } });
+  }
+  const results = await Promise.all(ids.map((id, i) => models[i % 2].getAuth(id)));
+  assert.deepEqual(results.map(r => r?.auth.apiKey), ids.map(id => `fixture-${id}`));
+  assert.equal(seen.length, ids.length);
+  assert.ok(maximum <= 4, "all auth reads must fit the existing native capacity");
+});
