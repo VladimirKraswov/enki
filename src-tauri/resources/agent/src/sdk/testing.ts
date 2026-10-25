@@ -35,6 +35,8 @@ export async function scriptedRuntime(agentDir: string): Promise<ScriptedRuntime
       { id: "scripted-vision", name: "Scripted vision", contextWindow: 64_000, maxTokens: 2_000, reasoning: false, input: ["text", "image"] },
     ],
     tokensPerSecond: 100_000,
+    // SCRATCH experiment: same real deltas, fewer sub-millisecond timers.
+    tokenSize: { min: 16, max: 32 },
   });
   modelRuntime.registerNativeProvider(faux.provider);
   // The scripted provider needs no secret; a runtime-only key satisfies the

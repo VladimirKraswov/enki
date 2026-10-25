@@ -25,6 +25,8 @@ jobs:
       # This stdlib-only probe runs before installing/importing the SDK. Every
       # failed syscall is recorded independently; an expected syscall failure
       # is evidence, not a successful fsync or a reason to skip the other modes.
+      - name: Actual sub-millisecond timer resolution (no SDK)
+        run: node scripts/diagnostics/windows-faux-timer-probe.cjs
       - name: Owned file/directory fsync modes (no SDK)
         id: probe
         run: node scripts/diagnostics/windows-fsync-probe.cjs
@@ -47,7 +49,7 @@ jobs:
       - name: Original finite regression subset (first failure only)
         if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.pty.outcome == 'success' && steps.types.outcome == 'success' }}
         working-directory: src-tauri/resources/agent
-        run: node node_modules/vitest/vitest.mjs run test/queue-unit.test.ts test/integration/turn-outcome.test.ts test/profile-env.test.ts test/project-tools.test.ts test/owned-sync.test.ts test/integration/owned-output.test.ts test/legacy-import.test.ts --reporter=verbose --maxWorkers=1 --bail=1
+        run: node node_modules/vitest/vitest.mjs run test/queue-unit.test.ts test/integration/turn-outcome.test.ts test/profile-env.test.ts test/project-tools.test.ts test/owned-sync.test.ts test/integration/owned-output.test.ts test/legacy-import.test.ts test/integration/model-context.test.ts test/integration/model-transition.test.ts --reporter=verbose --maxWorkers=1 --bail=1
 
       - name: Original finite paired-backup and daemon lifecycle cases
         if: ${{ !cancelled() && steps.deps.outcome == 'success' && steps.pty.outcome == 'success' && steps.types.outcome == 'success' }}
