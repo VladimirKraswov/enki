@@ -302,21 +302,24 @@ it("unknown usage right after compaction is estimated, never treated as fitting"
   expect(h.runtime.catalog.get(sid)?.model?.modelID).toBe(h.scripted.models.large);
 });
 
-it("a caller's effective 4k budget refuses the irreducible shipped system and tools before any model call", async () => {
+it("a small caller budget refuses the irreducible shipped system and tools before any model call", async () => {
   h = await harness();
-  const dir = h.project("ctx-irreducible-4k");
+  const dir = h.project("ctx-irreducible-small-budget");
   const sid = await longChat(h, dir);
   const historyBefore = (await h.request<unknown>("GET", `/sessions/${sid}/messages`)).body;
   const calls = recorder(h);
   const providerCalls = h.scripted.calls();
   const pendingResponses = h.scripted.pending();
   const cursor = h.runtime.journal.head;
-  await h.command({ id: "fixed-prefix-4k", kind: "model.transition", sessionID: sid, directory: dir,
-    payload: { model: h.model("small"), budget: 3_488 } });
-  const receipt = await h.waitReceipt("fixed-prefix-4k", ["completed", "failed", "rejected"]);
+  // A caller may lower the model's input limit. Keep this far below the shipped
+  // prefix, whose exact size includes platform-dependent absolute SDK paths.
+  const budget = 512;
+  await h.command({ id: "fixed-prefix-small-budget", kind: "model.transition", sessionID: sid, directory: dir,
+    payload: { model: h.model("small"), budget } });
+  const receipt = await h.waitReceipt("fixed-prefix-small-budget", ["completed", "failed", "rejected"]);
   expect(receipt.state).toBe("failed");
   expect(receipt.error).toMatch(/системными инструкциями и инструментами/);
-  expect(receipt.error).toMatch(/3488/);
+  expect(receipt.error).toMatch(/512/);
   expect(calls).toEqual([]);
   expect(calls.summaries).toEqual([]);
   expect(h.scripted.calls()).toBe(providerCalls);
@@ -324,9 +327,9 @@ it("a caller's effective 4k budget refuses the irreducible shipped system and to
   expect(h.runtime.catalog.get(sid)?.model?.modelID).toBe(h.scripted.models.large);
   expect((await h.request<unknown>("GET", `/sessions/${sid}/messages`)).body).toEqual(historyBefore);
   expect(await users(h, sid)).toEqual({ users: 2, summary: false });
-  const phases = transitions(h, sid, cursor, "fixed-prefix-4k");
+  const phases = transitions(h, sid, cursor, "fixed-prefix-small-budget");
   const planning = phases.find((phase) => phase.phase === "planning")!;
-  expect(planning).toMatchObject({ window: 8_000, limit: 3_488, incoming: 0 });
+  expect(planning).toMatchObject({ window: 8_000, limit: budget, incoming: 0 });
   expect(planning.system!).toBeGreaterThan(0);
   expect(planning.tools!).toBeGreaterThan(0);
   expect(planning.system! + planning.tools!).toBeGreaterThan(planning.limit!);

@@ -177,6 +177,57 @@ function pruneForeignNative(app, platform) {
   const native = path.join(app, 'node_modules/@earendil-works/pi-tui/native');
   if (fs.existsSync(native)) for (const item of ['darwin', 'win32']) if (!platform.startsWith(item)) fs.rmSync(path.join(native, item), { recursive: true, force: true });
 }
+/** npm prune may leave empty scope directories. Normalize only the owned,
+ * quiescent app/node_modules staging tree before signing/inventory. Validate the
+ * entire bounded tree first; never follow links or remove files/nonempty dirs. */
+export function pruneEmptyPackageDirectories(artifact, { maxEntries = 200_000, maxDepth = 64 } = {}) {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 200_000 ||
+      !Number.isSafeInteger(maxDepth) || maxDepth < 1 || maxDepth > 64) throw new Error('Invalid package cleanup bounds');
+  const root = path.resolve(artifact), packages = path.join(root, 'app/node_modules'), directories = new Map(), empty = [];
+  const inspect = directory => {
+    const stat = fs.lstatSync(directory, { bigint: true });
+    if (stat.isSymbolicLink() || !stat.isDirectory() || physical(directory) !== directory) throw new Error('Package cleanup requires physical directories');
+    return stat;
+  };
+  const unchanged = directory => {
+    const stat = inspect(directory), before = directories.get(directory);
+    if (!before || stat.dev !== before.dev || stat.ino !== before.ino) throw new Error('Package directory changed during cleanup');
+  };
+  for (const directory of [root, path.join(root, 'app')]) directories.set(directory, inspect(directory));
+  let entries = 0;
+  const walk = (directory, depth) => {
+    if (depth > maxDepth) throw new Error('Package cleanup exceeds depth limit');
+    directories.set(directory, inspect(directory));
+    let removable = true;
+    const dir = fs.opendirSync(directory);
+    try {
+      let entry;
+      while ((entry = dir.readSync()) !== null) {
+        if (++entries > maxEntries) throw new Error('Package cleanup exceeds entry limit');
+        const full = path.join(directory, entry.name), stat = fs.lstatSync(full);
+        if (!safeRelative(path.relative(root, full).split(path.sep).join('/'))) throw new Error('Unsafe package cleanup path');
+        if (stat.isSymbolicLink()) throw new Error('Package cleanup refuses symbolic links');
+        if (stat.isDirectory()) { if (!walk(full, depth + 1)) removable = false; }
+        else if (stat.isFile()) removable = false;
+        else throw new Error('Package cleanup refuses special files');
+      }
+    } finally { dir.closeSync(); }
+    unchanged(directory);
+    if (removable && directory !== packages) empty.push(directory);
+    return removable;
+  };
+  walk(packages, 0);
+  // Postorder, non-recursive removal. Recheck every owned ancestor's identity;
+  // a newly nonempty directory makes rmdir fail rather than deleting its files.
+  for (const directory of empty) {
+    for (let ancestor = directory; ; ancestor = path.dirname(ancestor)) {
+      unchanged(ancestor);
+      if (ancestor === root) break;
+    }
+    fs.rmdirSync(directory);
+  }
+  return empty.map(directory => path.relative(root, directory).split(path.sep).join('/'));
+}
 async function sign(artifact, platform, identity, repo, env, signal) {
   if (platform !== 'darwin-arm64') return;
   const magic = new Set(['feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca']);
@@ -282,6 +333,7 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
     for (const name of ['include', 'share', 'README.md', 'CHANGELOG.md']) fs.rmSync(path.join(artifact, 'node', name), { recursive: true, force: true });
     const nodeRelative = `node/${pin.binary}`; materializeBinLinks(artifact, nodeRelative);
     if (remote) { if (platform !== 'linux-x64') throw new Error('Remote tarball requires Linux x64'); fs.mkdirSync(path.join(artifact, 'bin')); fs.writeFileSync(path.join(artifact, 'bin/enki-runtime'), REMOTE_LAUNCHER, { mode: 0o755 }); }
+    pruneEmptyPackageDirectories(artifact);
     await sign(artifact, platform, signingIdentity, repo, env, signal);
     const manifest = buildManifest(artifact, { version, contract: lock.contract, node: nodeRelative, entry: 'app/dist/main.js' }); fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest, null, 2) + '\n');
     const errors = verifyArtifact(artifact); if (errors.length) throw new Error(errors.slice(0, 5).join('; '));

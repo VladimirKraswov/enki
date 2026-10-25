@@ -19,7 +19,7 @@ import type { SdkExtension, SdkExtensionApi } from "../src/sdk/adapter.ts";
 export const ORIGIN = "tauri://localhost";
 
 export function tempDir(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `enki-${prefix}-`));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `enki-${prefix}-`)));
 }
 
 export interface Harness {

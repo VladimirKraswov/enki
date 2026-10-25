@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { buildEnvironment, download, materializeBinLinks, posixWrapper, run, windowsWrapper } from './prepare.mjs';
+import { buildEnvironment, download, materializeBinLinks, posixWrapper, pruneEmptyPackageDirectories, run, windowsWrapper } from './prepare.mjs';
 import { buildManifest, MANIFEST, verifyArtifact } from './artifact.mjs';
 const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'prepare-case-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -34,6 +34,71 @@ test('cancelled download leaves no partial and does not replace a previously ver
   const root = temporary(t), file = path.join(root, 'archive'), controller = new AbortController(); fs.writeFileSync(file, 'old'); controller.abort(new Error('OWNED_CANCEL'));
   await assert.rejects(download('https://primary.invalid/a', file, hash('new'), { signal: controller.signal, fetcher: () => { throw new Error('must not fetch'); } }), /OWNED_CANCEL/);
   assert.equal(fs.readFileSync(file, 'utf8'), 'old'); assert.deepEqual(fs.readdirSync(root), ['archive']);
+});
+test('npm-pruned empty scopes are removed before strict manifest verification without changing runtime files', t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact'), modules = path.join(artifact, 'app/node_modules');
+  const contents = {
+    'node/bin/node': Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+    'app/dist/main.js': Buffer.from('export const runtime = true;\n'),
+    'app/node_modules/.package-lock.json': Buffer.from('{}'),
+    'app/node_modules/.bin/sdk': Buffer.from('#!/bin/sh\nexit 0\n'),
+    'app/node_modules/@earendil-works/pi-coding-agent/LICENSE': Buffer.from('SDK license fixture'),
+    'app/node_modules/@earendil-works/pi-coding-agent/assets/help.txt': Buffer.from('SDK asset fixture'),
+    'app/node_modules/node-pty/LICENSE': Buffer.from('PTY license fixture'),
+  };
+  for (const [relative, data] of Object.entries(contents)) {
+    const file = path.join(artifact, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data);
+  }
+  const scopes = ['@esbuild', '@jridgewell', '@oxc-project', '@rolldown', '@standard-schema'];
+  for (const scope of scopes) fs.mkdirSync(path.join(modules, scope));
+  fs.mkdirSync(path.join(modules, '@empty/package/dist/nested'), { recursive: true });
+  const unrelated = path.join(root, 'untouched-empty'); fs.mkdirSync(unrelated);
+  const fileMetadata = Object.fromEntries(Object.keys(contents).map(relative => [relative, fs.statSync(path.join(artifact, relative))]));
+  const manifest = buildManifest(artifact, { version: '0.85.1-0123', contract: 1, node: 'node/bin/node', entry: 'app/dist/main.js' });
+  fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest));
+  const before = verifyArtifact(artifact);
+  for (const scope of scopes) assert.ok(before.includes(`unlisted empty directory app/node_modules/${scope}`), scope);
+  const removed = pruneEmptyPackageDirectories(artifact);
+  for (const scope of scopes) assert.ok(removed.includes(`app/node_modules/${scope}`), scope);
+  assert.equal(fs.existsSync(path.join(modules, '@empty')), false, 'empty parents disappear after their children');
+  assert.ok(fs.statSync(unrelated).isDirectory(), 'only artifact/app/node_modules is normalized');
+  assert.ok(fs.statSync(modules).isDirectory(), 'the staging node_modules root remains');
+  for (const [relative, data] of Object.entries(contents)) {
+    const file = path.join(artifact, relative), after = fs.statSync(file);
+    assert.deepEqual(fs.readFileSync(file), data, relative);
+    assert.equal(after.mode, fileMetadata[relative].mode, relative);
+    assert.equal(after.mtimeMs, fileMetadata[relative].mtimeMs, relative);
+  }
+  assert.deepEqual(buildManifest(artifact, manifest), manifest, 'manifest-covered bytes are identical');
+  assert.deepEqual(verifyArtifact(artifact), [], 'strict inventory now passes without any verifier exception');
+  assert.deepEqual(pruneEmptyPackageDirectories(artifact), [], 'normalization is idempotent');
+});
+for (const dangling of [false, true]) test(`empty-package cleanup refuses ${dangling ? 'dangling' : 'escaping'} links before removing anything`, t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact'), modules = path.join(artifact, 'app/node_modules');
+  const empty = path.join(modules, '@esbuild'), outside = path.join(root, 'outside'), sentinel = path.join(outside, 'LICENSE');
+  fs.mkdirSync(empty, { recursive: true }); fs.mkdirSync(path.join(outside, 'empty'), { recursive: true }); fs.writeFileSync(sentinel, 'OUTSIDE_UNCHANGED');
+  fs.symlinkSync(dangling ? path.join(root, 'missing') : outside, path.join(modules, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => pruneEmptyPackageDirectories(artifact), /symbolic links/);
+  assert.ok(fs.statSync(empty).isDirectory(), 'validation failure must not partially remove valid empty directories');
+  assert.ok(fs.lstatSync(path.join(modules, 'escape')).isSymbolicLink());
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), 'OUTSIDE_UNCHANGED');
+  assert.ok(fs.statSync(path.join(outside, 'empty')).isDirectory());
+});
+test('empty-package cleanup refuses a linked staging ancestor without traversing or deleting outside', t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact'), outside = path.join(root, 'outside');
+  fs.mkdirSync(path.join(outside, 'node_modules/empty'), { recursive: true }); fs.mkdirSync(artifact);
+  fs.symlinkSync(outside, path.join(artifact, 'app'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => pruneEmptyPackageDirectories(artifact), /physical directories/);
+  assert.ok(fs.statSync(path.join(outside, 'node_modules/empty')).isDirectory());
+});
+test('empty-package cleanup bounds entry/depth work before any removal', t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact'), modules = path.join(artifact, 'app/node_modules');
+  fs.mkdirSync(path.join(modules, 'empty/child/deep'), { recursive: true });
+  assert.throws(() => pruneEmptyPackageDirectories(artifact, { maxEntries: 1 }), /entry limit/);
+  assert.ok(fs.statSync(path.join(modules, 'empty/child/deep')).isDirectory());
+  assert.throws(() => pruneEmptyPackageDirectories(artifact, { maxDepth: 1 }), /depth limit/);
+  assert.ok(fs.statSync(path.join(modules, 'empty/child/deep')).isDirectory());
+  assert.throws(() => pruneEmptyPackageDirectories(artifact, { maxEntries: 0 }), /bounds/);
 });
 // Windows jobs run only through the exact bootstrapped runner. CI passes the
 // receipt of `node scripts/runtime/build-runner.mjs --out <dir>`; without it the
