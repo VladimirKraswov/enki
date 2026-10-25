@@ -23,7 +23,9 @@ if (platform === 'windows' && bytes.subarray(0, 2).toString() !== 'MZ') throw Er
 if (platform === 'linux') {
   const packaged = execFileSync('dpkg-deb', ['--field', file, 'Version'], { encoding: 'utf8' }).trim();
   if (packaged !== version) throw Error('Debian version differs from source');
-  const listing = execFileSync('dpkg-deb', ['--contents', file], { encoding: 'utf8' });
+  // The bundled SDK contains thousands of files; retain the complete bounded
+  // listing so platform isolation also checks the final archive members.
+  const listing = execFileSync('dpkg-deb', ['--contents', file], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   assertDebianPayload(listing);
 }
 if (platform === 'macos') execFileSync('hdiutil', ['verify', file], { stdio: 'inherit' });
