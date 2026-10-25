@@ -98,7 +98,13 @@ test("maintenance performs a real private SQLite backup paired with exact schema
   const f = await foundation(t); await f.runtime.beginMaintenance();
   const id = randomUUID(), receipt = await f.runtime.backupForUpdate(id), target = path.join(f.data, receipt.relativePath);
   assert.equal(receipt.schema, SCHEMA_VERSION); assert.equal(receipt.runtimeVersion, "private-build"); assert.equal(receipt.sdk, SDK_VERSION);
-  assert.equal(receipt.sha256, createHash("sha256").update(fs.readFileSync(target)).digest("hex")); assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  assert.equal(receipt.sha256, createHash("sha256").update(fs.readFileSync(target)).digest("hex"));
+  // Windows chmod exposes the writable/readonly attribute, not POSIX ACL bits.
+  // Keep the Unix privacy assertion; the Windows backup must remain writable
+  // for its real FlushFileBuffers operation. Content/schema checks apply to both.
+  const mode = fs.statSync(target).mode;
+  if (process.platform === "win32") assert.equal(mode & 0o200, 0o200);
+  else assert.equal(mode & 0o777, 0o600);
   const backup = new DatabaseSync(target, { readOnly: true });
   try { assert.equal(backup.prepare("SELECT title FROM sessions WHERE id=?").get(f.session.id)?.title, "Private fixture"); assert.equal(backup.prepare("PRAGMA user_version").get()?.user_version, SCHEMA_VERSION); }
   finally { backup.close(); }
