@@ -146,11 +146,11 @@ impl OwnedBrowser {
                     return Err(error);
                 }
             };
-            return Ok(Self {
+            Ok(Self {
                 child,
                 _owner_pipe: owner_pipe,
                 _job: job,
-            });
+            })
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -970,6 +970,7 @@ mod tests {
         assert!(private_dir(&link).is_err());
         fs::remove_dir_all(temp).unwrap();
     }
+    #[cfg(unix)]
     fn cancellation(flag: &Arc<AtomicBool>, epoch: &Arc<AtomicU64>) -> Cancellation {
         Cancellation {
             shutting_down: flag.clone(),

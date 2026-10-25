@@ -28,7 +28,7 @@ pub(super) fn command() -> Result<PathBuf, String> {
             std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
             std::fs::rename(&temporary, &destination).map_err(|e| e.to_string())?;
         }
-        return Ok(destination);
+        Ok(destination)
     }
     #[cfg(not(target_os = "windows"))]
     Ok(executable)

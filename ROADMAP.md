@@ -9,7 +9,9 @@ Sections below are the 0.2.x history (external OpenCode/Pi engines). 2.0 status:
 - [x] Source review and full local code qualification of the V5 snapshot on Mac: whole runtime/frontend TypeScript, 347 runtime Vitest, 161 public Node and 1070 frontend cases. Native compilers and guarded tests, public artifact/release/Hub/catalog/ASR checks passed with their explicit sandbox/platform limits. Old engine/client/installer copies retired only after replacement checks; original failures and evidence preserved.
 - [x] Synchronized application version 2.0.0; SDK and helper versions stay independently pinned.
 - [x] V8 protected-workshop identity bridge: exact source-bound archive lookup, no empty replacement on missing/ambiguous import; focused runtime9/9 and frontend30/30 plus both TypeScript checks passed.
-- [ ] Final signed-runtime launch and platform qualification after confirmed macOS ad-hoc addon loading and Windows owned-flush/canonical-path fixes. Prepared V7 inventory and relocation passed; addon launch failure is preserved and is not live acceptance.
+- [x] V11 genuine prepared/relocated runtime, actual SDK/PTY/ripgrep/fd/HTTP smoke, and V13 ad-hoc signed Mac app/DMG with the original complete post-sign inventory verified. Linux full CI/package passed; Windows runtime/artifact/frontend/Hub suites passed.
+- [x] Native profile storage now uses explicit WebView builder settings, including the detached browser viewer. Config conversion in the pinned Tauri omitted these fields; unsupported macOS test profiles fail closed. Mac all-target check/strict Clippy/test compilation and focused profile2/path5 checks passed.
+- [ ] Rebuild/retest the corrected native profile, complete current three-platform CI and ordinary Hub/model/material acceptance, then canonical publication and owner upgrade. A V13 GUI launch exposed owner preferences in the test WebView; it is a failed isolation check, not live acceptance. The prior app/profile were restored; no model request was sent by that check.
 
 Full release gates and platform builds follow [VERIFICATION](docs/VERIFICATION.md).
 A version in source does not establish publication or installation: verify the

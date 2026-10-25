@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(registry.servers[0].args, ["--schedule-mcp"]);
         registry.servers[0].enabled = false;
         registry.servers[0].name = "Custom".into();
-        registry.servers[0].command = "/custom/program".into();
+        registry.servers[0].command = root.join("custom-program").display().to_string();
         fs::write(
             root.join("global.json"),
             serde_json::to_vec(&registry).unwrap(),

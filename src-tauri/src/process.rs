@@ -794,7 +794,9 @@ mod tests {
         }
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
         // Resume proof: a never-resumed child could not produce its exit code.
-        let mut quick = Command::new(system.join("System32/cmd.exe"));
+        // cmd parses a /c inside a mixed-separator executable path as a flag.
+        // Use the native path so this fixture actually runs `exit 7`.
+        let mut quick = Command::new(system.join(r"System32\cmd.exe"));
         quick
             .args(["/D", "/C", "exit 7"])
             .stdin(Stdio::null())

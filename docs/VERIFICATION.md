@@ -35,6 +35,33 @@ upgrade 0.2.x→2.0 with history resume, the remote Linux host procedure
 CI, and macOS PTY descendants that escape their process group (reported as
 cleanup-unknown by design).
 
+## Native acceptance profile (2026-10-25, before the 2.0 release)
+
+`ENKI_PROFILE_DIR` is an explicit test/development profile, not the normal owner
+launch. Its validated root, runtime files, control socket and vault namespace
+are separate. A test must also establish that its **WebView preferences** belong
+to this profile before selecting a model or submitting any prompt.
+
+The pinned Tauri runtime's `WindowConfig` conversion omits `data_directory` and
+`data_store_identifier`. Merely setting these configuration fields did not
+isolate WebKit: a real launch exposed the owner's saved UI preferences in the
+test window. That failed check sent no model/image prompt. The prior native app
+and quiescent WebKit snapshot were restored; original history remained intact.
+
+`webview_profile.rs` now defers automatically created profile windows and applies
+both settings directly to each `WebviewWindowBuilder` before it loads JavaScript.
+The detached browser viewer uses the same helper. Normal launches retain their
+existing storage. Because WebKit silently falls back to its default store before
+macOS 14, a bounded public OS-version check rejects those explicit test launches.
+It never opens the default store as a fallback.
+
+On the corrected source, Mac all-target Cargo check, strict Clippy and test
+compilation passed under an OS policy denying owner files, network and keychain
+access (only the pinned compiler toolchain is readable). The two profile tests
+and five existing path tests passed with the same policy. Actual rebuilt native
+isolation, Hub/model acceptance, final CI and signed publication remain separate
+gates; these focused checks do not establish installation or release completion.
+
 # Paired-device release and Windows browser review (0.2.104)
 
 Imported six source/test files from the supplied Windows0.2.103 browser package.

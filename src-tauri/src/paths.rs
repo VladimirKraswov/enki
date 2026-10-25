@@ -250,6 +250,7 @@ pub fn opencode_data_dir() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "windows"))]
     use std::fs;
     use std::path::Path;
     use std::sync::{Mutex, MutexGuard};
@@ -280,6 +281,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn temp_dir(tag: &str) -> PathBuf {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
