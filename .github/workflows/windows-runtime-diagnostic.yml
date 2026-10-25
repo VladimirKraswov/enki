@@ -22,17 +22,7 @@ jobs:
           node-version: 24.22.1
           cache: npm
           cache-dependency-path: src-tauri/resources/agent/package-lock.json
-      - name: Locked frontend CLI metadata (no app launch)
-        run: npm ci
-      - name: Rust stable toolchain (same source bootstrap as production)
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      - name: Every original packaging test with a freshly bootstrapped native Windows port
-        env:
-          CARGO_BUILD_JOBS: 2
-        run: npm run test:runtime-artifact
+      - name: Complete original Hub suite with private owned fixtures
+        run: python -m unittest discover -s services/hub/tests -v
 
-# Scratch-only finite diagnosis: no app build/install/GUI, credentials,
-# owner profiles, Hub, model or real provider calls. Never merge back.
+# Scratch only: no app/runtime/model/Hub service calls or credentials.
