@@ -11,7 +11,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isReadOnlyOrigin, type MessageDTO, type ModelRef, type PermissionRule, type SessionStatusDTO } from "../protocol.ts";
 import { branchSessionFile, listSessionFiles, openSessionReader } from "../sdk/adapter.ts";
-import { entriesPage, entriesToMessages, pageMessages } from "../sdk/history.ts";
+import { entriesPage, entriesToMessages } from "../sdk/history.ts";
 import { SessionWorker, type WorkerDeps } from "./worker.ts";
 import type { SessionCatalog, SessionRecord } from "./catalog.ts";
 
@@ -28,6 +28,8 @@ export interface RegistryDeps extends WorkerDeps {
   retained(sessionID: string): boolean;
   /** Legacy read-only transcripts are served from their archive. */
   legacyHistory(record: SessionRecord): MessageDTO[] | null;
+  /** Page-only archive path: never expand an entire transcript for a UI read. */
+  legacyHistoryPage?(record: SessionRecord, limit: number, before?: string): { messages: MessageDTO[]; before?: string } | null;
 }
 
 export class SessionRegistry {
@@ -201,8 +203,11 @@ export class SessionRegistry {
   /** One history page (same cursor semantics as pageMessages over history()),
    * converting only the page's entries for SDK chats. */
   historyPage(record: SessionRecord, limit: number, before?: string): { messages: MessageDTO[]; before?: string } {
-    const legacy = this.deps.legacyHistory(record);
-    if (legacy) return pageMessages(legacy, limit, before);
+    if (record.origin.kind === "opencode") {
+      const page = this.deps.legacyHistoryPage?.(record, limit, before);
+      if (!page) throw new Error("Постраничное чтение архива недоступно.");
+      return page;
+    }
     const worker = this.workers.get(record.id);
     if (worker) return worker.historyPage(limit, before);
     if (!record.sessionFile || !fs.existsSync(record.sessionFile)) return { messages: [] };

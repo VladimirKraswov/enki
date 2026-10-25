@@ -21,6 +21,7 @@ import { untilAborted } from "../util/abort";
 import { configureLocalBrowser, invalidateBrowserSetup, browserSetupSnapshot, openSessionBrowser } from "../browser/integration";
 import { browserTaskKey, browserEfforts, browserDefaultEffort } from "../browser/task";
 import { browserEnabled, browserNodeProgram } from "../browser/preferences";
+import { reconcileOpenCodeImport } from "../agent/runtime/migration";
 import { isLocalComputer } from "./computer";
 import { isNative } from "../native/platform";
 import { attachmentParts, stageArchive, type ArchiveStager } from '../attachments/archive';
@@ -977,15 +978,29 @@ class Store {
    */
   private async importLegacyHistory(backend: RuntimeBackend): Promise<void> {
     if (this.currentHost()) return;
+    const generation = this.connectionGeneration;
+    const current = () => backend === this.runtime && generation === this.connectionGeneration;
     const migrated = this.state.prefs.agent?.migrated ?? {};
     if (migrated.opencode && migrated.piCli) return;
     const info = await backend.client.migrations();
+    if (!current()) return;
     const mark = (key: "opencode" | "piCli") => {
       this.mutate(s => ({ prefs: { ...s.prefs, agent: { ...s.prefs.agent, migrated: { ...s.prefs.agent?.migrated, [key]: Date.now() } } } }));
       this.persistPrefs();
     };
     if (!migrated.opencode) {
-      if (info.sources.opencode) await backend.client.importOpenCode();
+      if (info.sources.opencode) {
+        try { await backend.client.importOpenCode(); }
+        catch (error) {
+          await reconcileOpenCodeImport(error, info.sources.opencode, info, {
+            read: () => backend.client.migrations(),
+            current,
+            notify: () => this.patchUi({ toast: "Перенос большой истории продолжается в фоне. Проверяю его журнал; заново запускать перенос не нужно." }),
+          });
+          this.patchUi({ toast: "История прежней версии успешно импортирована." });
+        }
+      }
+      if (!current()) return;
       mark("opencode");
     }
     if (!migrated.piCli) {
@@ -996,6 +1011,7 @@ class Store {
         const failed = (result.results ?? []).filter(r => r.code && r.code !== "source_missing").length;
         if (failed) throw new Error(`не удалось импортировать чатов Pi: ${failed}`);
       }
+      if (!current()) return;
       mark("piCli");
     }
   }

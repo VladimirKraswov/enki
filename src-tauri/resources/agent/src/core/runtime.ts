@@ -19,7 +19,7 @@ import { OpenCodeImporter } from "../legacy/opencode-import.ts";
 import { importPiAgent, planPiAgentImport } from "../legacy/pi-agent.ts";
 import { NativePiConfigCommitPort, type CommitReceipt } from "../legacy/pi-config-commit.ts";
 import { PiCliImporter } from "../legacy/pi-cli.ts";
-import { projectArchiveMessages } from "../legacy/wire-projection.ts";
+import { archiveWireId, projectArchiveMessages } from "../legacy/wire-projection.ts";
 import { CutoverJournal, type CutoverSessionRef, type CutoverTarget } from "../migration/cutover.ts";
 import { McpPool } from "../mcp/pool.ts";
 import { ConfigProjection, userModelsPresent, type ConfigStatus } from "../models/config.ts";
@@ -497,6 +497,13 @@ export class Runtime {
     return projectArchiveMessages(this.archiveReader(record.origin.archive).messages(record.origin.legacyId), record.id);
   }
 
+  legacyHistoryPage(record: SessionRecord, limit: number, before?: string): { messages: MessageDTO[]; before?: string } | null {
+    if (record.origin.kind !== "opencode") return null;
+    const page = this.archiveReader(record.origin.archive).historyPage(record.origin.legacyId, limit, before,
+      id => archiveWireId("message", record.id, id));
+    return { ...page, messages: projectArchiveMessages(page.messages, record.id) };
+  }
+
   /** Transcript directory owned for this record (imported Pi CLI copies live in their own root). */
   sessionDirOf(record: SessionRecord): string {
     if (record.origin.kind === "pi-cli" && record.sessionFile === this.piCli.runtimeFile(record.origin.runtimeId)) return path.dirname(record.sessionFile);
@@ -589,6 +596,7 @@ export class Runtime {
       trashDir: path.join(this.paths.data, "trash"),
       retained: (id) => this.retained(id),
       legacyHistory: (record) => this.legacyHistory(record),
+      legacyHistoryPage: (record, limit, before) => this.legacyHistoryPage(record, limit, before),
     });
     this.dispatcher = new Dispatcher(this.registry, this.catalog, this.ledger, this.hub, this.journal, () => !this.admission.open());
     this.dispatcher.onReleased = id => { this.queue.drain(id); this.publishActivity(); };

@@ -276,6 +276,39 @@ export class OpenCodeArchiveReader {
   }
   messages(sessionID: string): MessageDTO[] { return [...this.messagePages(sessionID)].flat(); }
 
+  /** A UI tail page of a previously validated immutable archive. Only headers
+   * outside this page are read; old tool outputs/attachments are not decoded.
+   * The optional cursor projection is trusted host code, never archive code. */
+  historyPage(sessionID: string, limit: number, before?: string, cursorId: (id: string) => string = id => id): { messages: MessageDTO[]; before?: string } {
+    if (!Number.isSafeInteger(limit)) throw new Error("Некорректный размер страницы.");
+    limit = Math.max(1, Math.min(limit, 1000));
+    const issues = [...this.relationshipIssues(sessionID)];
+    this.session(this.row(sessionID), issues);
+    if (issues.some(issue => issue.severity === "error")) throw new ArchiveDataError(issues);
+    const format = this.format(sessionID), table = format === "v1" ? "message" : "session_message";
+    if (!this.has(table)) return { messages: [] };
+    const key = format === "v1" ? "time_created" : "seq";
+    let boundary: Row | undefined;
+    if (before) {
+      // Wire ids are intentionally one-way. Resolve them using small SQL
+      // headers, without materializing the historical message bodies.
+      for (const row of this.scan(`SELECT id,${key} FROM "${table}" WHERE session_id=?`, sessionID)) {
+        if (typeof row.id === "string" && cursorId(row.id) === before) { boundary = row; break; }
+      }
+      if (!boundary) return { messages: [] };
+    }
+    const where = boundary ? ` AND (${key}<? OR (${key}=? AND id<?))` : "";
+    const values: SQLInputValue[] = boundary ? [boundary[key] as SQLInputValue, boundary[key] as SQLInputValue, boundary.id as SQLInputValue] : [];
+    // The extra header determines has-more without reading an extra payload.
+    const headers = this.all(`SELECT id FROM "${table}" WHERE session_id=?${where} ORDER BY ${key} DESC,id DESC LIMIT ?`, sessionID, ...values, limit + 1);
+    const ids = headers.slice(0, limit).map(row => String(row.id));
+    if (!ids.length) return { messages: [] };
+    const rows = this.all(`SELECT * FROM "${table}" WHERE session_id=? AND id IN (${ids.map(() => "?").join(",")}) ORDER BY ${key},id`, sessionID, ...ids);
+    const page = this.projectPage(sessionID, format, rows, issues);
+    if (issues.some(issue => issue.severity === "error")) throw new ArchiveDataError(issues);
+    return { messages: page.messages, ...(headers.length > limit ? { before: cursorId(String(rows[0].id)) } : {}) };
+  }
+
   continuationMetadata(sessionID: string): ArchiveContinuationMetadata {
     const issues = this.prerequisites(sessionID);
     const selected = this.session(this.row(sessionID), issues);

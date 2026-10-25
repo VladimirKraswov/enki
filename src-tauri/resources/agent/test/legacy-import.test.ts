@@ -2,7 +2,7 @@
 // snapshot, originals byte-for-byte unchanged, namespaced runtime ids, wire ids
 // projected per session (raw SQL ids never become live ids), mapped parents,
 // idempotent re-import, and an explicit async continuation that sends nothing.
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,6 +45,25 @@ function openCodeFixture(project: string): { file: string; writer: DatabaseSync 
 
 /** Runtime id of an imported OpenCode chat: namespaced by the importer's stable source origin. */
 const archiveId = (file: string, legacy: string) => legacySessionId(createHash("sha256").update(fs.realpathSync(file)).digest("hex"), legacy);
+
+it("serves the archive HTTP tail without calling the full-transcript expansion", async () => {
+  h = await harness();
+  const { file, writer } = openCodeFixture(h.project("paged-archive"));
+  try {
+    await h.runtime.importer.import(file);
+    const id = archiveId(file, "ses_workshop");
+    const full = vi.spyOn(h.runtime, "legacyHistory").mockImplementation(() => { throw new Error("Full archive expansion forbidden for a page"); });
+    const tail = await h.request<{ messages: Array<{ info: { id: string } }>; before?: string }>("GET", `/sessions/${id}/messages?limit=2`);
+    expect(tail.status).toBe(200);
+    expect(tail.body.messages.map(m => m.info.id)).toEqual(["msg_2", "msg_3"].map(raw => archiveWireId("message", id, raw)));
+    expect(tail.body.before).toBe(archiveWireId("message", id, "msg_2"));
+    const prior = await h.request<{ messages: Array<{ info: { id: string } }>; before?: string }>("GET", `/sessions/${id}/messages?limit=2&before=${tail.body.before}`);
+    expect(prior.status).toBe(200);
+    expect(prior.body.messages.map(m => m.info.id)).toEqual([archiveWireId("message", id, "msg_1")]);
+    expect(prior.body.before).toBeNull();
+    expect(full).not.toHaveBeenCalled();
+  } finally { writer.close(); }
+});
 
 it("imports a WAL database read-only with provenance and serves a projected read-only archive", async () => {
   h = await harness();
