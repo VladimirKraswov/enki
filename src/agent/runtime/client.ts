@@ -426,6 +426,10 @@ export class RuntimeClient {
   // ------------------------------------------------------------- migrations
   migrations() { return this.request<MigrationsDTO>("GET", "/migrations"); }
   importOpenCode() { return this.request<unknown>("POST", "/migrations/opencode", { body: {}, timeoutMs: 600000 }); }
+  /** Resolve a saved original ID only against this supervisor's verified OpenCode source. */
+  resolveLegacySession(legacyID: string, directory: string) {
+    return this.request<SessionDTO>("POST", "/migrations/opencode/session", { body: { legacyID, directory } });
+  }
   importPiCli(sessions: unknown[]) { return this.request<unknown>("POST", "/migrations/pi-cli", { body: { sessions }, timeoutMs: 600000 }); }
   importPiAgent() { return this.request<unknown>("POST", "/migrations/pi-agent", { body: {}, timeoutMs: 120000 }); }
   /** Origin-bound POSITIVE delivery evidence for a pre-2.0 lost-ACK send; absence is "unknown". */

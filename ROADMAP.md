@@ -6,8 +6,10 @@ Sections below are the 0.2.x history (external OpenCode/Pi engines). 2.0 status:
 
 - [x] Source: one bundled Enki Runtime (pinned Node + Pi SDK, `scripts/runtime/sdk-contract.mjs`); OpenCode execution removed; OpenCode/Pi CLI histories read-only with explicit continuation; paired backups and journaled remote installer; first 0.2→2.0 source update prepares the runtime through `npm run tauri`.
 - [x] Source: reviewed SDK upgrade workflow (`docs/SDK-UPGRADE.md`), canonical release gates before credentials (`docs/VERIFICATION.md`), remote host procedure (`docs/REMOTE-RUNTIME.md`), evaluation adapter on the pinned SDK (`docs/EVALUATIONS.md`).
-- [x] Final source review and full local code qualification on Mac: whole runtime/frontend TypeScript, 347 runtime Vitest, 161 public Node and 1070 frontend cases. Native compilers and guarded tests, public artifact/release/Hub/catalog/ASR checks passed with their explicit sandbox/platform limits. Old engine/client/installer copies retired only after replacement checks; original failures and evidence preserved.
+- [x] Source review and full local code qualification of the V5 snapshot on Mac: whole runtime/frontend TypeScript, 347 runtime Vitest, 161 public Node and 1070 frontend cases. Native compilers and guarded tests, public artifact/release/Hub/catalog/ASR checks passed with their explicit sandbox/platform limits. Old engine/client/installer copies retired only after replacement checks; original failures and evidence preserved.
 - [x] Synchronized application version 2.0.0; SDK and helper versions stay independently pinned.
+- [x] V8 protected-workshop identity bridge: exact source-bound archive lookup, no empty replacement on missing/ambiguous import; focused runtime9/9 and frontend30/30 plus both TypeScript checks passed.
+- [ ] Final signed-runtime launch and platform qualification after confirmed macOS ad-hoc addon loading and Windows owned-flush/canonical-path fixes. Prepared V7 inventory and relocation passed; addon launch failure is preserved and is not live acceptance.
 
 Full release gates and platform builds follow [VERIFICATION](docs/VERIFICATION.md).
 A version in source does not establish publication or installation: verify the

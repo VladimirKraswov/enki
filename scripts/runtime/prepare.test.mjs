@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { buildEnvironment, download, materializeBinLinks, posixWrapper, pruneEmptyPackageDirectories, run, windowsWrapper } from './prepare.mjs';
+import { buildEnvironment, download, materializeBinLinks, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, windowsWrapper } from './prepare.mjs';
 import { buildManifest, MANIFEST, verifyArtifact } from './artifact.mjs';
 const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'prepare-case-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -116,6 +116,30 @@ async function bundledNode(artifact) {
   const ready = await run(node, ['-e', "process.stdout.write('NODE_READY')"], { env: { PATH: '/usr/bin:/bin' }, capture: true, timeoutMs: 60_000 });
   assert.equal(ready.trim(), 'NODE_READY');
 }
+test('only the exact ad-hoc identity selects the Node library-validation exception', () => {
+  const repo = path.resolve('owned-signing-fixture');
+  assert.equal(runtimeNodeEntitlements(repo, '-'), path.join(repo, 'src-tauri/runtime-node-adhoc.entitlements'));
+  for (const identity of ['Developer ID Application: Example (TEAM123)', 'Apple Development: Example', ' - '])
+    assert.equal(runtimeNodeEntitlements(repo, identity), path.join(repo, 'src-tauri/runtime-node.entitlements'));
+});
+test('final native-module probe uses the packaged interpreter and propagates actual load rejection', { skip: process.platform === 'win32' && 'POSIX copied-interpreter fixture; Windows preparation uses its native job runner' }, async t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact');
+  fs.mkdirSync(path.join(artifact, 'node/bin'), { recursive: true });
+  const app = path.join(artifact, 'app'), pkg = path.join(app, 'node_modules/node-pty'); fs.mkdirSync(pkg, { recursive: true });
+  await bundledNode(artifact);
+  fs.writeFileSync(path.join(app, 'package.json'), '{"name":"owned-probe-fixture"}');
+  fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"node-pty","main":"index.cjs"}');
+  fs.writeFileSync(path.join(pkg, 'index.cjs'), `if(process.execPath!==${JSON.stringify(path.join(artifact, 'node/bin/node'))})throw Error('EXTERNAL_INTERPRETER');module.exports={spawn(){}};`);
+  await verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } });
+  fs.writeFileSync(path.join(pkg, 'index.cjs'), "throw Error('OWN_POST_SIGN_LOAD_REJECTED');");
+  await assert.rejects(verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } }), /OWN_POST_SIGN_LOAD_REJECTED/);
+  fs.rmSync(pkg, { recursive: true });
+  const external = path.join(root, 'node_modules/node-pty'); fs.mkdirSync(external, { recursive: true });
+  fs.writeFileSync(path.join(external, 'package.json'), '{"name":"node-pty","main":"index.cjs"}');
+  fs.writeFileSync(path.join(external, 'index.cjs'), "module.exports={spawn(){}};");
+  await assert.rejects(verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } }), /ENOENT/);
+  await assert.rejects(verifyPackagedNodePty(artifact, '../outside', { env: {} }), /Unsafe packaged interpreter/);
+});
 test('relocated package bin wrappers retain sibling asset resolution and use the bundled interpreter', { skip: process.platform === 'win32' && 'POSIX symlinked bin fixture' }, async t => {
   const root = temporary(t), artifact = path.join(root, 'artifact'); fs.mkdirSync(path.join(artifact, 'node/bin'), { recursive: true }); fs.mkdirSync(path.join(artifact, 'app/node_modules/.bin'), { recursive: true });
   await bundledNode(artifact);

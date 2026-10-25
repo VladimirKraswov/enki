@@ -8,9 +8,10 @@ import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import type { LegacyArchiveDTO, SessionOrigin } from "../protocol.ts";
 import { canonicalJson } from "../protocol.ts";
-import { text, type Database } from "../store/db.ts";
-import { validRules, type SessionCatalog } from "../sessions/catalog.ts";
+import { text, type Database, type Row } from "../store/db.ts";
+import { validRules, type SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
 import { ArchiveDataError, OpenCodeArchiveReader, type LegacySession } from "./opencode-reader.ts";
+import { syncOwnedDirectory as syncDirectory, syncOwnedFile as syncFile } from "../platform/owned-sync.ts";
 
 export const IMPORTER = "enki-opencode-import/2";
 const HASH = /^[a-f0-9]{64}$/;
@@ -46,22 +47,6 @@ function shaFile(file: string): string {
     }
   } finally { fs.closeSync(descriptor); }
   return hash.digest("hex");
-}
-
-function syncFile(file: string): void {
-  const descriptor = fs.openSync(file, "r");
-  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-}
-
-function syncDirectory(directory: string): void {
-  let descriptor: number | undefined;
-  try { descriptor = fs.openSync(directory, "r"); fs.fsyncSync(descriptor); }
-  catch (error) {
-    // Windows does not generally expose directory fsync through Node. The
-    // immutable staging + journal recovery remains required on that platform.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (process.platform !== "win32" || !["EINVAL", "EPERM", "EACCES", "ENOTSUP"].includes(code ?? "")) throw error;
-  } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
 }
 
 function manifestOf(value: unknown): ArchiveManifest {
@@ -159,6 +144,37 @@ export class OpenCodeImporter {
   archives(): LegacyArchiveDTO[] {
     return this.db.all("SELECT manifest FROM legacy_archives WHERE kind='opencode' ORDER BY created")
       .map((row) => dto(manifestOf(JSON.parse(text(row, "manifest")))));
+  }
+
+  /** Read-only identity bridge for a saved pre-2.0 pointer. The source path is
+   * supervisor-owned, never a client option. Exact SQL lookup is independent of
+   * paged UI catalogs; a second match is ambiguity, never a title preference. */
+  resolveSession(sourceDb: string, legacyId: string, directory: string): SessionRecord {
+    let canonical: string;
+    try { canonical = fs.realpathSync(sourceDb); }
+    catch { throw new Error("Источник истории OpenCode пока недоступен. Повторите импорт; прежняя привязка мастерской сохранена."); }
+    const origin = createHash("sha256").update(canonical).digest("hex");
+    let matches: Row[];
+    try {
+      matches = this.db.all(`SELECT s.id FROM sessions s JOIN legacy_archives a ON a.id=json_extract(s.origin,'$.archive')
+        WHERE s.deleted IS NULL AND s.directory=? AND json_extract(s.origin,'$.kind')='opencode'
+        AND json_extract(s.origin,'$.legacyId')=? AND a.kind='opencode' AND json_extract(a.manifest,'$.source.origin')=? LIMIT 2`,
+        directory, legacyId, origin);
+    } catch { throw new Error("Реестр импортированной истории пока недоступен. Прежняя привязка мастерской сохранена."); }
+    if (!matches.length) throw new Error("Сохранённая мастерская ещё не найдена в импортированной истории этого компьютера. Повторите импорт; пустой чат не создавался.");
+    if (matches.length !== 1) throw new Error("Найдено несколько архивов сохранённой мастерской. Прежняя привязка сохранена; требуется проверка истории.");
+    const candidate = this.catalog.get(text(matches[0], "id"));
+    if (!candidate || candidate.id !== legacySessionId(origin, legacyId) || candidate.directory !== directory
+      || candidate.origin.kind !== "opencode" || candidate.origin.legacyId !== legacyId
+      || candidate.origin.sourceOrigin !== undefined && candidate.origin.sourceOrigin !== origin)
+      throw new Error("Происхождение сохранённой мастерской не совпало с источником. Прежняя привязка сохранена.");
+    try {
+      const manifest = this.verifiedManifest(candidate.origin.archive, { origin });
+      if (manifest.source.path !== canonical) throw new Error("Source mismatch");
+    } catch {
+      throw new Error("Архив сохранённой мастерской не прошёл проверку. Повторите импорт истории; прежняя привязка сохранена.");
+    }
+    return candidate;
   }
 
   private journal(job: string, state: string, detail: JournalDetail): void {

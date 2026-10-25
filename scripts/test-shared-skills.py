@@ -5,6 +5,7 @@ import json
 import sys
 sys.dont_write_bytecode = True
 import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -41,7 +42,7 @@ class Skills(unittest.TestCase):
             self.assertEqual(result["complete"], "unknown")
             self.assertEqual(len(result["sha256"]), 64)
 
-    def test_valid_one_page_is_not_proof_of_complete_book(self):
+    def test_parser_accepted_one_page_is_not_proof_of_complete_book(self):
         objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
                    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
                    b"<< /Length 0 >>\nstream\n\nendstream"]
@@ -53,10 +54,43 @@ class Skills(unittest.TestCase):
         raw += f"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "cover.pdf"; path.write_bytes(raw)
-            result = verify.inspect(path)
+            # This is a completeness-policy fixture, not qualification of a
+            # real PDF parser. Never depend on optional host packages/tools.
+            case = self
+
+            class AcceptedReader:
+                def __init__(self, selected, *, strict):
+                    case.assertEqual(Path(selected).read_bytes(), raw)
+                    case.assertIs(strict, True)
+                    self.is_encrypted = False
+                    self.pages = [SimpleNamespace(extract_text=lambda: "fixture page")]
+
+            with patch.dict(sys.modules, {"pypdf": SimpleNamespace(PdfReader=AcceptedReader)}), \
+                    patch.object(verify.shutil, "which", side_effect=AssertionError("No ambient PDF tool lookup")), \
+                    patch.object(verify.subprocess, "run", side_effect=AssertionError("No PDF tool execution")):
+                result = verify.inspect(path)
             self.assertEqual(result["status"], "structure-checked")
+            self.assertEqual(result["parser"], "pypdf")
             self.assertEqual(result["pages"], 1)
             self.assertEqual(result["complete"], "unknown")
+
+    def test_missing_parser_stays_unverified_and_cli_fails_without_completeness_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unparsed.pdf"
+            path.write_bytes(b"%PDF-1.4\nparser-unavailable fixture\n")
+            # Block even an installed pypdf and any ambient pdfinfo. A header
+            # plus hash must never become successful structural verification.
+            with patch.dict(sys.modules, {"pypdf": None}), \
+                    patch.object(verify.shutil, "which", return_value=None), \
+                    patch.object(verify.subprocess, "run", side_effect=AssertionError("No parser available")):
+                result = verify.inspect(path)
+                self.assertEqual(result["status"], "unverified")
+                self.assertEqual(result["complete"], "unknown")
+                self.assertNotIn("pages", result)
+                self.assertNotIn("parser", result)
+                self.assertEqual(len(result["sha256"]), 64)
+                with patch("sys.argv", ["verify.py", str(path)]), patch("builtins.print"):
+                    self.assertEqual(verify.main(), 1)
 
     def test_restrictions_and_exact_unicode_names(self):
         data = {"metadata": {"title": "Example", "rights": "Check licence"}, "files": [

@@ -15,6 +15,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_LAYOUT, SESSION_LAYOUT } from "./paths.ts";
+import { syncOwnedDirectory as syncDirectory, syncOwnedFile as fsyncFile } from "./owned-sync.ts";
+export { syncDirectory };
 
 export interface SessionSnapshot { manifestSha256: string; files: number; bytes: number }
 interface Entry { path: string; sha256: string; bytes: number }
@@ -28,13 +30,6 @@ function sha256File(file: string): string {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW), hash = createHash("sha256"), buffer = Buffer.alloc(1024 * 1024);
   try { for (;;) { const read = fs.readSync(fd, buffer); if (!read) break; hash.update(buffer.subarray(0, read)); } } finally { fs.closeSync(fd); }
   return hash.digest("hex");
-}
-function fsyncFile(file: string): void { const fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
-/** Durable directory metadata. Windows needs a write-access directory handle for
- * FlushFileBuffers (libuv opens directories with backup semantics). */
-export function syncDirectory(directory: string): void {
-  const fd = fs.openSync(directory, process.platform === "win32" ? "r+" : fs.constants.O_RDONLY | NOFOLLOW);
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 const exists = (file: string) => { try { fs.lstatSync(file); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } };
 function backupDirectory(data: string, id: string): string {

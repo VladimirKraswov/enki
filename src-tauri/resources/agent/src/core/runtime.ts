@@ -28,6 +28,7 @@ import { HubLeases } from "../models/hub.ts";
 import { findGit, GitService } from "../platform/git.ts";
 import { runtimePaths, sessionDirFor, SESSION_LAYOUT, validDirectory, type RuntimePaths } from "../platform/paths.ts";
 import { PtyService, type PtyModule } from "../platform/pty.ts";
+import { openOwnedFileForSync } from "../platform/owned-sync.ts";
 import { snapshotSessions, syncDirectory, type SessionSnapshot } from "../platform/update-snapshot.ts";
 import { resolveLocalPackage } from "../plugin-ui/local-packages.ts";
 import { shutdownPluginUi, type NativeUiScope } from "../plugin-ui/runtime.ts";
@@ -758,7 +759,7 @@ export class Runtime {
     await sqliteBackup(this.db.db, target);
     if (!this.maintenance.isHeld() || this.draining) throw new Error("Обслуживание прервано до завершения резервной копии.");
     fs.chmodSync(target, 0o600);
-    const fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const fd = openOwnedFileForSync(target);
     let sha256: string, bytes: number;
     try {
       fs.fsyncSync(fd); const hash = createHash("sha256"), buffer = Buffer.alloc(1024 * 1024); bytes = 0;

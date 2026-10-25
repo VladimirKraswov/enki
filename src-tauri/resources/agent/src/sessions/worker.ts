@@ -20,6 +20,7 @@ import { INTERRUPTED_TOOL_TEXT, type ToolJournal } from "../execution/tools.ts";
 import type { InteractionBroker } from "../interaction/broker.ts";
 import { createUiBridge, type UiDiagnostics } from "../interaction/ui-bridge.ts";
 import type { SessionCatalog, SessionRecord } from "./catalog.ts";
+import { syncOwnedFile } from "../platform/owned-sync.ts";
 
 export interface WorkerDeps {
   ui: WorkerUiPorts;
@@ -263,6 +264,7 @@ export class SessionWorker {
   private commands: SdkCommandActions | undefined;
   private sdkStarted = false;
   private settled: (() => void) | undefined;
+  private transcriptFailure: { command: string; error: string } | null = null;
   private readonly correlations: Array<{ command: string; text: string; entry?: string }> = [];
   private readonly steeringCommands = new Set<string>();
   private invalidating = false;
@@ -432,7 +434,7 @@ export class SessionWorker {
       if (file && this.correlations.some(item => item.entry) && fs.existsSync(file)) {
         // Force the SDK's already-written bytes before committing their identity
         // to the FULL-synchronous command ledger; never write a parallel JSONL.
-        const fd = fs.openSync(file, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        syncOwnedFile(file);
         const ids = new Set(openSessionReader(file, this.deps.sessionDir(this.directory, this.id)).all().map(entry => entry.id));
         for (let index = this.correlations.length - 1; index >= 0; index--) {
           const pending = this.correlations[index];
@@ -441,11 +443,25 @@ export class SessionWorker {
       }
       this.refreshTranscript();
     };
+    const transcriptError = (error: unknown, command: string | null) => {
+      // A late microtask must not poison a later command on the same session.
+      if (command !== this.activeCommand || this.closed) return;
+      const message = `Не удалось подтвердить сохранение истории: ${error instanceof Error ? error.message : String(error)}`;
+      if (command && !this.transcriptFailure) this.transcriptFailure = { command, error: message };
+      publish({ type: "session.error", properties: { sessionID: this.id, error: { name: "TranscriptSyncError", message } } });
+    };
     this.unsubscribe = session.subscribe(event => {
       this.lastActivity = Date.now();
       if (this.runFacts) observeRun(this.runFacts, event);
       if (event.type === "agent_start") { this.sdkStarted = true; this.surface?.setRunning(true); }
-      if (event.type === "agent_settled") { reconcile(); this.surface?.setRunning(false); this.settled?.(); }
+      if (event.type === "agent_settled") {
+        try { reconcile(); }
+        catch (error) { transcriptError(error, this.activeCommand); }
+        finally {
+          try { this.surface?.setRunning(false); }
+          finally { this.settled?.(); }
+        }
+      }
       for (const out of translator.translate(event)) {
         const transient = out.type === "message.part.delta" || out.type === "session.sdk_queue"
           || (out.type === "message.part.updated" && (out.properties.part as { type?: string; state?: { status?: string } } | undefined)?.type === "reasoning")
@@ -456,12 +472,10 @@ export class SessionWorker {
       if (event.type === "message_end" || event.type === "entry_appended" || event.type === "compaction_end") {
         // SDK persists message_end after listeners return. The microtask observes
         // the real appended entries, rather than pretending the SDK emitted them.
+        const command = this.activeCommand;
         queueMicrotask(() => {
           try { reconcile(); }
-          catch (error) {
-            if (!this.closed) publish({ type: "session.error", properties: { sessionID: this.id,
-              error: { name: "TranscriptSyncError", message: error instanceof Error ? error.message : "Не удалось подтвердить сохранение истории." } } });
-          }
+          catch (error) { transcriptError(error, command); }
         });
       }
     });
@@ -541,6 +555,7 @@ export class SessionWorker {
       this.deps.ledger.update(command.id, "dispatching");
       this.activeCommand = command.id;
       this.stopRequested = null;
+      this.transcriptFailure = null;
       this.correlations.push({ command: command.id, text: input.text });
       this.sdkStarted = false;
       this.runFacts = { produced: false, compaction: null, retryError: null };
@@ -579,6 +594,11 @@ export class SessionWorker {
   }
 
   private finishRun(commandId: string, accepted: boolean, failure: string | null): void {
+    // The SDK may have answered while its persisted identity could not be
+    // confirmed. Settle and release the turn, but never call it completed or
+    // replay it. Steering without a confirmed entry retains its uncertain state.
+    if (this.transcriptFailure?.command === commandId) failure ??= this.transcriptFailure.error;
+    this.transcriptFailure = null;
     this.run = null;
     this.settled = undefined;
     this.activeCommand = null;

@@ -166,3 +166,91 @@ it('store replaces the archive pointer and records its provenance only after the
  expect(store.state.prefs.handoffOrigins.continued).toMatchObject({from:'imported',fromEngine:'opencode',directory:'/workshop'});
  expect(fx.made('POST','/sessions')).toEqual([]);expect(fx.made('POST','/commands')).toEqual([]);
 });
+
+
+// Real upgrade boundary: preferences still name `ses_…`, while the runtime
+// imported archive has a new source-bound ID. Never recover this by title/page.
+const oldWorkshop={...session,id:'ses_workshop'};
+const importedWorkshop={...archived,id:'legacy-source-bound-workshop',origin:{kind:'opencode',legacyId:'ses_workshop',archive:'a'.repeat(64),readOnly:true}};
+function legacyWorkshopBackend() {
+ const api=backend() as any;
+ let writable={...continuation};
+ api.getSession=vi.fn(async(id:string)=>{if(id==='ses_workshop')throw new ApiError(404,'missing');return writable;});
+ api.resolveLegacySession=vi.fn(async()=>importedWorkshop);
+ api.listSessions=vi.fn(async()=>{throw Error('A paged title catalog cannot resolve a saved source identity');});
+ api.continueLegacy=vi.fn(async()=>writable);
+ api.updateSession=vi.fn(async(_id:string,patch:any)=>(writable={...writable,...patch,time:{...writable.time,...(patch.time??{})}}));
+ return api;
+}
+it('maps a real old ID through exact source lookup even when a large paged catalog omits the archive',async()=>{
+ const api=legacyWorkshopBackend(),seen=vi.fn();
+ const record=await resolveWorkshop(api,workspace,{...workspace,session:oldWorkshop},undefined,seen);
+ expect(api.resolveLegacySession).toHaveBeenCalledExactlyOnceWith('ses_workshop','/workshop');
+ expect(api.listSessions).not.toHaveBeenCalled();expect(api.createSession).not.toHaveBeenCalled();
+ expect(api.continueLegacy).toHaveBeenCalledExactlyOnceWith(importedWorkshop.id,'/workshop');
+ expect(record.session).toMatchObject({id:'continued',workshop:true});
+ expect(seen).toHaveBeenCalledExactlyOnceWith(importedWorkshop,expect.objectContaining({id:'continued',workshop:true}));
+});
+it.each(['история ещё не импортирована','несколько архивов','источник временно недоступен'])('keeps an old workshop pointer and never creates on lookup refusal: %s',async(message)=>{
+ const api=legacyWorkshopBackend(),seen=vi.fn(),previous={...workspace,session:oldWorkshop};
+ api.resolveLegacySession.mockRejectedValue(new ApiError(409,message));
+ await expect(resolveWorkshop(api,workspace,previous,undefined,seen)).rejects.toThrow(message);
+ expect(previous.session.id).toBe('ses_workshop');expect(api.createSession).not.toHaveBeenCalled();
+ expect(api.listSessions).not.toHaveBeenCalled();expect(api.continueLegacy).not.toHaveBeenCalled();expect(seen).not.toHaveBeenCalled();
+});
+it('uses only the native-approved legacy directory alias for an old saved identity',async()=>{
+ const api=legacyWorkshopBackend(),directory='/legacy/workshop';
+ api.resolveLegacySession.mockResolvedValue({...importedWorkshop,directory});
+ api.continueLegacy.mockResolvedValue({...continuation,directory,workshop:true});
+ const record=await resolveWorkshop(api,{...workspace,directory:'/enki/workshop',legacyDirectory:directory},{...workspace,directory,session:{...oldWorkshop,directory}});
+ expect(api.resolveLegacySession).toHaveBeenCalledExactlyOnceWith('ses_workshop',directory);
+ expect(record.directory).toBe(directory);expect(api.createSession).not.toHaveBeenCalled();
+});
+it('refuses a saved pointer outside the native-approved directories before any lookup or creation',async()=>{
+ const api=legacyWorkshopBackend(),previous={...workspace,directory:'/other',session:{...oldWorkshop,directory:'/other'}};
+ await expect(resolveWorkshop(api,workspace,previous)).rejects.toThrow('вне подтверждённого каталога');
+ expect(api.getSession).not.toHaveBeenCalled();expect(api.resolveLegacySession).not.toHaveBeenCalled();expect(api.createSession).not.toHaveBeenCalled();
+});
+it.each([
+ {...importedWorkshop,directory:'/other'},
+ {...importedWorkshop,origin:{...importedWorkshop.origin,legacyId:'ses_someone_else'}},
+ {...importedWorkshop,id:'ses_workshop'},
+ {...importedWorkshop,origin:{kind:'pi'}},
+])('rejects an exact-lookup response not bound to the saved workshop identity',async(archive)=>{
+ const api=legacyWorkshopBackend();api.resolveLegacySession.mockResolvedValue(archive);
+ await expect(resolveWorkshop(api,workspace,{...workspace,session:oldWorkshop})).rejects.toThrow('не совпал');
+ expect(api.continueLegacy).not.toHaveBeenCalled();expect(api.createSession).not.toHaveBeenCalled();
+});
+it('reuses the existing continuation after a protection PATCH failure and publishes provenance only after its ACK',async()=>{
+ const api=legacyWorkshopBackend(),seen=vi.fn(),previous={...workspace,session:oldWorkshop};
+ api.resolveLegacySession.mockResolvedValue({...importedWorkshop,origin:{...importedWorkshop.origin,continuedBy:'continued'}});
+ api.updateSession.mockRejectedValueOnce(new ApiError(503,'protection not acknowledged'));
+ await expect(resolveWorkshop(api,workspace,previous,undefined,seen)).rejects.toThrow('protection not acknowledged');
+ expect(previous.session.id).toBe('ses_workshop');expect(seen).not.toHaveBeenCalled();
+ const record=await resolveWorkshop(api,workspace,previous,undefined,seen);
+ expect(record.session).toMatchObject({id:'continued',workshop:true});expect(api.createSession).not.toHaveBeenCalled();
+ expect(api.continueLegacy.mock.calls).toEqual([[importedWorkshop.id,'/workshop'],[importedWorkshop.id,'/workshop']]);
+ expect(seen).toHaveBeenCalledOnce();
+});
+it('does not publish a continuation when the protection response did not actually protect it',async()=>{
+ const api=legacyWorkshopBackend(),seen=vi.fn();api.updateSession.mockResolvedValue(continuation);
+ await expect(resolveWorkshop(api,workspace,{...workspace,session:oldWorkshop},undefined,seen)).rejects.toThrow('не подтвердила защиту');
+ expect(seen).not.toHaveBeenCalled();expect(api.createSession).not.toHaveBeenCalled();
+});
+it('store keeps the genuine old pointer and provenance until the continuation protection PATCH succeeds',async()=>{
+ const native=await import('../src/native/platform');vi.spyOn(native,'isNative').mockReturnValue(true);
+ const module=await import('../src/workshop/workspace');vi.spyOn(module,'prepareWorkshop').mockResolvedValue(workspace);
+ const {RuntimeReply}=await import('./helpers/runtime-fixture');
+ store.state.prefs.workshop={...workspace,session:oldWorkshop};
+ fx.on('GET','/sessions/:id',c=>{if(c.params.id==='ses_workshop')throw new RuntimeReply(404,{message:'missing'});return continuation;});
+ fx.on('POST','/migrations/opencode/session',()=>importedWorkshop);
+ fx.on('POST','/sessions/:id/continue',()=>continuation);
+ let fail=true;fx.on('PATCH','/sessions/:id',c=>{if(fail)throw new RuntimeReply(503,{message:'protection not acknowledged'});return {...continuation,...(c.body as object)};});
+ await expect(store.ensureWorkshop()).rejects.toThrow('protection not acknowledged');
+ expect(store.state.prefs.workshop.session.id).toBe('ses_workshop');expect(store.state.prefs.handoffOrigins?.continued).toBeUndefined();
+ fail=false;await store.ensureWorkshop();
+ expect(store.state.prefs.workshop.session).toMatchObject({id:'continued',workshop:true});
+ expect(store.state.prefs.handoffOrigins.continued).toMatchObject({from:importedWorkshop.id,fromEngine:'opencode',directory:'/workshop'});
+ expect(fx.made('POST','/migrations/opencode/session').map(c=>c.body)).toEqual([{legacyID:'ses_workshop',directory:'/workshop'},{legacyID:'ses_workshop',directory:'/workshop'}]);
+ expect(fx.made('POST','/sessions')).toEqual([]);expect(fx.made('POST','/commands')).toEqual([]);
+});

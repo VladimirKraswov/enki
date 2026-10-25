@@ -82,7 +82,7 @@ export async function loadSdkUiCompat(entryUrl: URL, options: { agentDir: string
   return {
     createKeybindings(bindings, configPath) {
       if (!path.isAbsolute(configPath) || path.basename(configPath) !== "keybindings.json"
-        || realpathSync(path.dirname(configPath)) !== agentDir
+        || realpathSync.native(path.dirname(configPath)) !== agentDir
         || existsSync(configPath) && lstatSync(configPath).isSymbolicLink())
         throw new UiProtocolError("keybinding-path", "Настройки клавиатуры должны находиться в приватном профиле Enki.");
       const value: unknown = Reflect.construct(Keybindings, [bindings, path.join(agentDir, "keybindings.json")]);

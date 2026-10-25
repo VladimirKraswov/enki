@@ -84,7 +84,7 @@ it("shared pool, browser gateway and image child keep exact profile presence (A,
 
 it("an explicit profile makes owner-home launch defaults inert; ordinary launches keep them", () => {
   const home = () => "/home/owner";
-  expect(parseArgs([], {}, home)).toMatchObject({ data: "/home/owner/.local/share/enki/runtime", userPiAgentDir: "/home/owner/.pi/agent" });
+  expect(parseArgs([], {}, home)).toMatchObject({ data: path.join(home(), ".local", "share", "enki", "runtime"), userPiAgentDir: path.join(home(), ".pi", "agent") });
   const refuseHome = () => { throw new Error("owner home consulted"); };
   for (const value of ["/profiles/a", ""]) {
     const profiled = { ENKI_PROFILE_DIR: value };
