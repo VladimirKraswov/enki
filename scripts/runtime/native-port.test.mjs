@@ -9,7 +9,7 @@ import { flushDirectoriesSync, runBuildJob, trustedRunner } from './native-port.
 import { RUNNER_SOURCES, bootstrapRunner, runnerSourceDigest } from './build-runner.mjs';
 import { setDirectoryFlushPort } from './artifact.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const temporary = t => { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'native-port-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
+const temporary = t => { const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'native-port-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
 test('runner trust is only an exact bootstrap receipt, never configuration or discovery', t => {

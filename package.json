@@ -15,7 +15,7 @@
     "runtime:prepare": "node scripts/runtime/prepare-entry.mjs",
     "test:runtime": "npm --prefix src-tauri/resources/agent test && npm run test:sdk-compat",
     "test:sdk-compat": "npm --prefix src-tauri/resources/agent run test:node",
-    "test:runtime-artifact": "node --experimental-transform-types --test scripts/runtime/*.test.mjs",
+    "test:runtime-artifact": "node scripts/runtime/test-artifacts.mjs",
     "sdk:check": "node scripts/runtime/sdk-upgrade.mjs --check",
     "sdk:upgrade": "node scripts/runtime/sdk-upgrade.mjs",
     "build:linux": "npm run runtime:prepare -- --platform linux-x64 && tauri build --bundles deb --config src-tauri/tauri.runtime.conf.json",

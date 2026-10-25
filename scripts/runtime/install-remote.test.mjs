@@ -1,3 +1,4 @@
+import './artifact-test-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import os from 'node:os';
 import { MANIFEST, acquireArtifactLease, buildManifest, sha256File, verifyArtifact } from './artifact.mjs';
 import { inspectArtifact, installRemote, publishImmutable } from './install-remote.mjs';
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'remote-publish-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'remote-publish-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const candidate = path.join(root, 'candidate'), dist = path.join(root, 'dist');
   fs.mkdirSync(path.join(candidate, 'node/bin'), { recursive: true }); fs.mkdirSync(path.join(candidate, 'app/dist'), { recursive: true }); fs.mkdirSync(dist);
   // Deliberately not an executable. Authentication/publish must not run it.
@@ -31,11 +32,13 @@ test('tampered candidate payload fails all-file verification even with the corre
   assert.deepEqual(fs.readdirSync(f.dist), []);
 });
 test('immutable publisher verifies both newly copied and already existing versions, refusing corruption', t => {
-  const f = fixture(t), lease = acquireArtifactLease(f.dist); t.after(() => lease.release());
+  const f = fixture(t), lease = acquireArtifactLease(f.dist);
+  try {
   const target = publishImmutable(f.dist, f.candidate, f.hash); assert.deepEqual(verifyArtifact(target), []);
   const before = fs.statSync(target); assert.equal(publishImmutable(f.dist, f.candidate, f.hash), target); assert.equal(fs.statSync(target).ino, before.ino);
   fs.writeFileSync(path.join(target, 'node/bin/node'), 'CORRUPT_EXISTING');
   assert.throws(() => publishImmutable(f.dist, f.candidate, f.hash), /hash mismatch/); assert.equal(fs.readFileSync(path.join(target, 'node/bin/node'), 'utf8'), 'CORRUPT_EXISTING');
+  } finally { lease.release(); } // Close the owned OS lease before fixture teardown.
 });
 test('publisher OS lease spans asynchronous work and concurrent acquisition cannot replace or unlink it', async t => {
   const f = fixture(t), first = acquireArtifactLease(f.dist); const file = path.join(f.dist, '.runtime-artifact-lease.sqlite'), before = fs.statSync(file).ino;

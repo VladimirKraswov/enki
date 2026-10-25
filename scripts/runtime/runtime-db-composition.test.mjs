@@ -4,6 +4,9 @@
 // session files through the paired snapshot. Lifecycle is the in-memory port of
 // remote-fixture.mjs; no daemon, SDK, model or network is used.
 import test from 'node:test';
+// REMOTE-RUNTIME.md: remote hosts are Linux x64 only. Windows supports the
+// desktop artifact/Job path, but cannot atomically replace POSIX directory links.
+const remoteUpdate = { skip: process.platform === 'win32' && 'Linux remote-host update/rollback uses POSIX directory symlink replacement' };
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -63,7 +66,7 @@ test('first-install candidate crash quarantines the actual database and sessions
   assert.equal(fs.existsSync(transcript(s)), false); assert.equal(fs.existsSync(path.join(live(s).data, 'state.sqlite')), false);
 });
 
-test('candidate crash after an update restores the exact paired runtime.sqlite rows and JSONL bytes', async t => {
+test('candidate crash after an update restores the exact paired runtime.sqlite rows and JSONL bytes', remoteUpdate, async t => {
   const s = setup(t); await installRemote(s.v1);
   seed(live(s).db, 'before'); fs.mkdirSync(path.dirname(transcript(s)), { recursive: true }); fs.writeFileSync(transcript(s), '{"type":"session","id":"a"}\n{"type":"message"}\n');
   const original = fs.readFileSync(transcript(s));
@@ -84,7 +87,7 @@ test('candidate crash after an update restores the exact paired runtime.sqlite r
   assert.equal(fs.readFileSync(path.join(aside, 'sessions', KEY, 'new.jsonl'), 'utf8'), 'candidate-only\n');
 });
 
-test('cross-SDK update and explicit rollback go through the exact paired DB + JSONL snapshot', async t => {
+test('cross-SDK update and explicit rollback go through the exact paired DB + JSONL snapshot', remoteUpdate, async t => {
   const s = setup(t), next = { ...s.base, ...artifact(s.root, '3333333333333333', { sdk: '0.86.0' }), qualifiedRuntimes: NEXT };
   await installRemote({ ...s.v1, qualifiedRuntimes: NEXT });
   seed(live(s).db, 'old'); fs.mkdirSync(path.dirname(transcript(s)), { recursive: true }); fs.writeFileSync(transcript(s), '{"v":"old-sdk"}\n');
@@ -117,7 +120,7 @@ test('artifact metadata must advertise the actual store schema: a stale dataSche
   assert.ok(!s.daemon.log.some(([kind, value]) => kind === 'launch' && value === '2222222222222222'), 'the candidate never launched');
 });
 
-test('a DB-only receipt can never authorize an SDK change, and a tampered snapshot is never restored', async t => {
+test('a DB-only receipt can never authorize an SDK change, and a tampered snapshot is never restored', remoteUpdate, async t => {
   const s = setup(t), next = { ...s.base, ...artifact(s.root, '3333333333333333', { sdk: '0.86.0' }), qualifiedRuntimes: NEXT };
   await installRemote({ ...s.v1, qualifiedRuntimes: NEXT }); s.daemon.dbOnlyBackup = true;
   await assert.rejects(installRemote(next), error => error.code === 'ENKI_UPDATE_REFUSED' && /paired session snapshot/.test(error.message));
