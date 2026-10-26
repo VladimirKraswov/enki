@@ -14,8 +14,8 @@ it("the SDK visibility preference never claims an idle chat is working; real bus
   fake.view = { phase: "live", generation: 1, mode: { custom: false, terminalInput: false }, notices: [], snapshot: {
     state: { statuses: { extension: "Расширение подключено" }, working: { visible: true, message: null }, widgets: [] }, pendingDraft: null, pendingSubmission: null,
   } };
-  const offline = { kind: "offline" };
-  fake.active = { session: { sessionID: "chat", subscribe: () => () => {}, getView: () => fake.view }, draft: { subscribe: () => () => {}, getState: () => offline, stash: null } };
+  let draft: any = { kind: "offline" };
+  fake.active = { session: { sessionID: "chat", subscribe: () => () => {}, getView: () => fake.view }, draft: { subscribe: () => () => {}, getState: () => draft, stash: null } };
   const node = document.createElement("div"); document.body.append(node); const root = createRoot(node);
   try {
     fake.running = false; act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
@@ -29,5 +29,11 @@ it("the SDK visibility preference never claims an idle chat is working; real bus
     fake.view.snapshot.state.statuses = {};
     act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
     expect(node.textContent).toBe("");
+    draft = { kind: "conflict", local: "my draft", canonical: { text: "other window", revision: 2 }, message: "Черновик изменён в другом окне" };
+    act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
+    expect(node.querySelector('[role="alert"]')?.textContent).toContain("Черновик изменён в другом окне");
+    draft = { kind: "retrying", message: "Временный сбой" };
+    act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
+    expect(node.querySelector('[role="status"]')?.textContent).toContain("Временный сбой");
   } finally { act(() => root.unmount()); }
 });

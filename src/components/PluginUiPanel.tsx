@@ -74,7 +74,8 @@ export function PluginUiPanel({ sessionId, directory }: { sessionId: string; dir
   const statuses = Object.entries(state.statuses);
   const showSurface = expanded || view.mode.custom || view.mode.terminalInput;
   if (!showSurface && !(running && state.working.visible) && !statuses.length && !state.widgets.length && !notices.length
-      && !snapshot.pendingDraft && !snapshot.pendingSubmission && !active.draft.stash && !actionError) return null;
+      && !snapshot.pendingDraft && !snapshot.pendingSubmission && active.draft.stash === null
+      && draft.kind !== "conflict" && draft.kind !== "retrying" && !actionError) return null;
   return <div className="plugin-ui" aria-label="Расширения чата">
     <div className="plugin-ui-bar">
       {running && state.working.visible && <span className="plugin-ui-working" role="status" title="Агент выполняет текущий запрос. Индикатор исчезнет после завершения.">{state.working.message ?? "Агент выполняет запрос…"}</span>}
