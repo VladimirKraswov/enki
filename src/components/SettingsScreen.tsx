@@ -89,6 +89,7 @@ export function SettingsScreen() {
   const s = useAppState();
   const [section, setSection] = useState<Section>(()=>consumeUpdateSettings()?"updates":"general"), [query, setQuery] = useState("");
   useEffect(()=>{const open=()=>{consumeUpdateSettings();setSection("updates");setQuery("");};window.addEventListener("arvela-open-updates",open);return()=>window.removeEventListener("arvela-open-updates",open);},[]);
+  const [browserVisited, setBrowserVisited] = useState(false), [browserDirty, setBrowserDirty] = useState(false);
   const [qualityDirty,setQualityDirty]=useState(false),[qualityVisited,setQualityVisited]=useState(false);
   useEffect(()=>{if(section === "skillQuality")setQualityVisited(true);},[section]);
   const [capabilitiesDirty,setCapabilitiesDirty] = useState(false), [capabilitiesVisited,setCapabilitiesVisited] = useState(false);
@@ -103,10 +104,10 @@ export function SettingsScreen() {
   const content = useRef<HTMLDivElement>(null), back = useRef<HTMLButtonElement>(null), stay = useRef<HTMLButtonElement>(null);
   const voiceDirty = JSON.stringify(asr) !== JSON.stringify(s.prefs.asr ?? defaultAsr) || key !== savedKey;
   const helperDirty = helper !== (s.prefs.helperEndpoint ?? DEFAULT_HELPER_ENDPOINT);
-  const dirty = imagesDirty || qualityDirty || hubDirty || capabilitiesDirty || piDirty || voiceDirty || helperDirty;
+  const dirty = browserDirty || imagesDirty || qualityDirty || hubDirty || capabilitiesDirty || piDirty || voiceDirty || helperDirty;
   const exit = (target: "close" | "hosts") => { store.setUi({ settingsOpen: false, ...(target === "hosts" ? { hostDialogOpen: true } : {}) }); };
   const requestExit = (target: "close" | "hosts") => { if (dirty) setLeave(target); else exit(target); };
-  const navigate = (id: Section) => { if(id === "images") setImagesVisited(true); if (id === "hub") setHubVisited(true); if (id === "pi") setPiVisited(true); if (id === "capabilities") setCapabilitiesVisited(true); setSection(id); setQuery(""); setError(""); setNotice(""); content.current?.scrollTo(0, 0); };
+  const navigate = (id: Section) => { if (id === "browser") setBrowserVisited(true); if(id === "images") setImagesVisited(true); if (id === "hub") setHubVisited(true); if (id === "pi") setPiVisited(true); if (id === "capabilities") setCapabilitiesVisited(true); setSection(id); setQuery(""); setError(""); setNotice(""); content.current?.scrollTo(0, 0); };
   useEffect(() => { if (leave) { content.current?.scrollTo(0, 0); stay.current?.focus(); } }, [leave]);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -135,7 +136,8 @@ export function SettingsScreen() {
     <div className="settings-main" ref={content}><div className="settings-window-drag" data-tauri-drag-region/><div className="settings-page">
       <header><h1>{query.trim() ? "Поиск настроек" : selected.title}</h1>{query.trim() && <p>Результаты для «{query.trim()}»</p>}</header>
       {leave && <div className="settings-review" role="alert"><span>Есть несохранённые изменения настроек. Оформление уже сохранено.</span><button ref={stay} className="btn" onClick={() => setLeave(null)}>Остаться</button><button className="btn" onClick={() => exit(leave)}>Не сохранять и выйти</button></div>}
-      {query.trim() ? <div className="settings-results">{matches.length ? matches.map(item => <button key={item.id} onClick={() => navigate(item.id)}><Icon name={item.icon}/><span><b>{item.title}</b><small>{item.description}</small></span><Icon name="chevron" size={16}/></button>) : <p>Ничего не найдено. Попробуйте «шрифт», «диктовка» или «MCP».</p>}</div> : <>
+      {!!query.trim() && <div className="settings-results">{matches.length ? matches.map(item => <button key={item.id} onClick={() => navigate(item.id)}><Icon name={item.icon}/><span><b>{item.title}</b><small>{item.description}</small></span><Icon name="chevron" size={16}/></button>) : <p>Ничего не найдено. Попробуйте «шрифт», «диктовка» или «MCP».</p>}</div>}
+      <div hidden={!!query.trim()}>
         {section === "updates" && <UpdateSettings/>}
         {qualityVisited && <div hidden={section !== "skillQuality"}><SkillQualitySettings onDirtyChange={setQualityDirty}/></div>}
         {section === "general" && <Group title="Рабочее пространство"><Row title="Перезапуск интерфейса" description="Агенты продолжают работать; чат и браузер восстановятся."><button className="btn" onClick={() => store.restartInterface()}>Перезапустить</button></Row><Row title="Текущий компьютер"><span>{store.hostLabel()}</span></Row><Row title="Удалённые компьютеры" description="Подключения к серверам рабочих пространств."><button className="btn" onClick={() => requestExit("hosts")}>Управлять…</button></Row></Group>}
@@ -150,7 +152,7 @@ export function SettingsScreen() {
         </>}
         {capabilitiesVisited && <div hidden={section !== "capabilities"}><CapabilitiesSettings onDirtyChange={setCapabilitiesDirty} onNavigate={navigate}/></div>}
         {hubVisited && <div hidden={section !== "hub"}><HubSettings onDirtyChange={setHubDirty}/></div>}
-        {section === "browser" && <BrowserSettings/>}
+        {browserVisited && <div hidden={section !== "browser"}><BrowserSettings onDirtyChange={setBrowserDirty}/></div>}
         {section === "computer" && <ComputerSettings/>}
         {section === "agentControl" && <AgentControlSettings/>}
 
@@ -172,7 +174,7 @@ export function SettingsScreen() {
           <div className="settings-actions"><button className="btn" disabled={testingHelper} onClick={async () => { setError(""); setNotice(""); setTestingHelper(true); try { setHelperStatus(await helperHealth(helper.trim())); setNotice("Помощник доступен."); } catch (problem) { setHelperStatus(null); setError(problem instanceof Error ? problem.message : String(problem)); } finally { setTestingHelper(false); } }}>{testingHelper ? "Проверка…" : "Проверить подключение"}</button><button className="btn primary" disabled={!helperDirty} onClick={() => { const next = helper.trim().replace(/\/$/, ""); if (!validHelperEndpoint(next)) { setError("Укажите локальный HTTP-адрес без пути и учётных данных."); return; } store.setHelperEndpoint(next); setHelper(next); setError(""); setNotice("Адрес помощника сохранён."); }}>Сохранить</button></div>
         </>}
         {section === "about" && <Group title="Состояние приложения"><Row title="Enki"><span>{appVersion}</span></Row><Row title="Среда выполнения"><span>{s.connection.phase === "connected" ? `Подключена · ${s.connection.version ?? ""}` : "Не подключена"}</span></Row></Group>}
-      </>}
+      </div>
       <div hidden={!!query.trim() || section !== "pi"}>{piVisited && <PiSettings onDirtyChange={setPiDirty}/>}</div>      {error && <p role="alert" className="composer-error">{error}</p>}{notice && <p role="status" className="settings-notice">{notice}</p>}
     </div></div>
   </section>;

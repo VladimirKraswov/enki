@@ -2962,7 +2962,17 @@ button:focus-visible, [tabindex]:focus-visible { outline-color: var(--accent); }
 /* Chat context is a compact disclosure anchored to the chat column, so it never
    covers the browser projection or the review pane beside it. */
 .chat-col { position:relative; }
-.context-panel { position:absolute; right:12px; top:8px; z-index:40; width:min(320px,calc(100% - 24px)); max-height:calc(100% - 20px); overflow:auto; overscroll-behavior:contain; padding:10px 14px 12px; background:var(--bg-raised); color:var(--text); border:1px solid var(--border); border-radius:18px; box-shadow:0 12px 40px #0004; outline:none; box-sizing:border-box; }
+.chat-workspace { display:flex; flex:1; min-width:0; min-height:0; position:relative; container:chat-workspace / inline-size; }
+.chat-workspace > .chat-col { min-width:0; }
+.chat-context-slot { flex:none; width:0; min-height:0; position:relative; visibility:hidden; opacity:0; transform:translateX(12px); transition:width 240ms cubic-bezier(.2,.8,.2,1),opacity 180ms ease,transform 240ms ease,visibility 240ms; }
+.context-open > .chat-context-slot { width:344px; visibility:visible; opacity:1; transform:translateX(0); }
+.context-panel { position:absolute; right:12px; top:8px; z-index:40; width:320px; max-height:calc(100% - 20px); overflow:auto; overscroll-behavior:contain; padding:10px 14px 12px; background:var(--bg-raised); color:var(--text); border:1px solid var(--border); border-radius:18px; box-shadow:0 6px 24px #0002; outline:none; box-sizing:border-box; }
+/* Below this size a rail would leave too little room to read or write. */
+@container chat-workspace (max-width: 700px) {
+  .chat-context-slot, .context-open > .chat-context-slot { position:absolute; inset:0 0 0 auto; width:min(344px,100%); z-index:40; pointer-events:none; }
+  .context-open > .chat-context-slot .context-panel { pointer-events:auto; }
+  .context-panel { width:calc(100% - 24px); box-shadow:0 12px 40px #0004; }
+}
 .context-panel:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 .context-panel-header,.context-section-title,.context-row { display:flex; align-items:center; gap:8px; min-width:0; }
 .context-panel-header { justify-content:space-between; }
@@ -3282,3 +3292,6 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .handoff-provenance details { min-width: 0; }
 .handoff-provenance summary { cursor: pointer; overflow-wrap: anywhere; }
 .handoff-provenance p { margin: 8px 0 0; }
+
+/* Empty search results are distinct from unavailable connections. */
+.select-empty { padding:14px 12px; color:var(--text-dim); font-size:.9rem; line-height:1.5; display:flex; flex-direction:column; align-items:flex-start; gap:8px; }

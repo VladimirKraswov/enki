@@ -9,6 +9,7 @@ vi.mock('../src/state/store', () => ({ useAppState: () => fake.state, store: { .
 vi.mock('../src/components/CapabilitiesSettings', () => ({ CapabilitiesSettings: ({onDirtyChange}:any) => {const [value,setValue]=requireReact.useState('');return createElement('input',{ 'aria-label':'Общий черновик',value,onChange:(e:any)=>{setValue(e.target.value);onDirtyChange(true);}});}}));
 vi.mock('../src/components/ComputerSettings', () => ({ ComputerSettings: () => createElement('p', {}, 'Cua Driver') }));
 vi.mock('../src/components/PiSettings', () => ({ PiSettings: ({onDirtyChange}:any) => {const [value,setValue]=requireReact.useState('');return createElement('input',{ 'aria-label':'Черновик Pi',value,onChange:(e:any)=>{setValue(e.target.value);onDirtyChange(true);}});}}));
+vi.mock('../src/components/BrowserSettings', () => ({ BrowserSettings: ({onDirtyChange}:any) => {const [value,setValue]=requireReact.useState('');return createElement('input',{ 'aria-label':'Профиль браузера',value,onChange:(e:any)=>{setValue(e.target.value);onDirtyChange(true);}});}}));
 import { SettingsScreen, searchSettings } from '../src/components/SettingsScreen';
 let root: Root;
 beforeEach(() => {
@@ -73,6 +74,22 @@ it("keeps shared capability drafts when navigating and warns on exit",()=>{
  click('Вернуться в приложение');expect(fake.setUi).not.toHaveBeenCalled();expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
 });
 
+it("keeps unsaved settings when searching, clearing the query and following a search result", () => {
+ click('Навыки и инструменты'); input('Общий черновик', 'keep this draft');
+ const original = document.querySelector('[aria-label="Общий черновик"]');
+ input('Поиск настроек', 'шрифт');
+ expect(original?.isConnected).toBe(true);
+ expect(original?.closest('[hidden]')).not.toBeNull();
+ input('Поиск настроек', '');
+ expect(document.querySelector<HTMLInputElement>('[aria-label="Общий черновик"]')!.value).toBe('keep this draft');
+ input('Поиск настроек', 'шрифт'); act(() => document.querySelector<HTMLButtonElement>('.settings-results button')!.click());
+ click('Навыки и инструменты');
+ expect(document.querySelector('[aria-label="Общий черновик"]')).toBe(original);
+ expect((original as HTMLInputElement).value).toBe('keep this draft');
+ click('Вернуться в приложение'); expect(fake.setUi).not.toHaveBeenCalled();
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
+});
+
 it("shows one executing agent and no OpenCode configuration sections",()=>{
  const nav=document.querySelector('nav[aria-label="Разделы настроек"]')!;
  expect([...nav.querySelectorAll('.settings-nav-label')].map(x=>x.textContent)).toEqual(['Приложение','Общие возможности','Агент']);
@@ -87,4 +104,11 @@ it("preserves agent drafts across navigation and guards leaving settings",()=>{
  click('Агент Enki');input('Черновик Pi','unfinished pi');click('Общее');click('Агент Enki');
  expect(document.querySelector<HTMLInputElement>('[aria-label="Черновик Pi"]')!.value).toBe('unfinished pi');
  click('Вернуться в приложение');expect(fake.setUi).not.toHaveBeenCalled();expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
+});
+
+it("keeps unsaved browser profiles when navigating and warns on exit", () => {
+ click('Браузер'); input('Профиль браузера', 'pending profile'); click('Общее'); click('Браузер');
+ expect(document.querySelector<HTMLInputElement>('[aria-label="Профиль браузера"]')!.value).toBe('pending profile');
+ click('Вернуться в приложение'); expect(fake.setUi).not.toHaveBeenCalled();
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain('несохранённые');
 });

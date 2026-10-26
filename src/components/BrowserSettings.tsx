@@ -24,11 +24,14 @@ function setupSummary(setup: BrowserSetup, enabled: boolean): string {
   }
 }
 
-export function BrowserSettings() {
+export function BrowserSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void } = {}) {
   const app = useAppState(), setup = useBrowserSetup();
   const [status, setStatus] = useState<BrowserStatus | undefined>(setup.status);
   const [node, setNode] = useState(app.prefs.browser?.nodeProgram ?? "");
   const [url, setUrl] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [environmentDirty, setEnvironmentDirty] = useState(false);
+  const dirty = environmentDirty || node !== (app.prefs.browser?.nodeProgram ?? "");
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const enabled = browserEnabled(app.prefs);
   const nodeProgram = browserNodeProgram(app.prefs);
   const native = isNative(), local = isLocalComputer(app.prefs.endpoint, !!store.currentHost());
@@ -71,10 +74,10 @@ export function BrowserSettings() {
       <div className="setting-row"><div className="setting-label"><span>Разрешения на действия</span><SettingHelp topic="browser.permissions" title="Разрешения на действия"/></div><div className="setting-control"><span>Доступ чата в Enki</span></div></div>
       <div className="settings-actions"><span className="settings-muted" role="status">{setupSummary(setup, enabled)}</span><button className="btn" disabled={!native || !local || busy || configuring} onClick={() => { setError(""); void store.configureBrowser(true); }}>Настроить и проверить</button></div>
     </div></section>
-    <BrowserEnvironmentSettings disabled={!native || !local || busy || configuring} running={!!status?.running}/>
+    <BrowserEnvironmentSettings disabled={!native || !local || busy || configuring} running={!!status?.running} onDirtyChange={setEnvironmentDirty}/>
     <section className="setting-group" aria-label="Панель браузера"><h2>Панель браузера</h2><div className="setting-card">
       <div className="setting-row engine-field-row"><div className="setting-label"><label htmlFor="browser-address">Адрес страницы</label><SettingHelp topic="browser.address" title="Адрес страницы"/></div><div className="setting-control"><input id="browser-address" type="url" value={url} placeholder="https://example.com" onChange={event => setUrl(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && native && local && enabled && status?.installed && !busy && !configuring) void action("browser_open"); }}/></div></div>
-      <div className="setting-row"><div className="setting-label"><span>Состояние</span></div><div className="setting-control"><span>{status?.browserOpen ? "Браузер открыт внутри Desktop" : status?.running ? "Сервис готов; страница откроется по запросу" : "Остановлен"}</span></div></div>
+      <div className="setting-row"><div className="setting-label"><span>Состояние</span></div><div className="setting-control"><span>{status?.browserOpen ? "Браузер открыт в Enki" : status?.running ? "Сервис готов; страница откроется по запросу" : "Остановлен"}</span></div></div>
       <div className="setting-row"><div className="setting-label"><span>Отдельный профиль</span><SettingHelp topic="browser.profile" title="Отдельный профиль"/></div><div className="setting-control"><span className="settings-path">{status?.profilePath ?? "—"}</span></div></div>
       <div className="settings-actions"><button className="btn primary" disabled={!native || !local || !enabled || !status?.installed || busy || configuring} onClick={() => void action("browser_open")}>Открыть браузер</button><button className="btn" disabled={!native || busy || (!status?.running && !configuring)} title={configuring ? "Останавливает и отменяет текущую установку или запуск" : undefined} onClick={() => void action("browser_stop")}>Остановить управление</button><button className="btn" disabled={!native || busy} onClick={() => void refresh().catch(error => setError(message(error)))}>Обновить состояние</button></div>
     </div></section>

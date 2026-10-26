@@ -39,7 +39,9 @@ separately. Focused regression counts are not a full-suite or live-model claim.
 
 - Main settings, model catalog, memory, history and recovery use Enki terminology. Optional external imports and compatibility fields are secondary; data provenance and recovery actions remain available.
 - Generic progress appears once in the chat; explicit extension progress, draft conflicts and recovery remain visible when relevant.
-- Focused43 and all1100 frontend tests, build and isolated UI checks passed. Original copy assertions updated to requested terminology; behavior checks retained. Canonical release and installed UI verification pending.
+- Context panel smoothly reserves space beside the live chat and composer; compact screens retain a readable chat width. Closing/reopening preserves draft, focus and mounted agent views; system reduced-motion preferences are respected.
+- Settings search preserves staged forms. Browser profiles remain staged across navigation and warn before exit; manual controls expand below ready profiles. Model search distinguishes no matches from unavailable connections; command search and pickers support keyboard focus/return.
+- All1107 frontend tests, TypeScript/build and isolated dark/light layout checks passed. Original copy assertions reflect requested terminology; behavior checks retained. Delivery is recorded by the canonical signed Hub receipt and installed UI acceptance.
 
 ## Reference image editing and bounded revisions (0.2.115)
 

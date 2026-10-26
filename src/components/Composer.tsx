@@ -283,7 +283,7 @@ export function Composer() {
           {attachments.map(file => <AttachmentChip key={file.id} file={file} disabled={s.ui.sending} onRemove={() => removeFile(file.id)}/>)}</div>}
         <textarea
           ref={textareaRef}
-          aria-label="Message"
+          aria-label="Сообщение"
           placeholder="Работайте с Enki"
           value={draft}
           disabled={s.ui.workspacePreparing}
@@ -391,7 +391,7 @@ export function Composer() {
             <button
               className="stop-btn"
               onClick={() => running && session ? void store.stopSession(session.id) : store.cancelPreparation()}
-              aria-label="Stop generation"
+              aria-label="Остановить ответ"
               title={running ? "Остановить ответ" : "Отменить подготовку"}
             >
               <Icon name="stop" size={14} />

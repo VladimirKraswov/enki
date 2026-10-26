@@ -52,6 +52,16 @@ it("explains every ready profile and shows what the current draft will do", asyn
   expect(summary()).toContain("Обычный Chrome, маркеры скрыты");
   expect(summary()).toContain("Сохраняются между запусками");
   expect(button("Сохранить профиль").disabled).toBe(true);
+  expect(document.querySelector<HTMLDetailsElement>(".browser-advanced")!.open).toBe(false);
+});
+
+it("reports an unsaved profile and clears the warning after returning to saved values", async () => {
+  const dirty = vi.fn();
+  await act(async () => root.render(createElement(BrowserEnvironmentSettings, { disabled: false, running: false, onDirtyChange: dirty })));
+  expect(dirty).toHaveBeenLastCalledWith(false);
+  await act(async () => profile("Приватный").click()); expect(dirty).toHaveBeenLastCalledWith(true);
+  await act(async () => profile("Стандартный").click()); expect(dirty).toHaveBeenLastCalledWith(false);
+  expect(fake.setBrowserSettings).not.toHaveBeenCalled(); expect(fake.invoke).not.toHaveBeenCalled();
 });
 
 it("updates the summary and enables saving when another profile is chosen", async () => {

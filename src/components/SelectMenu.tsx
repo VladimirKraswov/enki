@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { FloatingPopover } from "./FloatingPopover";
 import { Icon } from "./Icon";
 export function SelectMenu({
@@ -40,11 +40,22 @@ export function SelectMenu({
   const ref = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const initialFocus = useRef<"first" | "last" | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const popup = popupRef.current;
+    const rows = popup?.querySelectorAll<HTMLButtonElement>("[role=option]:not(:disabled)");
+    const target = initialFocus.current
+      ? rows?.[initialFocus.current === "last" ? rows.length - 1 : 0]
+      : popup?.querySelector<HTMLElement>('input, [role=option][aria-selected=true]:not(:disabled)') ?? rows?.[0];
+    (target ?? popup?.querySelector<HTMLButtonElement>("button:not(:disabled)"))?.focus();
+    initialFocus.current = null;
+  }, [open]);
   const selected = options.find((o) => o.value === value);
   const filtered = options.filter((o) =>
     (o.label + " " + (o.detail ?? "") + " " + (o.section ?? ""))
       .toLowerCase()
-      .includes(query.toLowerCase()),
+      .includes(query.trim().toLowerCase()),
   );
   const sections = [...new Set(filtered.map(o => o.section))];
   return (
@@ -65,7 +76,7 @@ export function SelectMenu({
             ) ?? []),
           ];
           const i = rows.indexOf(document.activeElement as HTMLButtonElement);
-          if (!open) { setOpen(true); return; }
+          if (!open) { initialFocus.current = e.key === "ArrowDown" ? "first" : "last"; setQuery(""); setOpen(true); return; }
           rows[i < 0 ? (e.key === "ArrowDown" ? 0 : rows.length - 1) :
             (i + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length]?.focus();
         }
@@ -135,11 +146,14 @@ export function SelectMenu({
               </div> : <Fragment key="ungrouped">{rows}</Fragment>;
             })}
           </div>
+          {!filtered.length && <div className="select-empty" role={refreshError ? undefined : "status"}>
+            <span>{query.trim() ? "Ничего не найдено. Измените запрос." : refreshing ? "Загружаем доступные модели…" : onRefresh ? "Доступных моделей пока нет. Обновите список или проверьте подключения в настройках." : "Нет доступных вариантов."}</span>
+            {query.trim() && <button type="button" className="btn small ghost" onClick={() => { setQuery(""); popupRef.current?.querySelector("input")?.focus(); }}>Сбросить поиск</button>}
+          </div>}
           {onRefresh && <div className="select-refresh">
             <button type="button" disabled={refreshing} onClick={onRefresh}>
               <Icon name="refresh" size={14}/>{refreshing ? "Обновление…" : "Обновить список"}
             </button>
-            {!filtered.length && <small>Доступных моделей пока нет.</small>}
             {refreshError && <small role="status">{refreshError}</small>}
           </div>}
         </FloatingPopover>

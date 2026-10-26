@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { store, useAppState } from "../state/store";
 import { Icon } from "./Icon";
 import { pickFolder } from "./Sidebar";
@@ -6,6 +6,12 @@ import { pathBasename } from "../util/paths";
 export function Palette() {
   const s = useAppState(),
     [query, setQuery] = useState("");
+  const panel = useRef<HTMLDivElement>(null);
+  const prior = useRef(document.activeElement as HTMLElement | null);
+  useEffect(() => () => {
+    const active = document.activeElement;
+    if ((!active || active === document.body || panel.current?.contains(active)) && prior.current?.isConnected) prior.current.focus({ preventScroll: true });
+  }, []);
   if (!s.ui.paletteOpen) return null;
   const close = () => store.setUi({ paletteOpen: false });
   const q = query.trim().toLowerCase();
@@ -62,7 +68,12 @@ export function Palette() {
         if (e.target === e.currentTarget) close();
       }}
       onKeyDown={(e) => {
-        if (e.key === "Escape") close();
+        if (e.key === "Escape") { e.stopPropagation(); close(); }
+        if (e.key === "Tab") {
+          const items = [...e.currentTarget.querySelectorAll<HTMLElement>('input, button:not(:disabled)')];
+          if (e.shiftKey && document.activeElement === items[0]) { e.preventDefault(); items[items.length - 1]?.focus(); }
+          else if (!e.shiftKey && document.activeElement === items[items.length - 1]) { e.preventDefault(); items[0]?.focus(); }
+        }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
           const el = e.currentTarget;
@@ -71,13 +82,14 @@ export function Palette() {
           ];
           const i = items.indexOf(document.activeElement as HTMLButtonElement);
           items[
-            (i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length
+            i < 0 ? (e.key === "ArrowDown" ? 0 : items.length - 1) : (i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length
           ]?.focus();
         }
       }}
     >
       <div
         className="palette"
+        ref={panel}
         role="dialog"
         aria-label="Поиск и команды"
         aria-modal="true"
@@ -97,7 +109,7 @@ export function Palette() {
               }
             }}
           />
-          <button onClick={close}>
+          <button aria-label="Закрыть поиск" onClick={close}>
             <kbd>esc</kbd>
           </button>
         </div>

@@ -23,17 +23,17 @@ const PREVIEW = 3;
 const CHILD_POLL_MS = 10_000;
 
 /** Everything in the panel belongs to one server/folder/chat/engine; switching any of them remounts it. */
-export function ContextPanel() {
+export function ContextPanel({ active = true }: { active?: boolean } = {}) {
   const s = useAppState();
   const server = s.prefs.workspaceKey ?? s.prefs.endpoint, sid = s.activeSessionId, directory = s.directory;
   const engine = store.engineIdFor();
-  return <ContextContents key={JSON.stringify([server, s.prefs.endpoint, directory, sid, engine])} server={server} sid={sid} directory={directory} engine={engine} />;
+  return <ContextContents key={JSON.stringify([server, s.prefs.endpoint, directory, sid, engine])} server={server} sid={sid} directory={directory} engine={engine} active={active} />;
 }
 
 // Result cards persist the historical agent tag (OutcomeScope "pi" | "opencode");
 // every chat runs on the one runtime, whose persisted tag is RUNTIME_AGENT_ID.
 // `engine` only keys the remount above.
-function ContextContents({ server, sid, directory }: { server: string; sid: string | null; directory: string | null; engine: EngineId }) {
+function ContextContents({ server, sid, directory, active }: { server: string; sid: string | null; directory: string | null; engine: EngineId; active: boolean }) {
   const s = useAppState(), panel = useRef<HTMLElement>(null);
   const scheduler = taskScheduler();
   const chat = sid ? s.chat.sessions[sid] : undefined;
@@ -48,14 +48,24 @@ function ContextContents({ server, sid, directory }: { server: string; sid: stri
   const close = () => store.setUi({ contextOpen: false });
 
   useEffect(() => {
+    if (!active) return;
     const node = panel.current, prior = document.activeElement as HTMLElement | null;
-    node?.focus();
+    // The rail may still have its closed visibility at commit time. Focus after
+    // layout so keyboard navigation enters the newly revealed panel reliably.
+    const frame = requestAnimationFrame(() => node?.focus({ preventScroll: true }));
+    // Some WebViews complete button activation after the first frame. Do not
+    // steal focus if the user has already moved to another control meanwhile.
+    const settled = setTimeout(() => {
+      if (document.activeElement === prior) node?.focus({ preventScroll: true });
+    }, 240);
     return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settled);
       // Return focus only if it would otherwise be lost; a jump to a message keeps its own focus.
       const active = document.activeElement;
       if (prior?.isConnected && (!active || active === document.body || node?.contains(active))) prior.focus();
     };
-  }, []);
+  }, [active]);
 
   const jump = (messageID: string) => { if (sid) store.setUi({ revealMessage: { server, directory, sessionID: sid, messageID }, contextOpen: false }); };
   const draftResult = () => {

@@ -4,7 +4,7 @@ import { browserNative } from "../browser/integration";
 import { browserEnvironment, browserEnvironmentDefaults, type BrowserEnvironment } from "../browser/environment";
 import { store, useAppState } from "../state/store";
 
-type Props = { disabled: boolean; running: boolean };
+type Props = { disabled: boolean; running: boolean; onDirtyChange?: (dirty: boolean) => void };
 
 interface Profile {
   id: string;
@@ -69,7 +69,7 @@ function summaryOf(env: BrowserEnvironment) {
   };
 }
 
-export function BrowserEnvironmentSettings({ disabled, running }: Props) {
+export function BrowserEnvironmentSettings({ disabled, running, onDirtyChange }: Props) {
   const app = useAppState();
   const saved = app.prefs.browser?.environment;
   const [draft, setDraft] = useState(() => browserEnvironment(saved));
@@ -77,6 +77,7 @@ export function BrowserEnvironmentSettings({ disabled, running }: Props) {
   useEffect(() => { setDraft(browserEnvironment(saved)); }, [saved]);
   const locked = disabled || busy;
   const dirty = !sameEnvironment(draft, browserEnvironment(saved));
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   const activeProfile = PROFILES.find(profile => sameEnvironment(profile.env, draft))?.id ?? "custom";
   const summary = summaryOf(draft);
   const change = <K extends keyof BrowserEnvironment>(key: K, value: BrowserEnvironment[K]) => {
@@ -116,6 +117,7 @@ export function BrowserEnvironmentSettings({ disabled, running }: Props) {
       {([["Браузер", summary.browser], ["Где открывается", summary.where], ["Что видят сайты", summary.fingerprint], ["Скорость", summary.speed], ["Данные сайтов", summary.storage]] as const).map(([label, value]) => <div className="browser-summary-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}
     </div>
     {activeProfile === "custom" && <p className="browser-hint" role="status">Настройки изменены вручную: это свой набор, а не один из готовых профилей.</p>}
+    <details className="settings-disclosure browser-advanced"><summary>Настроить профиль вручную</summary>
     <div className="setting-card browser-env-card">
       <h3 className="browser-group-title">Браузер и окно</h3>
       {select("engine", "Браузер", "Chromium Enki — встроенный, ничего устанавливать не нужно. Google Chrome — внешний браузер, установленный на компьютере.", [["chromium", "Chromium Enki (встроенный)"], ["chrome", "Google Chrome (установленный)"]])}
@@ -134,6 +136,7 @@ export function BrowserEnvironmentSettings({ disabled, running }: Props) {
       {select("colorScheme", "Тема сайтов", "Тема, которую запрашивают сайты.", [["system", "Системная"], ["light", "Светлая"], ["dark", "Тёмная"]])}
       {select("reducedMotion", "Анимации сайтов", "Просьба уменьшить движение для поддерживающих сайтов.", [["no-preference", "Как на сайте"], ["reduce", "Уменьшить движение"]])}
     </div>
+    </details>
     <div className="settings-actions">
       <button className="btn primary" disabled={locked || !dirty} onClick={() => void save()}>{busy ? "Сохраняю…" : "Сохранить профиль"}</button>
       <button className="btn" disabled={locked} onClick={() => { setDraft({...browserEnvironmentDefaults}); setNotice(""); setError(""); }}>Сбросить профиль</button>

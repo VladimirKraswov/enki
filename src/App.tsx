@@ -2,6 +2,7 @@ import { UpdateRuntime } from "./updates/runtime";
 import { MemoryRuntime } from "./memory/Runtime";
 import { HubRuntime } from "./hub/Runtime";
 import { ContextPanel } from "./components/ContextPanel";
+import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ScheduleRuntime } from "./schedules/Runtime";
 import { HandoffDialog } from "./components/HandoffDialog";
 import { BrowserPanel, BrowserPresence } from "./components/BrowserPanel";
@@ -110,7 +111,7 @@ export default function App() {
           style={{ display: layout.sidebarOpen ? undefined : "none" }}
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize sidebar"
+          aria-label="Изменить ширину боковой панели"
           onPointerDown={(e) => {
             (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
             startResize({
@@ -124,9 +125,7 @@ export default function App() {
         <div className="center-col">
           <TopBar />
           <div className="center-main">
-            <div className="chat-col">
-              {/* Anchored to the chat column so it never covers the browser or review pane. */}
-              {s.ui.contextOpen && <ContextPanel />}
+            <ChatWorkspace open={s.ui.contextOpen} panel={<ContextPanel active={s.ui.contextOpen} />}>
               {s.connection.phase === "connected" ||
               s.connection.phase === "connecting" ? (
                 <>
@@ -138,7 +137,7 @@ export default function App() {
               ) : (
                 <ConnectionGate />
               )}
-            </div>
+            </ChatWorkspace>
             {s.ui.browserOpen && s.activeSessionId && <BrowserPanel key={JSON.stringify([s.prefs.workspaceKey ?? s.prefs.endpoint, s.directory, store.engineIdFor(), s.activeSessionId])} />}
             {!s.ui.browserOpen && layout.rightOpen && store.workspaceToolsAvailable() && (
               <>
@@ -146,7 +145,7 @@ export default function App() {
                   className="resizer-v"
                   role="separator"
                   aria-orientation="vertical"
-                  aria-label="Resize review panel"
+                  aria-label="Изменить ширину панели изменений"
                   onPointerDown={(e) => {
                     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
                     startResize({
@@ -171,7 +170,7 @@ export default function App() {
                 className="resizer-h"
                 role="separator"
                 aria-orientation="horizontal"
-                aria-label="Resize terminal panel"
+                aria-label="Изменить высоту терминала"
                 onPointerDown={(e) => {
                   (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
                   startResize({
