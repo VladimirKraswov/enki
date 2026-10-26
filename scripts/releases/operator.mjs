@@ -20,8 +20,6 @@ export function operatorFile(parent=path.join(os.homedir(),'.config')) {
     fs.renameSync(old,current);
     try{fs.symlinkSync(current,old,process.platform==='win32'?'junction':'dir');}
     catch(error){fs.renameSync(current,old);throw error;}
-  }else if(fs.existsSync(current)&&!fs.existsSync(old)) {
-    fs.symlinkSync(current,old,process.platform==='win32'?'junction':'dir');
   }
   return path.join(current,'operator.json');
 }

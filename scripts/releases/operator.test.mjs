@@ -30,7 +30,8 @@ test('operator migration preserves private bytes and old absolute credential pat
   fs.writeFileSync(path.join(old,'operator.json'),'fixture',{mode:0o600});
   const current=operatorFile(root);assert.equal(fs.readFileSync(current,'utf8'),'fixture');
   assert.equal(fs.realpathSync(old),fs.realpathSync(path.join(root,'enki-release')));assert.equal(operatorFile(root),current);
-  fs.unlinkSync(old);fs.mkdirSync(old);fs.writeFileSync(path.join(old,'operator.json'),'other');
+  fs.unlinkSync(old);assert.equal(operatorFile(root),current);assert.equal(fs.existsSync(old),false,'retired alias stays retired');
+  fs.mkdirSync(old);fs.writeFileSync(path.join(old,'operator.json'),'other');
   assert.throws(()=>operatorFile(root));assert.equal(fs.readFileSync(current,'utf8'),'fixture');
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
