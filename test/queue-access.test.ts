@@ -58,6 +58,18 @@ it('a status refresh failure after durable acceptance does not claim the correct
  expect(store.state.ui.sendError).toBeFalsy();
 });
 
+it('a late HTTP snapshot cannot bring a delivered correction back after a newer stream event',async()=>{
+ await store.enqueuePrompt('correction');const id=store.getQueue()[0].id;
+ let finish!:(queue:QueueStateDTO)=>void;
+ fx.on('GET','/sessions/:id/queue',()=>new Promise<QueueStateDTO>(resolve=>{finish=resolve;}));
+ const correcting=store.steerQueued(id);
+ await vi.waitFor(()=>expect(finish).toBeDefined());
+ emitQueue({sessionID:'ses_a',armed:true,pausedReason:null,items:[],corrections:[]});
+ finish({sessionID:'ses_a',armed:true,pausedReason:null,items:[],corrections:[{id:'fix',text:'correction',state:'running',createdAt:1}]});
+ await correcting;
+ expect(store.state.queues.ses_a.corrections).toEqual([]);
+});
+
 it("a runtime refusal to store the item keeps the text draft and shows why", async () => {
   fx.on("POST", "/sessions/:id/queue", () => { throw new Reply(507, { message: "Не удалось сохранить очередь: диск заполнен." }); });
   store.setDraft("keep this task");

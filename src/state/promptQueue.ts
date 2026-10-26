@@ -56,6 +56,7 @@ function queued(item: QueueItemDTO): QueuedPrompt {
 export class PromptQueueController {
   private edits = new Map<string, QueueEdit>();
   private locks = new Map<string, QueueScope>();
+  private revisions = new Map<string, number>();
   /** Chats with a correction request in flight (double-click fence). */
   private steering = new Map<string, QueueScope>();
 
@@ -64,6 +65,7 @@ export class PromptQueueController {
 
   /** Authoritative queue state from the runtime (snapshot, event or response). */
   apply(queue: QueueStateDTO): void {
+    this.revisions.set(queue.sessionID, (this.revisions.get(queue.sessionID) ?? 0) + 1);
     this.host.mutate(s => ({ queues: { ...s.queues, [queue.sessionID]: queue } }));
     const edit = this.edits.get(queue.sessionID);
     const workspace = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
@@ -78,6 +80,8 @@ export class PromptQueueController {
   }
 
   replaceAll(queues: QueueStateDTO[], scope: (sessionID: string) => boolean): void {
+    for (const id of new Set([...this.revisions.keys(), ...Object.keys(this.state.queues), ...queues.map(q => q.sessionID)]))
+      if (scope(id)) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
     this.host.mutate(s => {
       const next = Object.fromEntries(Object.entries(s.queues).filter(([id]) => !scope(id)));
       for (const queue of queues) next[queue.sessionID] = queue;
@@ -90,8 +94,11 @@ export class PromptQueueController {
     if (!backend) return;
     const scope = captured ?? { backend, generation: this.host.generation() };
     if (!this.currentScope(scope)) return;
+    const revision = this.revisions.get(sessionID) ?? 0;
+    this.revisions.set(sessionID, revision);
     const queue = await backend.queue(sessionID, directory);
-    if (this.currentScope(scope)) this.apply(queue);
+    // A newer stream event (e.g. durable delivery) wins over an older HTTP snapshot.
+    if (this.currentScope(scope) && this.revisions.get(sessionID) === revision) this.apply(queue);
   }
 
   getQueue(id = this.state.activeSessionId): QueuedPrompt[] {
