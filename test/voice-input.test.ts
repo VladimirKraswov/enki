@@ -142,6 +142,14 @@ it('requires explicit recovery of interrupted audio before starting another reco
  expect(fake.transcribe).toHaveBeenCalledOnce();expect(fake.appendDictation).toHaveBeenCalledWith(workspace,draft,'восстановленный текст','interrupted');
  expect(fake.records.size).toBe(0);
 });
+it('recovery delivers to an explicit question draft rather than the ordinary prompt',async()=>{
+ const {dictationScope}=await import('../src/voice/journal');
+ const workspace=fake.state.prefs.workspaceKey??fake.state.prefs.endpoint,draft=JSON.stringify(['question-answer','q-scoped',0]);
+ fake.records.set('question-audio',{id:'question-audio',group:'q',scope:dictationScope(workspace,draft),workspace,draft,settings:fake.state.prefs.asr,created:1,sequence:0,overlap:false,mime:'audio/webm',parts:[new Blob(['saved'])],complete:true,text:'Ответ голосом'});
+ await act(async()=>root.render(createElement(VoiceInput,{disabled:false,draftTarget:draft})));
+ await act(async()=>{[...document.querySelectorAll('button')].find(b=>b.textContent==='Восстановить диктовку')!.click();});
+ expect(fake.appendDictation).toHaveBeenCalledWith(workspace,draft,'Ответ голосом','question-audio');expect(fake.transcribe).not.toHaveBeenCalled();
+});
 
 it('does not invite speech until a real audio checkpoint arrives, and cleans up after cancellation',async()=>{
  const stop=vi.fn();fake.transcribe.mockResolvedValue('текст');capture.mockResolvedValue({getTracks:()=>[{stop}]});

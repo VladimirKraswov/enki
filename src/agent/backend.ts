@@ -197,6 +197,7 @@ export interface AgentBackend {
     requestID: string,
     answers: string[][],
     directory: string,
+    parts?: PromptRequest["parts"],
   ): Promise<void>;
   rejectQuestion(requestID: string, directory: string): Promise<void>;
 

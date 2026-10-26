@@ -2,9 +2,12 @@
 // failure rejects the operation; no timer callback throws out of the broker.
 import { randomUUID } from "node:crypto";
 import type { DialogRequestDTO, PermissionRequestDTO, QuestionRequestDTO, ServerEventDTO } from "../protocol.ts";
+import {QUESTION_ANSWER_TEXT_LIMIT} from '../protocol.ts';
 import { text, type Database } from "../store/db.ts";
 import type { EventJournal } from "../store/events.ts";
 import { permissionPreview, readGrant, storedGrant, type ObservedGrant } from "./grants.ts";
+import { questionParts, type AnswerContent } from './answer-parts.ts';
+import type { AttachmentStore, StoredAttachment } from '../store/attachments.ts';
 
 export type PermissionReply = "once" | "always" | "reject";
 export interface DialogAnswer { value?: string; confirmed?: boolean; cancelled?: boolean }
@@ -27,11 +30,11 @@ export class InteractionInputError extends Error {
   constructor(message: string) { super(message); this.name = "InteractionInputError"; }
 }
 export type QuestionSpec = QuestionRequestDTO["questions"][number];
-export type QuestionAnswer = { answers: string[][] } | { rejected: true };
+export type QuestionAnswer = { answers: string[][]; content?: AnswerContent[]; attachments?: StoredAttachment[] } | { rejected: true };
 export interface QuestionAsk {
   sessionID: string; directory: string; questions: QuestionSpec[]; callID?: string; signal?: AbortSignal;
 }
-export const QUESTION_LIMITS = { questions: 8, options: 16, question: 2000, header: 80, label: 200, description: 1000, answer: 10_000 } as const;
+export const QUESTION_LIMITS = { questions: 8, options: 16, question: 2000, header: 80, label: 200, description: 1000, answer: QUESTION_ANSWER_TEXT_LIMIT } as const;
 
 /** Structural bounds for model-provided questions (the tool schema is checked too). */
 export function questionProblem(questions: unknown): string | null {
@@ -92,7 +95,8 @@ export class InteractionBroker {
   private dialogs = new Map<string, Pending<DialogRequestDTO, DialogAnswer>>();
   private questions = new Map<string, Pending<QuestionRequestDTO, QuestionAnswer>>();
 
-  constructor(private readonly db: Database, private readonly journal: EventJournal, private readonly deadlineMs = DEADLINE_MS) {}
+  constructor(private readonly db: Database, private readonly journal: EventJournal, private readonly deadlineMs = DEADLINE_MS,
+    private readonly attachments?: AttachmentStore) {}
 
   grants(sessionID: string): ObservedGrant[] {
     return this.db.all("SELECT permission,pattern FROM permission_grants WHERE session_id=?", sessionID)
@@ -102,6 +106,7 @@ export class InteractionBroker {
   /** The session was deleted: its remembered "always allow" grants go with it. */
   forgetSession(sessionID: string): void {
     this.db.run("DELETE FROM permission_grants WHERE session_id=?", sessionID);
+    this.attachments?.release(`question:${sessionID}`);
   }
 
   private start<T extends RequestScope, A>(map: Map<string, Pending<T, A>>, request: T, directory: string,
@@ -247,16 +252,23 @@ export class InteractionBroker {
       signal: ask.signal, timeout: this.timeout(), cancelled: { rejected: true },
       asked: { type: "question.asked", properties: { ...request, directory: ask.directory } },
       replied: (answer, by) => "answers" in answer
-        ? { type: "question.replied", properties: { sessionID: ask.sessionID, requestID: request.id, answers: answer.answers, by } }
+        ? { type: "question.replied", properties: { sessionID: ask.sessionID, requestID: request.id, answers: answer.answers, ...(answer.attachments?.length ? { attachments: answer.attachments } : {}), by } }
         : { type: "question.rejected", properties: { sessionID: ask.sessionID, requestID: request.id, by } },
     });
   }
-  replyQuestion(id: string, answers: unknown, directory?: string): boolean {
+  replyQuestion(id: string, answers: unknown, directory?: string, parts?: unknown): boolean {
     const pending = this.questions.get(id);
     if (!pending || (directory && pending.directory !== directory)) return false;
     const problem = answerProblem(pending.request.questions, answers);
     if (problem || !isAnswerList(answers)) throw new InteractionInputError(problem ?? "Некорректный ответ.");
-    return pending.finish({ answers: answers.map(list => [...list]) }, "user", true);
+    let prepared: ReturnType<typeof questionParts>;
+    try { prepared = questionParts(parts); }
+    catch (error) { throw new InteractionInputError(error instanceof Error ? error.message : 'Некорректные вложения.'); }
+    if (prepared.parts.some(p => p.type === 'file') && !this.attachments) throw new InteractionInputError('Хранилище вложений недоступно. Ответ сохранён в черновике.');
+    return this.db.transaction(() => {
+      const attachments = prepared.parts.flatMap(p => p.type === 'file' ? [this.attachments!.put(p.url, p.filename ?? 'файл', `question:${pending.request.sessionID}`)] : []);
+      return pending.finish({ answers: answers.map(list => [...list]), ...(prepared.content.length ? { content: prepared.content } : {}), ...(attachments.length ? { attachments } : {}) }, "user", true);
+    });
   }
   rejectQuestion(id: string, directory?: string): boolean {
     const pending = this.questions.get(id);

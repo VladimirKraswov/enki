@@ -2,6 +2,14 @@ import { MAX_ATTACHMENT_BYTES } from "./drafts";
 
 type FileDetails = { isFile: boolean; isSymlink: boolean; size: number };
 
+/** Tauri reports physical pixels; DOM hit testing uses CSS pixels. Focus is
+ * only a fallback on WebViews that cannot hit-test an external drag. */
+export function nativeDropTargetsQuestion(position: {x:number; y:number}): boolean {
+  const scale = window.devicePixelRatio || 1;
+  const target = document.elementFromPoint?.(position.x / scale, position.y / scale);
+  return !!(target ?? document.activeElement)?.closest('[data-question-input]');
+}
+
 const types: Record<string, string> = {
   zip: "application/zip",
   pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",

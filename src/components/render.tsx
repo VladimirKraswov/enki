@@ -7,7 +7,6 @@ import type {
   AssistantMessage,
   MessagePart,
   PermissionRequest,
-  QuestionRequest,
   Session,
   UserMessage,
 } from "../api/types";
@@ -388,97 +387,7 @@ export function PermissionCard({
   );
 }
 
-export function QuestionCard({
-  req,
-  onReply,
-  onReject,
-}: {
-  req: QuestionRequest;
-  onReply: (answers: string[][]) => void;
-  onReject: () => void;
-}) {
-  const [picks, setPicks] = useState<Record<number, string[]>>({});
-  const [custom, setCustom] = useState<Record<number, string>>({});
-  const allAnswered = req.questions.every(
-    (_, i) => (picks[i]?.length ?? 0) > 0 || custom[i]?.trim(),
-  );
-  const submit = () => {
-    const answers = req.questions.map((_, i) => {
-      const chosen = picks[i] ?? [];
-      const c = custom[i]?.trim();
-      return c ? [...chosen, c] : chosen;
-    });
-    onReply(answers);
-  };
-  return (
-    <div
-      className="action-card"
-      role="group"
-      aria-label="Вопрос агента"
-    >
-      <div className="caption">Агент спрашивает</div>
-      {req.questions.map((q, qi) => (
-        <div
-          key={qi}
-          style={{ display: "flex", flexDirection: "column", gap: 4 }}
-        >
-          <div className="question-text">{q.question}</div>
-          {(q.options ?? []).map((opt) => (
-            <label className="opt-row" key={opt.label}>
-              <input
-                type={q.multiple ? "checkbox" : "radio"}
-                name={`${req.id}-${qi}`}
-                checked={(picks[qi] ?? []).includes(opt.label)}
-                onChange={() =>
-                  setPicks((prev) => {
-                    const cur = prev[qi] ?? [];
-                    if (!q.multiple) setCustom((old) => ({ ...old, [qi]: "" }));
-                    const next = q.multiple
-                      ? cur.includes(opt.label)
-                        ? cur.filter((x) => x !== opt.label)
-                        : [...cur, opt.label]
-                      : [opt.label];
-                    return { ...prev, [qi]: next };
-                  })
-                }
-              />
-              <span>
-                <span className="opt-label">{opt.label}</span>
-                {opt.description && (
-                  <span className="opt-desc"> — {opt.description}</span>
-                )}
-              </span>
-            </label>
-          ))}
-          {(q.custom ?? true) && (
-            <input
-              className="search-box"
-              placeholder="Свой ответ…"
-              aria-label="Свой ответ"
-              value={custom[qi] ?? ""}
-              onChange={(e) => {
-                setCustom((prev) => ({ ...prev, [qi]: e.target.value }));
-                if (!q.multiple) setPicks((prev) => ({ ...prev, [qi]: [] }));
-              }}
-            />
-          )}
-        </div>
-      ))}
-      <div className="btn-row">
-        <button className="btn small danger" onClick={onReject}>
-          Отклонить вопрос
-        </button>
-        <button
-          className="btn small primary"
-          disabled={!allAnswered}
-          onClick={submit}
-        >
-          Отправить ответ
-        </button>
-      </div>
-    </div>
-  );
-}
+export {QuestionCard} from "./QuestionCard";
 
 export function sessionStatusLine(
   s: ReturnType<typeof useAppState>,

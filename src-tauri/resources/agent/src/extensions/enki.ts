@@ -70,7 +70,7 @@ export function questionTool(scope: Pick<SessionScope, "sessionID" | "directory"
       const answer = await broker.askQuestion({ sessionID: scope.sessionID, directory: scope.directory, questions: params.questions, callID: toolCallId, ...(signal ? { signal } : {}) });
       if (!("answers" in answer)) throw new Error("Пользователь не ответил на вопрос: он отклонён, отменён или истёк срок ожидания. Не повторяйте его без новой причины.");
       const text = params.questions.map((q, index) => `${q.header ?? q.question}: ${answer.answers[index].join(", ")}`).join("\n");
-      return { content: [{ type: "text" as const, text }], details: { answers: answer.answers } };
+      return { content: [{ type: "text" as const, text }, ...(answer.content ?? [])], details: { answers: answer.answers, ...(answer.attachments?.length ? { attachments: answer.attachments } : {}) } };
     },
   };
 }

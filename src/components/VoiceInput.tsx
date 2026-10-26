@@ -9,9 +9,11 @@ import { TranscriptionQueue } from '../voice/transcriptionQueue';
 import { VoiceWaveform } from './VoiceWaveform';
 import { Icon } from './Icon';
 type Phase = 'idle' | 'requesting' | 'preparing' | 'recording' | 'transcribing';
-export function VoiceInput({ disabled, onActiveChange }: {
+export function VoiceInput({ disabled, onActiveChange, draftTarget }: {
     disabled: boolean;
     onActiveChange?: (active: boolean) => void;
+    /** Durable scoped input other than the main prompt (e.g. a question answer). */
+    draftTarget?: string;
 }) {
     const [phase, setPhase] = useState<Phase>('idle');
     const [error, setError] = useState('');
@@ -25,7 +27,7 @@ export function VoiceInput({ disabled, onActiveChange }: {
     const audio = useRef<AudioContext | null>(null);
     const queue = useRef<TranscriptionQueue | null>(null);
     const workspace = store.state.prefs.workspaceKey ?? store.state.prefs.endpoint;
-    const key = draftKey(store.state.activeSessionId, store.state.directory);
+    const key = draftTarget ?? draftKey(store.state.activeSessionId, store.state.directory);
     const scope = dictationScope(workspace, key);
     const currentScope = useRef(scope);
     currentScope.current = scope;

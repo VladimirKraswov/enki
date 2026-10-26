@@ -69,3 +69,16 @@ it("questions are real runtime endpoints scoped to the folder", async () => {
   ]);
   expect(JSON.parse(String(calls[1].init.body))).toEqual({ answers: [["eu"]] });
 });
+
+it('question files require runtime capability before posting, and the exact prepared parts travel with the answer', async () => {
+  let supported = false;
+  vi.stubGlobal('fetch', vi.fn(async (url:string, init:RequestInit) => {
+    calls.push({url,init}); return url.endsWith('/capabilities') ? respond(200, supported ? {questionAttachments:true} : {}) : respond(204);
+  }));
+  const client = new RuntimeClient(connection, async () => connection);
+  const parts = [{type:'file' as const,mime:'text/plain',filename:'note.txt',url:'data:text/plain;base64,aGk='}];
+  await expect(client.replyQuestion('q',[['Документ']],'/p',parts)).rejects.toThrow(/ещё не поддерживает/);
+  expect(calls.some(c => c.init.method==='POST')).toBe(false);
+  supported = true; await client.replyQuestion('q',[['Документ']],'/p',parts);
+  expect(JSON.parse(String(calls.at(-1)!.init.body))).toEqual({answers:[['Документ']],parts});
+});

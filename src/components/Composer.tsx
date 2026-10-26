@@ -1,3 +1,4 @@
+import {AttachmentChip} from "./AttachmentChip";
 import { modelServices, isSwitching } from "../models/services";
 import { compactModelName } from "../models/display";
 import { availablePickerModels } from "../models/picker";
@@ -13,9 +14,9 @@ import { activePluginUi } from "../agent/runtime/pluginUi/active";
 import { SelectMenu } from "./SelectMenu";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { store, useAppState } from "../state/store";
-import { attachmentDrafts, attachmentScope, type DraftAttachment } from "../attachments/drafts";
+import { attachmentDrafts, attachmentScope } from "../attachments/drafts";
 import { LARGE_PASTE_THRESHOLD, pastedTextFile } from "../attachments/prepare";
-import { filesFromNativeDrop } from "../attachments/native-drop";
+import { filesFromNativeDrop, nativeDropTargetsQuestion } from "../attachments/native-drop";
 import { pathBasename } from "../util/paths";
 import { openFileInput, registerComposer } from "../attachments/composerBridge";
 import { isTauri } from "@tauri-apps/api/core";
@@ -24,21 +25,6 @@ import { readFile, stat } from "@tauri-apps/plugin-fs";
 import { deepseekPeakStatus, formatUntilCheap } from "../usage/peak";
 
 const PromptQueue = lazy(() => import("./PromptQueue").then(m => ({default: m.PromptQueue})));
-
-function AttachmentChip({ file, onRemove, disabled }: { file: DraftAttachment; onRemove: () => void; disabled: boolean }) {
-  const [preview, setPreview] = useState("");
-  useEffect(() => {
-    if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.mime)) return;
-    const url = URL.createObjectURL(file.blob);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
-  return <div className={`attachment-chip ${preview ? "attachment-chip-image" : ""}`}>
-    {preview ? <img src={preview} alt=""/> : <Icon name="file" size={18}/>}
-    <span title={file.name}>{file.name}</span><small>{file.size < 1024 * 1024 ? `${Math.max(1, Math.ceil(file.size / 1024))} КБ` : `${(file.size / 1024 / 1024).toFixed(1)} МБ`}</small>
-    <button type="button" disabled={disabled} aria-label={`Убрать ${file.name}`} onClick={onRemove}><Icon name="close" size={14}/></button>
-  </div>;
-}
 
 /** A file the runtime already stores for the edited queue item: metadata only, never fetched. */
 function KeptAttachmentChip({ file, onRemove, disabled }: { file: { name: string; size: number }; onRemove: () => void; disabled: boolean }) {
@@ -134,6 +120,7 @@ export function Composer() {
       if (event.payload.type === "enter" || event.payload.type === "over") { setDragging(true); return; }
       setDragging(false);
       if (event.payload.type !== "drop") return;
+      if (nativeDropTargetsQuestion(event.payload.position)) return;
       const target = scopeRef.current;
       void filesFromNativeDrop(event.payload.paths, stat, readFile)
         .then(files => { if (!disposed) addFilesRef.current(files, target); })
@@ -149,6 +136,7 @@ export function Composer() {
     };
     const drop = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) return;
+      if (event.defaultPrevented) return;
       event.preventDefault(); setDragging(false); addFilesRef.current(Array.from(event.dataTransfer?.files ?? []));
     };
     const leave = (event: DragEvent) => { if (!event.relatedTarget) setDragging(false); };

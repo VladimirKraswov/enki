@@ -10,26 +10,35 @@
 import { useEffect, useRef, useState } from "react";
 import { store, useAppSelector } from "../state/store";
 import type { AppState } from "../state/types";
+import {VoiceInput} from './VoiceInput';
+import {questionInputKey} from './QuestionAnswerInput';
 
 // Always mounted: re-render only when the dialog itself changes.
-const dialogSnapshot = (s: AppState) => ({ dialog: s.ui.agentDialog });
+const dialogSnapshot = (s: AppState) => ({ dialog: s.ui.agentDialog,
+  value: s.ui.agentDialog ? s.prefs.drafts[questionInputKey('dialog:'+s.ui.agentDialog.id, 0)] ?? s.ui.agentDialog.prefill ?? '' : '' });
 
 export function PiDialog() {
-  const { dialog } = useAppSelector(dialogSnapshot);
-  const [value, setValue] = useState("");
+  const { dialog, value } = useAppSelector(dialogSnapshot);
   const [sending, setSending] = useState(false);
+  const [recording, setRecording] = useState(false);
   const first = useRef<HTMLButtonElement | null>(null);
   const field = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    setValue(dialog?.prefill ?? "");
+    if (dialog) {
+      const key = questionInputKey('dialog:'+dialog.id,0);
+      if (store.state.prefs.drafts[key] === undefined) store.setInputDraft(key, dialog.prefill ?? '');
+    }
     setSending(false);
+    setRecording(false);
     (field.current ?? first.current)?.focus();
   }, [dialog?.id]);
 
   if (!dialog) return null;
+  const inputKey = questionInputKey('dialog:'+dialog.id, 0);
+  const setValue = (text:string) => store.setInputDraft(inputKey, text);
   const answer = (reply: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
-    if (sending) return;
+    if (sending || recording) return;
     setSending(true);
     void store.answerAgentDialog(reply, dialog.id).catch(() => {}).finally(() => setSending(false));
   };
@@ -58,22 +67,23 @@ export function PiDialog() {
         )}
 
         {(dialog.method === "input" || dialog.method === "editor") && (
-          <label>
+          <div className="dialog-text-input">
             {dialog.method === "editor" ? (
               <textarea ref={(node) => { field.current = node; }} aria-label={title} rows={8} value={value} onChange={(e) => setValue(e.target.value)} />
             ) : (
               <input ref={(node) => { field.current = node; }} aria-label={title} placeholder={dialog.placeholder} value={value} onChange={(e) => setValue(e.target.value)} />
             )}
-          </label>
+            <VoiceInput key={dialog.id} draftTarget={inputKey} disabled={sending} onActiveChange={setRecording}/>
+          </div>
         )}
 
         <div className="btn-row">
-          <button className="btn" disabled={sending} onClick={cancel}>Отклонить</button>
+          <button className="btn" disabled={sending || recording} onClick={cancel}>Отклонить</button>
           {dialog.method === "confirm" && (
             <button ref={first} className="btn primary" disabled={sending} onClick={() => answer({ confirmed: true })}>Разрешить</button>
           )}
           {(dialog.method === "input" || dialog.method === "editor") && (
-            <button className="btn primary" disabled={sending} onClick={() => answer({ value })}>Отправить</button>
+            <button className="btn primary" disabled={sending || recording} onClick={() => answer({ value })}>Отправить</button>
           )}
         </div>
       </div>

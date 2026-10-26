@@ -207,7 +207,7 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
         {!unconfirmed && !question && !permission && slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
         {!unconfirmed && !question && !permission && slot?.status.type === 'waiting' && <div className="status-line" role="status">{slot.status.message ?? 'Ожидание следующего шага'}</div>}
         {permission && <PermissionCard req={permission} onReply={r => void store.replyPermission(permission, r)} />}
-        {question && <QuestionCard key={question.id} req={question} onReply={a => void store.replyQuestion(question, a)} onReject={() => void store.rejectQuestion(question)} />}
+        {question && <QuestionCard key={question.id} req={question} onReply={(a, files) => store.replyQuestion(question, a, files)} onReject={() => void store.rejectQuestion(question)} />}
         {unconfirmed && <div className="status-line" role="alert">
           {s.connection.statusError ? `Не удалось проверить состояние чата: ${s.connection.statusError}` : "Нет свежих событий. Выполнение не подтверждено; история сохранена."}
           <button className="btn" onClick={() => void (s.connection.statusError ? store.retryProjectAccess() : store.retryConnection())}>{s.connection.statusError ? "Проверить доступ к проекту" : "Проверить соединение"}</button>

@@ -3,11 +3,14 @@
 // cancellation, deny rules, and pending questions counted by authoritative idle.
 // Asking a question never creates a permission request or grant.
 import path from "node:path";
+import fs from 'node:fs';
 import { afterEach, expect, it } from "vitest";
 import { InteractionBroker } from "../../src/interaction/broker.ts";
 import { fauxAssistantMessage, fauxToolCall } from "../../src/sdk/testing.ts";
 import { Database } from "../../src/store/db.ts";
 import { EventJournal } from "../../src/store/events.ts";
+import { AttachmentStore } from '../../src/store/attachments.ts';
+import { questionTool } from '../../src/extensions/enki.ts';
 import type { EventEnvelope } from "../../src/protocol.ts";
 import { harness, newSession, promptCommand, stream, tempDir, type Harness } from "../helpers.ts";
 
@@ -42,6 +45,62 @@ it("validates answers, settles once and journals the decision", async () => {
   // A question never leaves a permission grant behind.
   expect(b.grants("s1")).toEqual([]);
   db.close();
+});
+
+it('a question reply delivers real image/text blocks to the waiting tool and persists file references before ACK', async () => {
+  const root = tempDir('question-files'), db = new Database(path.join(root, 'runtime.sqlite'));
+  const journal = new EventJournal(db), files = new AttachmentStore(db, root), b = new InteractionBroker(db, journal, undefined, files);
+  const tool = questionTool({sessionID:'s-files', directory:'/p'}, b);
+  const result = tool.execute('q-files', {questions:[{question:'Покажите образец'}]}, undefined);
+  const id = b.pendingQuestions()[0].id;
+  const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6V8AAAAASUVORK5CYII=';
+  const parts = [
+    {type:'file',mime:'image/png',filename:'образец.png',url:`data:image/png;base64,${image}`},
+    {type:'file',mime:'text/plain',filename:'заметки.txt',url:`data:text/plain;base64,${Buffer.from('Тёплые цвета').toString('base64')}`},
+  ];
+  expect(b.replyQuestion(id, [['Вот образец']], '/other', parts)).toBe(false);
+  expect(() => b.replyQuestion(id, [['Вот образец']], '/p', [{...parts[0],url:'https://untrusted.invalid/picture'}])).toThrow(/подготовлено|вложения/);
+  expect(b.pendingQuestions()).toHaveLength(1);
+  expect(b.replyQuestion(id, [['Вот образец']], '/p', parts)).toBe(true);
+  const answer = await result;
+  expect(answer.content).toContainEqual({type:'image',data:image,mimeType:'image/png'});
+  expect(answer.content.some(p => p.type==='text' && p.text.includes('Тёплые цвета') && p.text.includes('unsupported_as_instructions'))).toBe(true);
+  const refs = answer.details.attachments!;
+  expect(refs).toHaveLength(2);
+  const events = journal.replay({directory:'/p'}, 0)!;
+  const replied = events.find(e => e.event.type==='question.replied')!;
+  expect(replied.event.properties.attachments).toEqual(refs);
+  expect(JSON.stringify(replied)).not.toContain(image); // journal/SSE carries metadata, not binary blobs
+  db.close();
+  const reopened = new Database(path.join(root, 'runtime.sqlite'));
+  expect(new AttachmentStore(reopened, root).dataUrl(refs[0].id)).toBe(parts[0].url);
+  const reopenedFiles = new AttachmentStore(reopened, root), other = reopenedFiles.put(parts[0].url, 'shared.png', 'question:other-session');
+  const reopenedBroker = new InteractionBroker(reopened, new EventJournal(reopened), undefined, reopenedFiles);
+  reopenedBroker.forgetSession('s-files');
+  expect(()=>reopenedFiles.dataUrl(refs[0].id)).toThrow(/не найдено/);
+  expect(reopenedFiles.dataUrl(other.id)).toBe(parts[0].url);
+  reopened.close();
+});
+
+it('the real SDK resumes the same turn with the attached image in its tool result', async () => {
+  h = await harness(); const dir = h.project('question-image'), sid = await newSession(h, dir);
+  const events = stream(h, `directory=${encodeURIComponent(dir)}`); await events.hello;
+  h.scripted.setResponses([
+    fauxAssistantMessage([fauxToolCall('question',{questions:[{question:'Пришлите образец'}]})],{stopReason:'toolUse'}),
+    fauxAssistantMessage('Образец получен'),
+  ]);
+  await h.command(promptCommand(h, 'question-image', sid, dir, 'Уточни образец', h.model('vision')));
+  const asked = await events.waitFor(e => e.event.type==='question.asked');
+  const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6V8AAAAASUVORK5CYII=';
+  expect((await h.request('POST', `/questions/${asked.event.properties.id}/reply?directory=${encodeURIComponent(dir)}`, {
+    answers:[['Вот образец']],parts:[{type:'file',mime:'image/png',filename:'sample.png',url:`data:image/png;base64,${image}`}],
+  })).status).toBe(204);
+  expect((await h.waitReceipt('question-image',['completed'])).state).toBe('completed');
+  const entries = fs.readFileSync(h.runtime.catalog.get(sid)!.sessionFile!, 'utf8').trim().split('\n').map(line=>JSON.parse(line));
+  const results = entries.filter(entry=>entry.type==='message' && entry.message?.role==='toolResult');
+  expect(results.some(entry=>entry.message.content.some((part:{type:string;data?:string})=>part.type==='image' && part.data===image))).toBe(true);
+  expect(entries.filter(entry=>entry.type==='message' && entry.message?.role==='user')).toHaveLength(1);
+  events.close();
 });
 
 it("rejects malformed questions, expires at the deadline and cancels with the turn", async () => {

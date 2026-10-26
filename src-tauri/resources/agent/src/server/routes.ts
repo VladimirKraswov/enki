@@ -85,7 +85,7 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     host: runtime.config.host, draining: runtime.draining, hostId: runtime.hostId,
   }));
   r("GET", "/capabilities", async (): Promise<CapabilitiesDTO> => ({
-    pty: await runtime.pty.available(), permissions: true, questions: true, attachments: true, fork: true, compaction: true,
+    pty: await runtime.pty.available(), permissions: true, questions: true, questionAttachments: true, attachments: true, fork: true, compaction: true,
     vcsDiff: true, projectlessChat: true, queue: true, schedules: true, legacyImport: true,
     extensionUi: { dialogs: true, notify: true, status: true, widgetsText: true, tui: true },
   }));
@@ -337,7 +337,7 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
   r("GET", "/questions", (request) => runtime.interactions.pendingQuestions(str(request.query, "directory")));
   r("POST", "/questions/:id/reply", (request) => {
     let replied: boolean;
-    try { replied = runtime.interactions.replyQuestion(request.params.id, object(request.body).answers, str(request.query, "directory")); }
+    try { const body = object(request.body); replied = runtime.interactions.replyQuestion(request.params.id, body.answers, str(request.query, "directory"), body.parts); }
     catch (error) { if (error instanceof InteractionInputError) throw new HttpError(400, error.message); throw error; }
     if (!replied) throw new HttpError(404, "Вопрос уже закрыт.");
     return undefined;

@@ -3332,3 +3332,17 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 
 /* Empty search results are distinct from unavailable connections. */
 .select-empty { padding:14px 12px; color:var(--text-dim); font-size:.9rem; line-height:1.5; display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+.question-section { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.question-answer-input { border:1px solid var(--border); border-radius:14px; background:var(--bg); overflow:hidden; min-width:0; }
+.question-answer-text { display:block; width:100%; min-height:68px; max-height:220px; resize:vertical; padding:10px 12px; border:0; outline:none; color:var(--text); background:transparent; font:inherit; box-sizing:border-box; }
+.question-answer-input:focus-within { border-color:var(--accent); }
+.question-answer-actions { display:flex; align-items:center; gap:8px; padding:4px 8px 8px; min-width:0; }
+.question-answer-hint { color:var(--text-dim); font-size:11px; flex:1; min-width:0; }
+.question-answer-actions .voice-control { margin-left:auto; }
+.question-answer-voice-active .question-answer-actions { min-height:52px; }
+.question-answer-voice-active .question-answer-hint, .question-answer-voice-active .question-answer-actions > .icon-btn { display:none; }
+.question-answer-voice-active .voice-control { width:100%; min-width:0; }
+.question-answer-voice-active .voice-recording { position:relative; inset:auto; width:100%; gap:8px; }
+.dialog-text-input { position:relative; display:flex; flex-direction:column; gap:10px; padding-bottom:6px; }
+.dialog-text-input > input, .dialog-text-input > textarea { width:100%; box-sizing:border-box; }
+.dialog-text-input .voice-recording { position:relative; inset:auto; width:100%; }

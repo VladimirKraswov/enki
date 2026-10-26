@@ -198,9 +198,9 @@ export class Runtime {
     this.journal = new EventJournal(this.db);
     this.ledger = new CommandLedger(this.db, this.journal);
     this.catalog = new SessionCatalog(this.db, this.journal);
-    this.interactions = new InteractionBroker(this.db, this.journal);
     this.tools = new ToolJournal(this.db);
     this.attachments = new AttachmentStore(this.db, this.paths.data);
+    this.interactions = new InteractionBroker(this.db, this.journal, undefined, this.attachments);
     this.queue = new PromptQueue(this.db, this.journal, this.attachments);
     this.scheduler = new Scheduler(this.db, this.journal);
     this.pool = new McpPool();

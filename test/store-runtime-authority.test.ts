@@ -147,3 +147,23 @@ it("runtime.settings from the current runtime reaches settings consumers without
   expect(seen).toHaveBeenCalledTimes(2);
   expect(fx.calls.filter(c => c.method !== "GET")).toEqual([]);
 });
+
+it('question attachments go to the scoped reply endpoint and never start a prompt',async()=>{
+ store.state={...store.state,directory:'/p',activeSessionId:'question-session',chat:{...store.state.chat,questions:{q:{id:'q',sessionID:'question-session',questions:[{question:'Образец?'}]}}}};
+ vi.spyOn(store,'getModelChoice').mockReturnValue({providerID:'p',modelID:'m'});vi.spyOn(store,'modelInfo').mockReturnValue({id:'m',name:'Model',capabilities:{input:{text:true}}});
+ const parts=[{type:'file',filename:'answer.txt',mime:'text/plain',url:'data:text/plain;base64,aGk='}];
+ vi.spyOn(store,'prepareRuntimeAttachments').mockResolvedValue(parts);
+ fx.on('GET','/capabilities',()=>({questionAttachments:true}));fx.on('POST','/questions/:id/reply',()=>new Response(null,{status:204}));
+ const req=store.state.chat.questions.q, file={id:'f',name:'answer.txt',mime:'text/plain',size:2,blob:new Blob(['hi'])};
+ expect(await store.replyQuestion(req,[['Документ']],[file]),store.state.ui.toast??'no detail').toBe(true);
+ expect(fx.made('POST','/questions/:id/reply')[0].body).toEqual({answers:[['Документ']],parts});
+ expect(fx.made('POST','/commands')).toEqual([]);expect(store.state.chat.questions.q).toBeUndefined();
+});
+it('navigation while preparing a question file never posts to the new project',async()=>{
+ store.state={...store.state,directory:'/p',activeSessionId:'question-session'};
+ vi.spyOn(store,'getModelChoice').mockReturnValue({providerID:'p',modelID:'m'});vi.spyOn(store,'modelInfo').mockReturnValue({id:'m',name:'Model',capabilities:{input:{text:true}}});
+ let release:(parts:unknown[])=>void=()=>{};vi.spyOn(store,'prepareRuntimeAttachments').mockReturnValue(new Promise(resolve=>{release=resolve;}));
+ const reply=store.replyQuestion({id:'q',sessionID:'question-session',questions:[{question:'Образец?'}]},[['Документ']],[{id:'f',name:'answer.txt',mime:'text/plain',size:2,blob:new Blob(['hi'])}]);
+ store.state={...store.state,directory:'/other'};release([]);expect(await reply).toBe(false);
+ expect(fx.made('POST','/questions/:id/reply')).toEqual([]);expect(fx.made('POST','/commands')).toEqual([]);
+});

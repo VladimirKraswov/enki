@@ -189,7 +189,7 @@ export class RuntimeBackend implements AgentBackend {
   async pendingQuestions(directory: string | null, signal?: AbortSignal): Promise<QuestionRequest[]> {
     return this.client.questions(directory, signal);
   }
-  replyQuestion(requestID: string, answers: string[][], directory: string) { return this.client.replyQuestion(requestID, answers, directory); }
+  replyQuestion(requestID: string, answers: string[][], directory: string, parts?: PromptRequest["parts"]) { return this.client.replyQuestion(requestID, answers, directory, parts); }
   rejectQuestion(requestID: string, directory: string) { return this.client.rejectQuestion(requestID, directory); }
   dialogs(directory: string | null, signal?: AbortSignal): Promise<DialogRequestDTO[]> { return this.client.dialogs(directory, signal); }
   replyDialog(id: string, answer: { value?: string; confirmed?: boolean; cancelled?: boolean }) { return this.client.replyDialog(id, answer); }

@@ -2396,6 +2396,17 @@ class Store {
     activePluginUi.localChanged();
   }
 
+  /** Question/interaction inputs are durable and separate from the prompt. */
+  setInputDraft(key: string, text: string, workspace = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint): void {
+    this.mutate(s => {
+      if ((s.prefs.workspaceKey ?? s.prefs.endpoint) === workspace)
+        return { prefs: { ...s.prefs, drafts: { ...s.prefs.drafts, [key]: text } } };
+      const old = s.prefs.endpointState?.[workspace];
+      return { prefs: { ...s.prefs, endpointState: { ...s.prefs.endpointState, [workspace]: { ...old, drafts: { ...old?.drafts, [key]: text } } } } };
+    });
+    this.persistPrefs();
+  }
+
   /** Draft of a specific chat (the plugin draft CAS bridge targets one chat, not "whatever is selected"). */
   draftFor(sessionId: string, directory: string): string {
     return this.state.prefs.drafts[draftKey(sessionId, directory)] ?? "";
@@ -3064,19 +3075,39 @@ class Store {
   async replyQuestion(
     req: QuestionRequest,
     answers: string[][],
-  ): Promise<void> {
+    files: DraftAttachment[] = [],
+  ): Promise<boolean> {
     const directory = this.state.directory;
-    if (!directory) return;
+    const backend = this.backend, generation = this.connectionGeneration;
+    if (!directory || req.sessionID !== this.state.activeSessionId) return false;
     try {
+      let parts: PromptRequest["parts"] = [];
+      if (files.length) {
+        const choice = this.getModelChoice();
+        const info = choice ? this.modelInfo(choice.providerID, choice.modelID) : null;
+        if (!info) throw new Error('Выберите доступную модель для подготовки вложений.');
+        const references = isNative() && !this.currentHost();
+        const original = await this.prepareRuntimeAttachments(files, info, backend, new AbortController().signal, undefined, references);
+        if (generation !== this.connectionGeneration || directory !== this.state.directory || req.sessionID !== this.state.activeSessionId)
+          throw new Error('Чат изменился во время подготовки. Ответ и файлы сохранены.');
+        await stageImagePromptContext({engine: this.engineIdFor(), sessionId: req.sessionID, directory,
+          messageId: `${req.id}-${crypto.randomUUID()}`, parts: original, supportsVision: !!info.capabilities?.input?.image, local: references});
+        if (generation !== this.connectionGeneration || directory !== this.state.directory || req.sessionID !== this.state.activeSessionId)
+          throw new Error('Чат изменился. Ответ и файлы сохранены.');
+        parts = imagePromptParts(original, !!info.capabilities?.input?.image, references);
+      }
       // Runtime `question` tool → POST /questions/:id/reply (400 for an invalid answer, 404 once closed).
-      await this.backend.replyQuestion(req.id, answers, directory);
+      await backend.replyQuestion(req.id, answers, directory, parts);
+      if (generation !== this.connectionGeneration || directory !== this.state.directory) return true;
       this.mutate((s) => {
         const questions = { ...s.chat.questions };
         delete questions[req.id];
         return { chat: { ...s.chat, questions } };
       });
+      return true;
     } catch (e) {
       this.patchUi({ toast: `Не удалось отправить ответ: ${errText(e)}` });
+      return false;
     }
   }
 

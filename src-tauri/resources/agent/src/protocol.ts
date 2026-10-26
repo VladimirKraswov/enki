@@ -221,6 +221,8 @@ export interface CapabilitiesDTO {
   pty: boolean;
   permissions: boolean;
   questions: boolean;
+  /** Prepared file/image parts in a question reply (absent in older runtimes). */
+  questionAttachments?: boolean;
   attachments: boolean;
   fork: boolean;
   compaction: boolean;
@@ -266,6 +268,8 @@ export interface PromptPartFile {
   url: string;
 }
 export type PromptPart = PromptPartText | PromptPartFile;
+/** Inline question text beyond this bound travels as a prepared text file. */
+export const QUESTION_ANSWER_TEXT_LIMIT = 10_000;
 
 export interface ModelRef {
   providerID: string;

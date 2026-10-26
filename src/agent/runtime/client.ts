@@ -352,8 +352,10 @@ export class RuntimeClient {
     return this.request<void>("POST", `/broker/${encodeURIComponent(id)}`, { body: result, empty: true });
   }
   questions(directory: string | null, signal?: AbortSignal) { return this.request<QuestionRequestDTO[]>("GET", "/questions", { query: { directory }, signal }); }
-  replyQuestion(id: string, answers: string[][], directory: string) {
-    return this.request<void>("POST", `/questions/${encodeURIComponent(id)}/reply`, { query: { directory }, body: { answers }, empty: true });
+  async replyQuestion(id: string, answers: string[][], directory: string, parts?: PromptPart[]) {
+    if (parts?.length && (await this.capabilities()).questionAttachments !== true)
+      throw new ApiError(409, 'Эта среда выполнения ещё не поддерживает вложения в ответах. Обновите её; текст и файлы сохранены.');
+    return this.request<void>("POST", `/questions/${encodeURIComponent(id)}/reply`, { query: { directory }, body: { answers, ...(parts?.length ? { parts } : {}) }, empty: true });
   }
   rejectQuestion(id: string, directory: string) {
     return this.request<void>("POST", `/questions/${encodeURIComponent(id)}/reject`, { query: { directory }, body: {}, empty: true });
