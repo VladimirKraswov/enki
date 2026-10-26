@@ -105,6 +105,8 @@ class NativeUpdates:
             with self.releases.lock:
                 if self.releases.head(channel)['revision'] != key:
                     return {'state':'pending','message':'Выпуск изменился. Повторяем проверку.'}
-            self.cache = {key:(time.monotonic()+min(300,60*2**min(attempts-1,3)), result,attempts)}
+            self.cache[key] = (time.monotonic()+min(300,60*2**min(attempts-1,3)), result,attempts)
+            # Stable and preview clients must not evict each other's backoff.
+            while len(self.cache)>4: self.cache.pop(next(iter(self.cache)))
             return result
         finally: self.lock.release()

@@ -49,6 +49,17 @@ class NativeQualification(unittest.TestCase):
             service.lock.acquire()
             try:self.assertEqual(service.status('stable')['state'],'pending')
             finally:service.lock.release()
+    def test_channel_checks_keep_independent_backoff(self):
+        class ReleaseStore:
+            lock=threading.RLock()
+            fault=ValueError
+            def head(self, channel): return dict(available=True,revision=channel,version='2.0.6',nativeFingerprint='a'*64,publication={'commit':'b'*40})
+        calls=[]
+        def offline(url): calls.append(url);raise OSError('offline')
+        service=n.NativeUpdates(ReleaseStore(),lambda *_args,**_kw:self.fail('must not sign'),offline)
+        for channel in ['stable','preview','stable','preview']:
+            self.assertEqual(service.status(channel)['state'],'unavailable')
+        self.assertEqual(len(calls),2)
 
 class NativeSigner(unittest.TestCase):
     @unittest.skipUnless(shutil.which('minisign'),'minisign not installed')
