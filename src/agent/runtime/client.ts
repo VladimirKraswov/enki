@@ -100,6 +100,8 @@ export interface MigrationsDTO {
   sources: { opencode: string | null; piCli: string | null };
   /** Startup recovery failures of app-owned import/continuation journals. */
   recovery?: Array<{ kind: string; message: string }>;
+  /** Chats the canonical-shard migration of the Enki store left where they are. */
+  shards?: Array<{ session: string; reason: string }>;
   piAgent?: { available: boolean; status: ConfigStatusDTO };
 }
 

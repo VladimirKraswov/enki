@@ -583,6 +583,8 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
       .map((row) => ({ id: String(row.id), kind: String(row.kind), state: String(row.state), ...(typeof row.detail === "string" ? { detail: row.detail } : {}), updatedAt: Number(row.updated) })),
     sources: { opencode: runtime.config.legacy.opencodeDb ?? null, piCli: runtime.config.legacy.piCliRoot ?? null },
     recovery: runtime.recoveryIssues,
+    /** Chats the canonical-shard migration left where they are, with the reason. */
+    shards: runtime.shardIssues,
     piAgent: { available: runtime.config.host === "local" && runtime.config.credentials === "vault" && runtime.config.broker.kind === "supervisor", status: runtime.configStatus() },
   }));
   r("POST", "/migrations/opencode", async (request) => {

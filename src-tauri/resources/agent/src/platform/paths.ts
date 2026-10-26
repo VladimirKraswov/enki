@@ -31,8 +31,8 @@ export const DATA_LAYOUT = Object.freeze({
  * shards, journaled legacy continuations, writable Pi CLI imports and the
  * paired update snapshot (platform/update-snapshot.ts):
  *
- *   <sha16(cwd)>/<file>                      SDK sessions, branches, continuations
- *   <sha16(cwd)>/.legacy-continuations/      journaled continuation staging only
+ *   <sha16(canonical cwd)>/<file>                SDK sessions, branches, continuations
+ *   <sha16(canonical cwd)>/.legacy-continuations/ journaled continuation staging only
  *   pi-cli/pi-legacy-<48hex>/<file>          writable Pi CLI import: session.jsonl,
  *                                            ownership.json and SDK-created files
  */
@@ -74,8 +74,38 @@ export function runtimePaths(data: string, agentDir?: string): RuntimePaths {
   return paths;
 }
 
+/** The ONE directory identity of the session store.
+ *
+ * A folder can be named through an alias — the former `opencode-desktop` app
+ * data link, a renamed repository, a volume mounted elsewhere. Hashing the
+ * literal string let one real project own several shards, and a chat whose row
+ * was written under one spelling lost its transcript under the other. The
+ * canonical path is therefore the key whenever the folder exists. A folder that
+ * is not present (a volume that is away) keeps its normalized path, so its key
+ * stays stable until the volume returns. */
+export function canonicalDirectory(directory: string): string {
+  try { return fs.realpathSync(directory); } catch { return path.resolve(directory); }
+}
+
+/** Canonical path, or null when the folder is not present on this computer. */
+export function canonicalExisting(directory: string): string | null {
+  try { return fs.realpathSync(directory); } catch { return null; }
+}
+
 export function directoryKey(directory: string): string {
-  return createHash("sha256").update(directory).digest("hex").slice(0, 16);
+  return createHash("sha256").update(canonicalDirectory(directory)).digest("hex").slice(0, 16);
+}
+
+/** True when `file` is a regular file that lives inside the runtime-owned
+ * sessions root with no symlink hop on the way — the invariant that separates
+ * an Enki transcript from an external file. */
+export function ownedSessionPath(paths: RuntimePaths, file: string): boolean {
+  try {
+    const link = fs.lstatSync(file);
+    if (!link.isFile() || link.isSymbolicLink()) return false;
+    const root = fs.realpathSync(paths.sessions), resolved = fs.realpathSync(file);
+    return resolved.startsWith(root + path.sep);
+  } catch { return false; }
 }
 
 export function sessionDirFor(paths: RuntimePaths, directory: string): string {

@@ -234,11 +234,18 @@ function settingsFor(options: OpenSessionOptions): SettingsManager {
   });
 }
 
-export function ownedSessionFile(file: string, directory: string): string {
-  const root = fs.realpathSync(directory), resolved = fs.realpathSync(file);
+/**
+ * An Enki transcript is a regular file inside the runtime-owned sessions store.
+ * `shard` is the directory the record's folder maps to; shards are exactly one
+ * level below the store root (SESSION_LAYOUT), so the root is its parent. The
+ * check is deliberately about Enki's OWNERSHIP, not about one spelling of a
+ * project path: an alias must never turn an Enki chat into an "external file".
+ */
+export function ownedSessionFile(file: string, shard: string): string {
+  const root = fs.realpathSync(path.dirname(shard)), resolved = fs.realpathSync(file);
   if (fs.lstatSync(file).isSymbolicLink() || !resolved.startsWith(root + path.sep))
     throw new Error("Историю можно изменять только в рабочем хранилище Enki; сначала импортируйте внешний файл.");
-  const reader = openSessionReader(resolved, directory);
+  const reader = openSessionReader(resolved, shard);
   if (reader.header && readEntries(resolved).header.version !== 3)
     throw new Error("Старый формат Pi должен быть импортирован в рабочую копию до запуска.");
   return resolved;

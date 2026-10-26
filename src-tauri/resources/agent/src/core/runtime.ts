@@ -26,7 +26,7 @@ import { ConfigProjection, userModelsPresent, type ConfigStatus } from "../model
 import { VaultCredentialStore } from "../models/credentials.ts";
 import { HubLeases } from "../models/hub.ts";
 import { findGit, GitService } from "../platform/git.ts";
-import { runtimePaths, sessionDirFor, SESSION_LAYOUT, validDirectory, type RuntimePaths } from "../platform/paths.ts";
+import { ownedSessionPath, runtimePaths, sessionDirFor, SESSION_LAYOUT, validDirectory, type RuntimePaths } from "../platform/paths.ts";
 import { PtyService, type PtyModule } from "../platform/pty.ts";
 import { openOwnedFileForSync } from "../platform/owned-sync.ts";
 import { snapshotSessions, syncDirectory, type SessionSnapshot } from "../platform/update-snapshot.ts";
@@ -37,6 +37,7 @@ import { PromptQueue } from "../queue/queue.ts";
 import { Scheduler } from "../schedule/scheduler.ts";
 import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualifiedResourceSpec, trustStore, type ResourceSpec, type SdkExtension, type SdkModelRuntime, type SettingsSpec } from "../sdk/adapter.ts";
 import { SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
+import { SessionShards } from "../sessions/rehome.ts";
 import { SessionRegistry } from "../sessions/registry.ts";
 import { recoverInterruptedTools } from "../sessions/worker.ts";
 import { AttachmentStore } from "../store/attachments.ts";
@@ -149,8 +150,12 @@ export class Runtime {
   /** Former Pi CLI chats: immutable original + owned writable working copy. */
   readonly piCli: PiCliImporter;
   readonly cutover: CutoverJournal;
+  /** Canonical shard keying of Enki's own transcripts (restart-safe migration). */
+  readonly shards: SessionShards;
   /** Startup recovery failures, reported by GET /migrations. */
   readonly recoveryIssues: Array<{ kind: string; message: string }> = [];
+  /** Chats whose transcript the shard migration deliberately left alone. */
+  readonly shardIssues: Array<{ session: string; reason: string }> = [];
   readonly hub: HubLeases;
   /** Verified imported config resolved into memory at startup; immutable until restart. */
   configProjection: ConfigProjection = ConfigProjection.none();
@@ -209,6 +214,7 @@ export class Runtime {
       archives: path.join(this.paths.legacy, "pi-cli"), staging: path.join(this.paths.staging, "pi-cli"), sessions: path.join(this.paths.sessions, SESSION_LAYOUT.piCli),
     });
     this.cutover = new CutoverJournal(this.db, this.attachments, this.queue, this.scheduler, (ref, model, signal) => this.cutoverTarget(ref, model, signal));
+    this.shards = new SessionShards(this.db, this.catalog, this.paths);
     this.hub = new HubLeases(this.config.broker, this.db, (owner) => this.leaseActive(owner),
       (owner, status) => this.journal.append(this.catalog.get(owner)?.directory ?? null, owner, { type: "model.status", properties: { sessionID: owner, status } }, true),
       (owner, message) => this.hubLeaseLost(owner, message));
@@ -508,8 +514,14 @@ export class Runtime {
     return { ...page, messages: projectArchiveMessages(page.messages, record.id) };
   }
 
-  /** Transcript directory owned for this record (imported Pi CLI copies live in their own root). */
+  /** Transcript directory owned for this record.
+   *
+   * An existing app-owned transcript keeps its own shard: a chat is never
+   * orphaned while its folder is reachable through an alias, and imported Pi CLI
+   * copies keep living in the root they were adopted with. New work always lands
+   * in the canonical shard of the directory. */
   sessionDirOf(record: SessionRecord): string {
+    if (record.sessionFile && ownedSessionPath(this.paths, record.sessionFile)) return path.dirname(record.sessionFile);
     if (record.origin.kind === "pi-cli" && record.sessionFile === this.piCli.runtimeFile(record.origin.runtimeId)) return path.dirname(record.sessionFile);
     return this.sessionDir(record.directory);
   }
@@ -678,9 +690,6 @@ export class Runtime {
 
   /** Startup reconciliation: nothing is replayed; uncertainty is shown. */
   private recover(): void {
-    const { uncertain } = this.ledger.recoverAfterRestart();
-    this.queue.recover((id) => this.ledger.get(id));
-    this.scheduler.recover((id) => this.ledger.get(id));
     // Every app-owned import/continuation journal is settled before any worker
     // can open or append. Each importer touches only its own roots and rows;
     // catalog/map/continuedBy publication stays inside those importers.
@@ -695,6 +704,12 @@ export class Runtime {
     for (const entry of fs.readdirSync(this.paths.sessions, { withFileTypes: true }))
       if (entry.isDirectory() && !entry.isSymbolicLink() && SESSION_LAYOUT.shard.test(entry.name))
         recovering("continuation", () => recoverLegacyContinuations(this.db, this.catalog, path.join(this.paths.sessions, entry.name)));
+    // Then every transcript lives in the ONE shard of its real folder and every
+    // durable row names that folder, before the queue or a timer reads them.
+    recovering("session-shard", () => { const report = this.shards.migrate(); if (report.skipped.length) this.shardIssues.push(...report.skipped); });
+    const { uncertain } = this.ledger.recoverAfterRestart();
+    this.queue.recover((id) => this.ledger.get(id));
+    this.scheduler.recover((id) => this.ledger.get(id));
     const affected = new Set([...uncertain.map((r) => r.sessionID), ...this.tools.interrupted().map((t) => t.sessionID)]);
     for (const sessionID of affected) {
       const record = this.catalog.get(sessionID);

@@ -1,3 +1,41 @@
+# Текущая задача — каноническое хранилище сессий Enki (2.0.4)
+
+ВЫПОЛНЕНО локально (2026-10-26). Причина: в «Мастерской» не проходило ни одно
+действие — ни промпт `local-qwen/qwen38-flash-next` («Ты работаешь?»), ни смена
+модели; все квитанции `prompt` и `model.transition` с 07:55 по 07:59 получили
+`rejected` с «Историю можно изменять только в рабочем хранилище Enki; сначала
+импортируйте внешний файл.». Модель не вызывалась ни разу: откат происходил до
+обращения к провайдеру. Причина не в модели, а в хранилище: запись чата
+`8a5e5bd7…` называла канонический каталог `~/.local/share/enki/workshop`, а её
+транскрипт лежал в шарде `sessions/114568c3e87bc4a3/`, который дало старое
+написание `~/.local/share/opencode-desktop/workshop` (этот путь — ссылка на
+`enki`). Шард ключевался строкой пути, а продолжение архива канонизировало
+каталог, поэтому файл истории оказался «вне рабочего хранилища» собственного
+чата.
+
+Среда выполнения теперь имеет одну идентичность каталога: шард = `sha16` от
+канонического пути (`realpath`, если каталог существует), транскрипт чата
+выводится из собственного защищённого файла, а проверка владения историей
+проверяет принадлежность хранилищу Enki, а не одному написанию пути. При каждом
+запуске, до очередей, таймеров и воркеров, работает перенос `session-shard`:
+он перекладывает транскрипт в канонический шард, заменяет написание каталога в
+`sessions`, `queue`, `schedules`, `commands` и журнале событий одной транзакцией,
+сверяет SHA256; ссылка на файл создаётся до изменения метаданных, а прежний файл удаляет
+только после подтверждения; неоконченный журнал доводится или откатывается, пустой
+старый шард удаляется, причины отказа видны в `GET /migrations` (`shards`).
+Перенос повторяем; незанятые внешние файлы, недоступные тома и собственные копии
+Pi CLI не трогаются. Данные владельца не удаляются.
+
+Проверено на закреплённом Node 24.22.1: `npm test` среды выполнения — 385 тестов
+зелёные (включая три новых: переезд misplaced-истории, чат принятый по ссылке,
+оба направления незавершённого переноса), `test:runtime-artifact` прошёл,
+typecheck среды выполнения, `sdk:check` (SDK 0.85.1/Node 24.22.1), 1107
+фронтенд-тестов, `npm run build`, `check:architecture`, `check:bundle`,
+`cargo metadata --locked`. Под системным Node 26.7.0 два теста `crash-recovery`
+падают на флаге `--experimental-transform-types` (в Node 26 его нет) — это
+ограничение оболочки, а не регрессия. Выпуск 2.0.4 и живая проверка «Мастерской»
+после обновления приложения — отдельно ниже.
+
 # Current task — Enki 2.0.3 interface review
 
 IN PROGRESS (2026-10-26). Extended owner request: review UI/UX and make the context panel smoothly free space beside the chat. Implemented a 240ms rail without remounting chat/composer; compact overlay only below700px available chat width; reduced-motion respected. Keyboard focus/rapid reversal handled. Broad review found reproducible unsaved-capability draft loss during settings search, unsaved browser profile loss across navigation, misleading picker search misses and keyboard focus gaps in menus/search. Fixed with retained forms, exit guard, explicit empty/filter states, focus return and compact browser manual settings. Earlier 2.0.3 language/duplicate-activity work below remains included. All1107 frontend tests passed; separate final focus checks and build performed after the focus refinement. Actual isolated components checked at1180/860/600px, dark/light, close/reopen/Escape and preserved composer text. Owner native browser settings inspected read-only. Canonical qualification/exact three-platform CI/publication/hot activation remain next; this is not a delivery claim. No inference, no office work or agents; preserve all ongoing owner work.

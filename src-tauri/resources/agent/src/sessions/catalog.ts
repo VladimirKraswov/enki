@@ -177,6 +177,17 @@ export class SessionCatalog {
     return next;
   }
 
+  /** Canonical-store move: the directory a chat belongs to and the transcript
+   * that owns its history change together, with one visible update. */
+  rehome(id: string, directory: string, sessionFile: string | null): SessionRecord {
+    const current = this.get(id);
+    if (!current) throw new Error("Сессия не найдена.");
+    this.db.run("UPDATE sessions SET directory=?,session_file=?,updated=? WHERE id=?", directory, sessionFile, Date.now(), id);
+    const next: SessionRecord = { ...current, directory, sessionFile, updated: Date.now() };
+    this.journal.append(directory, id, { type: "session.updated", properties: { sessionID: id, info: sessionDTO(next) } });
+    return next;
+  }
+
   /** Metadata tombstone; the transcript file is moved to trash by the caller. */
   remove(id: string): SessionRecord | null {
     const current = this.get(id);
