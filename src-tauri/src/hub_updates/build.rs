@@ -220,8 +220,11 @@ impl Build {
             ),
             // Pinned Node.js + Pi SDK runtime artifact, verified against
             // runtime-lock.json and the agent package-lock (fails closed).
-            ("runtime", runtime_args(), Duration::from_secs(20 * 60)),
-            ("compiling", build_args(), Duration::from_secs(40 * 60)),
+            ("runtime", runtime_args(), Duration::from_secs(40 * 60)),
+            // A first release build on a two-job Mac may have no matching
+            // compiler cache. Keep cancellation and a finite ceiling without
+            // killing a healthy cold build at the old forty-minute boundary.
+            ("compiling", build_args(), Duration::from_secs(90 * 60)),
         ] {
             self.set(json!({"stage":stage,"version":v.packet.version}));
             let mut cmd = Command::new(&tools.node);
@@ -299,10 +302,9 @@ impl Build {
                 ));
             }
             let cancelled = self.cancel.load(Ordering::Acquire);
-            if cancelled
-                || start.elapsed() > limit
-                || fs::metadata(log).is_ok_and(|m| m.len() > 8 * 1024 * 1024)
-            {
+            let timed_out = start.elapsed() > limit;
+            let log_full = fs::metadata(log).is_ok_and(|m| m.len() > 8 * 1024 * 1024);
+            if cancelled || timed_out || log_full {
                 // Bounded: TERM grace, then the whole owned tree is killed.
                 let settled = tree.stop(Duration::from_secs(2), Duration::from_secs(10));
                 if !settled.complete {
@@ -313,8 +315,17 @@ impl Build {
                 }
                 return Err(if cancelled {
                     "Сборка отменена".into()
+                } else if timed_out {
+                    format!(
+                        "Истекло время ожидания этапа сборки ({} мин). Лог: {}",
+                        limit.as_secs() / 60,
+                        log.display()
+                    )
                 } else {
-                    format!("Превышено время или размер лога. Лог: {}", log.display())
+                    format!(
+                        "Журнал сборки превысил 8 МБ; процессы остановлены. Лог: {}",
+                        log.display()
+                    )
                 });
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -665,6 +676,49 @@ pub(super) fn source_fingerprint_for_test(v: &Verified) -> Result<String, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn stopped_build_reports_timeout_log_limit_and_cancellation_separately() {
+        let root =
+            std::env::temp_dir().join(format!("enki-build-stop-{}", attempt_name().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let command = || {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "sleep 5"]);
+            cmd
+        };
+        let timeout = Build::default()
+            .run(
+                &mut command(),
+                &root.join("timeout.log"),
+                Duration::from_millis(10),
+            )
+            .unwrap_err();
+        assert!(timeout.contains("Истекло время ожидания"), "{timeout}");
+        assert!(!timeout.contains("размер лога"));
+        let log = root.join("full.log");
+        fs::File::create(&log)
+            .unwrap()
+            .set_len(8 * 1024 * 1024 + 1)
+            .unwrap();
+        let full = Build::default()
+            .run(&mut command(), &log, Duration::from_secs(10))
+            .unwrap_err();
+        assert!(full.contains("Журнал сборки превысил 8 МБ"), "{full}");
+        let cancelled = Build::default();
+        cancelled.cancel();
+        assert_eq!(
+            cancelled
+                .run(
+                    &mut command(),
+                    &root.join("cancel.log"),
+                    Duration::from_secs(10)
+                )
+                .unwrap_err(),
+            "Сборка отменена"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn retry_preserves_diagnostics_and_extracts_into_a_fresh_attempt() {
         let root =

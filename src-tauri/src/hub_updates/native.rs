@@ -208,7 +208,7 @@ fn copy_verified(
     let mut buffer = [0u8; 65536];
     let start = Instant::now();
     loop {
-        if start.elapsed() > Duration::from_secs(15 * 60) {
+        if start.elapsed() > download_limit(p.bytes) {
             return Err("Время загрузки истекло. Повторите попытку.".into());
         }
         build.check_cancel()?;
@@ -231,6 +231,12 @@ fn copy_verified(
         return Err("Контрольная сумма пакета не совпала. Установка отменена.".into());
     }
     Ok(())
+}
+// Allow a slow but active transfer of a full runtime bundle. Individual
+// reads/connects remain bounded, and cancellation is checked for every chunk.
+// Small downloads keep the existing deadline; no packet gets an unbounded run.
+fn download_limit(bytes: u64) -> Duration {
+    Duration::from_secs((bytes.div_ceil(32 * 1024) + 120).clamp(15 * 60, 60 * 60))
 }
 #[cfg(target_os = "macos")]
 fn unpack(build: &Build, file: &Path, version: &str, dir: &Path) -> Result<PathBuf, String> {
@@ -302,6 +308,15 @@ fn unpack(_build: &Build, file: &Path, _version: &str, _dir: &Path) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slow_large_download_keeps_a_finite_size_aware_deadline() {
+        // Actual 2.0.13 transfer timed out at 15 minutes with only 56 MB of
+        // its 114 MB bundle received. Even a 40 KiB/s link must get enough time.
+        let bytes = 113_857_995;
+        assert!(download_limit(bytes) >= Duration::from_secs(bytes / (40 * 1024)));
+        assert!(download_limit(MAX) <= Duration::from_secs(60 * 60));
+        assert_eq!(download_limit(2048), Duration::from_secs(15 * 60));
+    }
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Opt-in real signed GitHub download/unpack; ENKI_NATIVE_ACCEPTANCE contains verified Hub head and native response"]

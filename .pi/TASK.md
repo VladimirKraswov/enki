@@ -1,85 +1,64 @@
-# Текущая задача — Enki 2.0.13
+# Текущая задача — Enki 2.0.14
 
-Рабочая копия `.local/pi-sdk-migration-20261024/review` (W), evidence `stabilize-v36`.
-Q `question-input` чиста на опубликованной 2.0.12 / 51d89b4. R main тоже 51d89b4,
-сохранить R/untracked opencode.json. Не запускать старые задания, офисных агентов,
-GPU inference/benchmarks; не отвечать за владельца на реальные разрешения.
+W `.local/pi-sdk-migration-20261024/review`, R `/Volumes/Extend/work/Enki`.
+Evidence H37 `../stabilize-v37`; предыдущие H30–H36 сохранять.
+Установлены native2.0.10 / hot UI2.0.11; exe SHA256
+338f09d142e8851774d22219252b1538e15203284eab7de0b91a4faa3d72201d.
+Полная установленная приёмка210 вH33, горячая211 вH34. Не getApp во время замены.
 
-## Установлено и проверено
+## Выполнено
 
-Native 2.0.10, exe SHA256
-338f09d142e8851774d22219252b1538e15203284eab7de0b91a4faa3d72201d,
-полная сверка install plan/29407 файлов/strict codesign в stabilize-v33.
-Runtime 59b738a4d3529d37, endpoint 127.0.0.1:50570. Hot UI 2.0.11 штатно применён
-без перезапуска, proof stabilize-v34/APPLIED211.json. Микрофон/файлы/скриншоты
-в вопросах уже доступны. Сохранены 262 чата, архив 255/47239/211229, один старый
-tombstone, все живые JSONL в канонической папке Enki.
+2.0.13 / d1d06b181b4aac1f1e17f307be1dc37700001f79 опубликована Hub/main;
+1172 UI /408runtime /276Rust; CI40401499982 три ОС+publisher success.
+Включает микрофон/файлы в вопросах, MCP bounded startup recovery, Bash always
+для разных команд в одном чате с сохранением deny/read-only/других scopes,
+новые явные подписи кнопок, журнал ACK/snapshot для карточек и статусов связи.
+Подробности и доказательства H33–H36. 263 записи каталогов, 255/47239/211229
+архивных sessions/messages/parts, один старый tombstone; все живые JSONL вEnki.
 
-Активные сессии: VM 10c15e8e-ee2b-4e5b-aeaf-035f3b342e15 (не подменять целью
-старого TrimUI/backup); Медик f76c7e35-a25c-4f4b-b372-a2e588f5845c.
-Владелец сам переключил Медик на полный доступ. Приостановленную VM после
-установки 210 возобновили один раз. Перед финальной установкой ждать завершения
-команд; если нужна уже разрешённая пауза, сохранить текущие сессии и возобновить
-их без дубля при уже активной работе. Не прерывать чужие фоновые копирования.
+## Подтверждённые блокеры установки13
 
-## MCP 2.0.12 (уже опубликовано, ещё не установлено)
+Штатное скачивание GitHub оборвалось по15мин:55787520 из113857995байт,
+контрольный curl range~107КБ/с. Затем штатная source build13 прошла runtime
+(0.85.1-4f8fff9b40b64051) и frontend, но холодная Rust compilation оборвалась
+точно по40мин без ошибок компиляции, total57:38. CacheHub hits0/writes403.
+Реальный лог сохранён H37/source213-timeout.log. Артефакт НЕ готов/НЕ установлен.
+Не выдавать подготовку за готовую, не внедрять ready state/фальшивые receipts.
+Его рабочая папка:
+~/.local/share/enki/update-runtime/build-14c939fc7711a2f82d8e8086b3c17345cbb4d6246b55f34d9d2732d44d9b56c4/attempt-5df4bf87243d9c7262d21b1ea974d1e2
 
-51d89b4335b5f1af7c62e158508b7d949d53783a опубликован Hub/main, оба пакета
-byte-exact и pinned signature проверены (stabilize-v35). Оригинальные gates:
-1159 UI / 404 runtime / 276 Rust + 7 ignored. Native fingerprint
-3d626b4afd959eaf78c5c74289a68ece1d5ab02377b2a9ff1da49210e6e057e3.
-CI 40392303563: все три ОС и publisher прошли; v2.0.12 с настоящими пакетами
-опубликована (доказательства в H35/NATIVE212-*). Native212 не установлен.
-Пока не устанавливать 212 отдельно:
-владелец добавил исправления ниже, объединить их в завершающий native 213.
-API изображений в установленной Enki проверен read-only: SDXL Lightning и
-FLUX.2 Klein загружены; MCP вернул 8 инструментов за 8032мс, генерации не было.
-212: два ограниченных слота discovery, один повтор только initialize/list-tools,
-общий deadline35с; действия не повторяются. Это воспроизведено красным тестом:
-6 медленных исправных сервисов раньше давали только3 набора инструментов.
+## Исправления14 в работе
 
-## Новые подтверждённые дефекты и исправления 213
+Nativedownload finite size-aware budget15..60min at32KiB/s +2min; индивидуальные
+connect/read deadlines, cancel, exactsize/hash/signature неизменны. Source runtime
+40min / coldcompile90min, прежние2jobs и bounded owned-tree termination.
+Ошибки отмены/времени/8MBлога отдельные; реальные короткие subprocess tests.
+Focused Rust tests:26passed/2ignored (hub_updates), logH37/focused-native.log. Затем diff review,
+commit14, исходный npm run release:local -- stable без пропусков, H30/cargo-target/jobs2.
+Fresh Hub/main+оба подписанных пакета, CI native14. Можно после Hub14 сразу
+начать штатную sourcebuild14 через старый host10: кэш403 предыдущих компиляций
+уже наHub, ожидаются совпадения (проверить, не утверждать заранее). Не делать
+лишний перезапуск13. Финал — native/UI14, настоящий installplan/hash/codesign,
+MCP/runtime/history audit263+, одинGUI, cleanup proven own outputs.
 
-Владелец явно требует: «Разрешать всегда» на Bash охватывает следующие Bash
-команды в том же чате. Новый versioned observed-bash-tool grant только после
-явного always, старые exact/untyped строки не расширяются. Другие инструменты,
-чаты, явные deny и read-only не получают допуска. После commit пересматриваются
-уже ожидающие вызовы; при rollback допуска/исполнения нет. Metadata сообщает
-alwaysScope tool/alwaysTool bash; UI пишет «Разрешать Bash в этом чате».
+## Безопасность и текущие работы владельца
 
-На screenshot вопросик был не вопросом: реальный MCP status показал VM busy,
-permissions0/questions0, global reconnecting, directory open. Открытый чат теперь
-подтверждается своим потоком; фоновые — общим. Неизвестный статус — серый значок
-связи, реальное ожидание — прежняя жёлтая подсветка.
+Не запускать офис/Igor/старые задачи/GPU inference/benchmarks. Source config
+R/untracked opencode.json сохранить; независимые CLI/истории не трогать.
+Owner AX только emit:false+строгий whitelist/booleans: старые titles содержат
+секреты. SecurityAgent/Terminal не автоматизировать. CUA rewriteDocumentation
+после compaction. App handle enkiUpdateApp, текущий безопасный экран Updates.
+NativeMCP210 helper H33 сохраняет весь stdout private. tools desktop_sessions/
+conversation/select могут менять UI directory и добавлять projectless папки как
+проекты; не использовать для массового read-only обхода.
 
-Store.replyPermission: один in-flight POST на workspace/request, ACK удаляет
-только свой запрос. Затем authoritative pending snapshot с HistoryJournal;
-события во время чтения побеждают снимок. Смена доступа тоже обновляет pending.
-Fallback restorePiRuntime тоже восстанавливает permissions (раньше только
-questions), с журналом новых событий и инвалидированием старого снимка после
-ACK ответа. Эти два дефекта отдельно воспроизведены красными регрессиями.
-Потеря ACK — read-only сверка без повторного POST и без ложного утверждения о
-выданном разрешении в control bridge. Старый host/folder/снимок не меняет новый.
-Карточка: кнопки блокируются до ACK, metadata свёрнута, область явная.
+VM10c15e8e-ee2b-4e5b-aeaf-035f3b342e15, Медикf76c7e35-a25c-4f4b-b372-a2e588f5845c,
+TrimUIc7433ceb-3f9b-48a1-9a92-9bbb317221da. Сейчас никаких сессий нами НЕ остановлено;
+последний SQLite snapshot: open executions0, commands completed45/cancelled8/
+rejected7, pending running0. Не возобновлять завершённую работу. Перед install
+снова проверить, ждать authoritative idle; если реально останавливать по уже
+данному разрешению, возобновить только их и ровноодинраз без старого backup prompt.
 
-Профильные проверки: 30 runtime (hardening+реальный SDK с двумя разными Bash
-командами и одним разрешением); 46 UI (activity/access/status/card/authority). Сценарии
-потери ACK, гонки снимка/событий, full mode и смены хоста покрыты. Новая карточка
-проверена реальным браузером в обеих темах при ширине340px; screenshots в H36.
-QA вкладка закрыта, свой Vite1441 PID11774 остановлен. Исходники проверочного
-стенда — ignored W/.local/permission-ui-qa, не production.
-
-Далее: final diff/typecheck, commit213; original npm run release:local -- stable
-без пропуска gates, jobs2 и тёплый stabilize-v30/cargo-target. Fresh Hub/main,
-native packages213. При публикации213 предыдущий CI212 может отмениться как
-заменённый — не выдавать отменённые пакеты за квалифицированные. Не менять
-immutable212. Штатно установить только финальный native213, проверить
-hash/codesign/runtime/MCP/истории/один GUI, возобновить действительно остановленные
-сессии. Затем убрать только доказанные собственные сборки/старые app bundles.
-
-Безопасность: CUA owner AX только emit:false + строго безопасные строки/boolean;
-старые названия чатов содержат секреты. Не getApp во время замены bundle.
-SecurityAgent и Terminal не автоматизировать. Независимые CLI/их данные и
-исходные архивы пользователя не удалять. Сохранять private receipts H30–H36.
-Удалены собственные measurement runtime, Q/src-tauri/target и старая app2.0.7.
-Тёплый Cargo target и последние rollback app сохранить до финальной проверки.
+Сохранить тёплый H30/cargo-target до приёмки, затем удалить только собственные
+build outputs и проверенные previous app2.0.8/2.0.10; сохранять receipts/history/
+исходные архивы. Известные предыдущие cleanup вH32/H34.
