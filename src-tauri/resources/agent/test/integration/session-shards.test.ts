@@ -22,6 +22,46 @@ async function offline<T>(data: string, work: (db: Database) => T): Promise<T> {
   const db = new Database(path.join(data, "runtime.sqlite"));
   try { return work(db); } finally { db.close(); }
 }
+
+it.each(["missing", "corrupt"])("preserves committed history when the target is %s after a crash", async failure => {
+  const data = tempDir(`shards-${failure}`), first = await start({ data });
+  const dir = first.project("recovery"), sid = await newSession(first, dir);
+  expect(await talk(first, "before", sid, dir, "сохранить историю")).toBe("completed");
+  const target = first.runtime.catalog.get(sid)!.sessionFile!, bytes = fs.readFileSync(target);
+  await first.stop(); harnesses.splice(harnesses.indexOf(first), 1);
+  const old = literalShard(data, "old-project-name"); fs.mkdirSync(old);
+  const source = path.join(old, path.basename(target)); fs.renameSync(target, source);
+  if (failure === "corrupt") fs.writeFileSync(target, "damaged copy");
+  await offline(data, db => {
+    journalMove(db, { session: sid, directory: dir, from: source, to: target, state: "linked" });
+    db.run("UPDATE sessions SET session_file=? WHERE id=?", target, sid);
+  });
+  const recovered = await start({ data });
+  const file = recovered.runtime.catalog.get(sid)!.sessionFile!;
+  expect(fs.readFileSync(file)).toEqual(bytes);
+  if (failure === "corrupt") {
+    expect(file).toBe(source); expect(fs.readFileSync(target, "utf8")).toBe("damaged copy");
+  } else { expect(file).toBe(target); expect(fs.existsSync(source)).toBe(false); }
+  expect(await talk(recovered, "after", sid, dir, "продолжить")).toBe("completed");
+});
+
+it("rejects a journal that points outside the store without blocking other chats", async () => {
+  const data = tempDir("shards-unowned"), first = await start({ data });
+  const dir = first.project("unowned"), sid = await newSession(first, dir);
+  expect(await talk(first, "before", sid, dir, "история")).toBe("completed");
+  const file = first.runtime.catalog.get(sid)!.sessionFile!;
+  await first.stop(); harnesses.splice(harnesses.indexOf(first), 1);
+  const external = path.join(tempDir("external-history"), "preserve.jsonl"); fs.copyFileSync(file, external);
+  const bytes = fs.readFileSync(external);
+  await offline(data, db => {
+    journalMove(db, { session: sid, directory: dir, from: external, to: file, state: "linked" });
+    db.run("UPDATE sessions SET session_file=? WHERE id=?", file, sid);
+  });
+  const recovered = await start({ data });
+  expect(fs.readFileSync(external)).toEqual(bytes);
+  expect(await talk(recovered, "after", sid, dir, "продолжить")).toBe("completed");
+  expect(recovered.runtime.db.get("SELECT state FROM migration_journal WHERE kind='session-shard'")?.state).toBe("failed");
+});
   const rows = (h: Harness, table: string): string[] => (h.runtime.db.all(`SELECT DISTINCT directory FROM ${table}`) as Array<Record<string, string>>)
     .map(row => String(row.directory)).sort();
 /** How runtimes before this change keyed a shard: the literal path string. */
@@ -118,6 +158,7 @@ it("brings a chat adopted through an alias into its canonical folder and shard",
   const h = await start({ data }); harnesses.push(h);
   const record = h.runtime.catalog.get(sid)!;
   expect(record.directory).toBe(fs.realpathSync(real));
+  expect((await h.request<{ directoryAliases: Record<string, string> }>("GET", "/migrations")).body.directoryAliases[alias]).toBe(fs.realpathSync(real));
   expect(record.sessionFile).toBe(file);
   expect((await h.request<Array<{ id: string }>>("GET", `/sessions?directory=${encodeURIComponent(real)}`))
     .body.map(session => session.id)).toEqual([sid]);

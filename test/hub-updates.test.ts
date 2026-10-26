@@ -40,7 +40,7 @@ it('every active native build phase, including runtime preparation, is cancellab
 });
 it('the UI stage contract names exactly the active stages the native builder reports',async()=>{
  const {readFileSync}=await import('node:fs');
- const source=readFileSync(new URL('../src-tauri/src/hub_updates/build.rs',import.meta.url),'utf8');
+ const source=readFileSync(new URL('../src-tauri/src/hub_updates/build.rs',import.meta.url),'utf8').split('#[cfg(test)]')[0];
  const loop=[...source.matchAll(/\(\s*"([a-z]+)",\s*(?:vec!\[|runtime_args\(\)|build_args\(\))/g)].map(m=>m[1]);
  const started=[...source.matchAll(/json!\(\{"stage":"([a-z]+)","version"/g)].map(m=>m[1]);
  expect([...started,...loop]).toEqual([...ACTIVE_BUILD_STAGES]);
@@ -49,4 +49,18 @@ it('a built artifact belongs only to the exact checked release',async()=>{
  const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind:'source',digest:'b'.repeat(64)}:{...native,build:{stage:'ready',digest:'a'.repeat(64)}});
  const c=new UpdateController(call as Transport,async()=>{});await c.check();await c.refresh();expect(c.prepared()).toBe(false);
  call.mockImplementation(async()=>({...native,build:{stage:'ready',digest:'b'.repeat(64)}}));await c.refresh();expect(c.prepared()).toBe(true);
+});
+
+it('explicit retry clears only a failed old builder and never a running or modern builder', async()=>{
+ for(const [version,stage,clear,build] of [['2.0.2','error',true,true],['2.0.6','error',false,true],['2.0.2','runtime',false,false]] as const){
+  const call=vi.fn(async(action:string)=>action==='status'?{...native,nativeVersion:version,build:{stage}}:{});
+  const c=new UpdateController(call as Transport,async()=>{});await c.build();
+  expect(call.mock.calls.some(([a])=>a==='clear')).toBe(clear);
+  expect(call.mock.calls.some(([a])=>a==='build')).toBe(build);
+  if(clear)expect(call.mock.calls.map(([a])=>a)).toEqual(['status','clear','build','status']);
+ }
+});
+it('a failed retry is visible and keeps the verified download for another attempt',async()=>{
+ const c=new UpdateController((async(action:string)=>{if(action==='status')return {...native,build:{stage:'error'}};if(action==='build')throw Error('Disk full');return {};}) as Transport,async()=>{});
+ await c.download();await c.build();expect(c.snapshot().error).toContain('Disk full');expect(c.snapshot().downloaded).toBe(true);expect(c.snapshot().busy).toBe('');
 });

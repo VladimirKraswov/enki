@@ -118,16 +118,11 @@ function convert(message: MessageDTO, options: { includeImages: boolean; maxImag
     else if (!["step-start", "step-finish", "snapshot", "compaction"].includes(part.type)) omitted++;
   }
   if (content.length) {
-    const usage = zeroUsage(), tokens = message.info.tokens;
-    usage.input = tokens?.input ?? 0; usage.output = tokens?.output ?? 0;
-    // Only this turn's own work transfers. The archive's cached prefix and total
-    // measured the context of THAT session; a continuation seed carries a compressed
-    // tail, so repeating them would claim a context this transcript does not hold
-    // (639007 tokens for a few thousand of content). The SDK reads usage from the
-    // last assistant entry, so every later context decision then demanded a
-    // compaction it refuses to perform ("Nothing to compact (session too small)"):
-    // such a chat could neither send a prompt nor move to a smaller model.
-    usage.totalTokens = usage.input + usage.output; usage.cost.total = message.info.cost ?? 0;
+    const usage = zeroUsage();
+    // Even uncached input describes the entire OLD conversation, not this
+    // bounded seed. Zero usage makes the SDK estimate the actual new transcript.
+    // Full accounting remains in the immutable archive; retain historical cost.
+    usage.cost.total = message.info.cost ?? 0;
     messages.push({ role: "assistant", content, api: "legacy-opencode", provider: message.info.providerID ?? "archive", model: message.info.modelID ?? "unknown", usage,
       stopReason: results.length ? "toolUse" : message.info.finish === "length" ? "length" : message.info.error ? "error" : "stop", timestamp: message.info.time.created });
     refs.push({ message: message.info.id, part: "" }); messages.push(...results); refs.push(...resultRefs);

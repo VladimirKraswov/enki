@@ -149,8 +149,11 @@ fn migrate_with_alias(
         }
         sync_parent(parent)?;
     } else if marker.is_file() && new.is_dir() {
-        // Crash between rename and alias: finish the recorded operation.
-        make_alias(&new, &old).map_err(io)?;
+        // The rename is already durable. Do not resurrect a compatibility link
+        // after the owner has verified canonical paths and retired it.
+        if fs::metadata(&marker).map_err(io)?.len() != 0 {
+            return Err("Неизвестный журнал миграции; файл не изменён".into());
+        }
         sync_parent(parent)?;
     } else {
         fs::create_dir_all(&new).map_err(io)?;
@@ -206,28 +209,6 @@ fn ensure_stopped(root: &Path) -> Result<(), String> {
     {
         let _ = value;
     } // Agent Control is Unix-only.
-    Ok(())
-}
-
-/// Bundle alias for MCP commands already registered by an earlier installation.
-/// It never replaces another installation. The updater already retained that
-/// installation in its private previous-app record before opening this one.
-pub fn installation_alias() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let exe = std::env::current_exe().map_err(io)?;
-        if let Some(bundle) = exe
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .filter(|p| p.file_name().is_some_and(|n| n == "Enki.app"))
-        {
-            let old = bundle.with_file_name("Arvela.app");
-            if fs::symlink_metadata(&old).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
-                alias(bundle, &old).map_err(io)?;
-            }
-        }
-    }
     Ok(())
 }
 
@@ -412,7 +393,10 @@ mod tests {
         fs::write(p.join("enki/data"), b"keep").unwrap();
         fs::write(p.join(".enki-migration-v1"), b"").unwrap();
         initialize(&p).unwrap();
-        assert_eq!(fs::read(p.join("opencode-desktop/data")).unwrap(), b"keep");
+        assert_eq!(fs::read(p.join("enki/data")).unwrap(), b"keep");
+        assert!(!p.join("opencode-desktop").exists());
+        assert_eq!(initialize(&p).unwrap(), p.join("enki"));
+        assert!(!p.join("opencode-desktop").exists());
         fs::remove_dir_all(p).unwrap();
     }
     #[test]

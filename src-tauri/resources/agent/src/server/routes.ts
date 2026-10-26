@@ -585,6 +585,7 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     recovery: runtime.recoveryIssues,
     /** Chats the canonical-shard migration left where they are, with the reason. */
     shards: runtime.shardIssues,
+    directoryAliases: runtime.shards.directoryAliases(),
     piAgent: { available: runtime.config.host === "local" && runtime.config.credentials === "vault" && runtime.config.broker.kind === "supervisor", status: runtime.configStatus() },
   }));
   r("POST", "/migrations/opencode", async (request) => {

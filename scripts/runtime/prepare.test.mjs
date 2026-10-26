@@ -250,3 +250,13 @@ test('Windows jobs refuse to run without the exact bootstrapped runner', { skip:
   await assert.rejects(run(process.execPath, ['-e', '0'], { env: process.env, runner: undefined }), /bootstrapped from this source/);
   await assert.rejects(run(process.execPath, ['-e', '0'], { env: process.env, runner: { path: process.execPath, sha256: '0'.repeat(64) } }), /bootstrap receipt/);
 });
+
+test('transient download failures retry twice with fresh partial files; permanent failure names host', async t => {
+ const root=temporary(t), file=path.join(root,'node.tar'), data=Buffer.from('verified'), url='https://primary.invalid/node.tar';let calls=0;
+ await download(url,file,hash(data),{retryDelayMs:0,fetcher:async()=>{calls++;if(calls===1)throw new TypeError('fetch failed');if(calls===2)return new Response('',{status:503});return new Response(data);}});
+ assert.equal(calls,3);assert.deepEqual(fs.readFileSync(file),data);assert.deepEqual(fs.readdirSync(root),['node.tar']);
+ fs.unlinkSync(file);calls=0;
+ await assert.rejects(download(url,file,hash(data),{retryDelayMs:0,fetcher:async()=>{calls++;return new Response('',{status:403});}}),/node.tar.*primary.invalid.*403/);
+ assert.equal(calls,1);assert.equal(fs.existsSync(file),false);
+ calls=0;await assert.rejects(download(url,file,hash(data),{retryDelayMs:0,fetcher:async()=>{calls++;throw new TypeError('fetch failed');}}),/Проверьте подключение/);assert.equal(calls,3);
+});

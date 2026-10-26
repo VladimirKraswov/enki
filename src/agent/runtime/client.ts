@@ -102,6 +102,7 @@ export interface MigrationsDTO {
   recovery?: Array<{ kind: string; message: string }>;
   /** Chats the canonical-shard migration of the Enki store left where they are. */
   shards?: Array<{ session: string; reason: string }>;
+  directoryAliases?: Record<string, string>;
   piAgent?: { available: boolean; status: ConfigStatusDTO };
 }
 

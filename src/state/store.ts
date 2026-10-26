@@ -22,6 +22,7 @@ import { configureLocalBrowser, invalidateBrowserSetup, browserSetupSnapshot, op
 import { browserTaskKey, browserEfforts, browserDefaultEffort } from "../browser/task";
 import { browserEnabled, browserNodeProgram } from "../browser/preferences";
 import { reconcileOpenCodeImport } from "../agent/runtime/migration";
+import { migrateDirectoryPrefs } from "./directoryMigration";
 import { isLocalComputer } from "./computer";
 import { isNative } from "../native/platform";
 import { attachmentParts, stageArchive, type ArchiveStager } from '../attachments/archive';
@@ -842,6 +843,13 @@ class Store {
       const health = await backend.health();
       if (gen !== this.connectionGeneration) return false;
       if (!health.healthy) throw new Error("Среда выполнения Enki сообщает о неисправности.");
+      const moves = await backend.client.migrations();
+      if (gen !== this.connectionGeneration) return false;
+      if (moves.directoryAliases && Object.keys(moves.directoryAliases).length) {
+        const prefs = migrateDirectoryPrefs(this.state.prefs, moves.directoryAliases);
+        this.mutate({ prefs, directory: prefs.selectedDirectory });
+        this.persistPrefs();
+      }
       this.mutate((s) => ({
         connection: {
           ...s.connection,

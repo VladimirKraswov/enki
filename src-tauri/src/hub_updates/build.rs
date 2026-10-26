@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[path = "../../native_fingerprint.rs"]
 mod native_fingerprint;
@@ -69,6 +69,13 @@ impl Build {
             .ok()
             .and_then(|p| p.as_ref().map(|(digest, _)| json!(digest)))
             .unwrap_or(Value::Null);
+        if let Some(started) = state["startedAt"].as_u64() {
+            let end = state["finishedAt"].as_u64().unwrap_or_else(now_ms);
+            state["elapsedSeconds"] = json!(end.saturating_sub(started) / 1000);
+        }
+        if let Some(log) = state["logPath"].as_str() {
+            state["logBytes"] = json!(fs::metadata(log).map(|m| m.len()).unwrap_or(0));
+        }
         state
     }
     pub fn running(&self) -> bool {
@@ -109,7 +116,19 @@ impl Build {
     }
     fn set(&self, value: Value) {
         if let Ok(mut s) = self.state.lock() {
-            *s = value;
+            if value["stage"] == "preparing" || value["stage"] == "idle" {
+                *s = value;
+                if s["stage"] == "preparing" {
+                    s["startedAt"] = json!(now_ms());
+                }
+            } else if let Some(fields) = value.as_object() {
+                for (key, value) in fields {
+                    s[key] = value.clone();
+                }
+                if s["stage"] == "ready" || s["stage"] == "error" {
+                    s["finishedAt"] = json!(now_ms());
+                }
+            }
         }
     }
     pub fn prepared(&self, digest: &str) -> Result<Plan, String> {
@@ -124,10 +143,7 @@ impl Build {
     fn compile(&self, v: Verified, digest: &str) -> Result<Plan, String> {
         validate_identity(&v)?;
         let tools = Tools::find()?;
-        let directory = root()?.join(format!("build-{digest}"));
-        if directory.exists() {
-            return Err("Каталог этой сборки уже существует. Удалите его через «Очистить сборку» перед повтором.".into());
-        }
+        let directory = fresh_attempt(&root()?, digest)?;
         packet::extract(&v.files, &directory)?;
         if native_fingerprint::fingerprint(&directory.join("src-tauri"))?
             != v.packet.native_fingerprint
@@ -135,6 +151,7 @@ impl Build {
             return Err("Состав исходников не соответствует нативной версии".into());
         }
         let log = directory.join("build.log");
+        self.set(json!({"logPath":log}));
         for (stage, args, limit) in [
             (
                 "dependencies",
@@ -167,7 +184,14 @@ impl Build {
             for key in WITHHELD_ENV {
                 cmd.env_remove(key);
             }
-            self.run(&mut cmd, &log, limit)?;
+            self.run(&mut cmd, &log, limit).map_err(|error| {
+                let phase = match stage {
+                    "dependencies" => "Установка зависимостей",
+                    "runtime" => "Подготовка компонентов Enki",
+                    _ => "Компиляция приложения",
+                };
+                format!("{phase}: {error}")
+            })?;
         }
         let artifact = artifact(&directory)?;
         let plan = Plan::create(&artifact, &v.packet.version)?;
@@ -204,8 +228,9 @@ impl Build {
                     return Ok(());
                 }
                 return Err(format!(
-                    "Сборка завершилась с кодом {:?}. Лог: {}",
+                    "Сборка завершилась с кодом {:?}. {} Лог: {}",
                     status.code(),
+                    failure_detail(log),
                     log.display()
                 ));
             }
@@ -250,6 +275,60 @@ impl Build {
         self.set(json!({"stage":"idle"}));
         Ok(())
     }
+}
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+fn failure_detail(log: &Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let read = || -> std::io::Result<String> {
+        let mut file = fs::File::open(log)?;
+        let length = file.metadata()?.len();
+        file.seek(SeekFrom::Start(length.saturating_sub(8192)))?;
+        let mut bytes = Vec::new();
+        file.take(8192).read_to_end(&mut bytes)?;
+        let text = String::from_utf8_lossy(&bytes);
+        Ok(text
+            .lines()
+            .rev()
+            .find(|line| {
+                line.starts_with("runtime:prepare:")
+                    || line.starts_with("npm error code ")
+                    || line.starts_with("error: ")
+            })
+            .unwrap_or("")
+            .chars()
+            .take(500)
+            .collect())
+    };
+    read().unwrap_or_default()
+}
+/// An explicit retry gets a fresh verified source tree. Prior diagnostics remain
+/// available until the owner clears builds; partial node_modules are never reused.
+fn attempt_name() -> Result<String, String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(format!(
+        "attempt-{}",
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+fn fresh_attempt(root: &Path, digest: &str) -> Result<PathBuf, String> {
+    if !packet::hash_ok(digest) {
+        return Err("Некорректный идентификатор сборки".into());
+    }
+    let parent = root.join(format!("build-{digest}"));
+    if parent.is_symlink() || (parent.exists() && !parent.is_dir()) {
+        return Err("Папка сборки занята посторонним файлом; он сохранён".into());
+    }
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+    Ok(parent.join(attempt_name()?))
 }
 fn validate_identity(v: &Verified) -> Result<(), String> {
     for name in [
@@ -468,6 +547,46 @@ pub(super) fn source_fingerprint_for_test(v: &Verified) -> Result<String, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retry_preserves_diagnostics_and_extracts_into_a_fresh_attempt() {
+        let root =
+            std::env::temp_dir().join(format!("enki-retry-test-{}", attempt_name().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let digest = "a".repeat(64);
+        let previous = root.join(format!("build-{digest}"));
+        fs::create_dir(&previous).unwrap();
+        fs::write(previous.join("build.log"), "network failure").unwrap();
+        let first = fresh_attempt(&root, &digest).unwrap();
+        let second = fresh_attempt(&root, &digest).unwrap();
+        assert_ne!(first, second);
+        assert!(!first.exists());
+        assert_eq!(
+            fs::read_to_string(previous.join("build.log")).unwrap(),
+            "network failure"
+        );
+        assert!(fresh_attempt(&root, "../foreign").is_err());
+        fs::write(
+            previous.join("build.log"),
+            "progress\nruntime:prepare: connection to nodejs.org failed\n",
+        )
+        .unwrap();
+        assert!(failure_detail(&previous.join("build.log")).contains("nodejs.org"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn build_status_keeps_version_log_and_elapsed_after_failure() {
+        let build = Build::default();
+        build.set(json!({"stage":"preparing","version":"2.0.6"}));
+        build.set(json!({"stage":"runtime","logPath":"test.log"}));
+        build.set(json!({"stage":"error","error":"network unavailable"}));
+        let status = build.status();
+        assert_eq!(status["version"], "2.0.6");
+        assert_eq!(status["logPath"], "test.log");
+        assert!(status["elapsedSeconds"].is_u64());
+        build.set(json!({"stage":"preparing","version":"2.0.7"}));
+        assert!(build.status()["error"].is_null());
+        assert!(build.status()["logPath"].is_null());
+    }
     #[test]
     fn status_is_renderable_before_any_build() {
         assert_eq!(Build::default().status()["stage"], "idle");

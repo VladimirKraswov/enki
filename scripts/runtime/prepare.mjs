@@ -73,7 +73,26 @@ export function buildEnvironment(nodeHome, work, platform = process.platform, so
     npm_config_registry: 'https://registry.npmjs.org/', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
     npm_config_nodedir: nodeHome, npm_config_devdir: devdir, npm_config_fetch_retries: '2', npm_config_fetch_timeout: '120000', npm_config_fetch_retry_maxtimeout: '10000' });
 }
-export async function download(url, file, expected, { signal, timeoutMs = 120_000, maxBytes = 160 * 1024 * 1024, fetcher = fetch } = {}) {
+export async function download(url, file, expected, options = {}) {
+  const { signal, retryDelayMs = 500 } = options;
+  for (let attempt = 0; ; attempt++) {
+    try { return await downloadOnce(url, file, expected, options); }
+    catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      const transient = error instanceof TypeError || error.retryable === true || error.message === 'Download timed out';
+      if (!transient || attempt >= 2) {
+        throw new Error(`Не удалось скачать ${path.basename(file)} с ${new URL(url).hostname}: ${error.message}${transient ? '. Проверьте подключение и повторите сборку; данные приложения сохранены.' : ''}`, { cause: error });
+      }
+      await new Promise((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); reject(signal.reason ?? new Error('Download cancelled')); };
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, retryDelayMs * (attempt + 1));
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+    }
+  }
+}
+async function downloadOnce(url, file, expected, { signal, timeoutMs = 120_000, maxBytes = 160 * 1024 * 1024, fetcher = fetch } = {}) {
   if (!digest(expected) || new URL(url).protocol !== 'https:') throw new Error('Download requires HTTPS and reviewed SHA256');
   if (fs.existsSync(file) && sha256File(file) === expected) return;
   const partial = `${file}.${crypto.randomUUID()}.part`, controller = new AbortController(), abort = () => controller.abort(signal.reason);
@@ -81,7 +100,7 @@ export async function download(url, file, expected, { signal, timeoutMs = 120_00
   const timer = setTimeout(() => controller.abort(new Error('Download timed out')), timeoutMs); let fd;
   try {
     const response = await fetcher(url, { redirect: 'follow', signal: controller.signal });
-    if (!response.ok || !response.body || response.url && new URL(response.url).protocol !== 'https:') throw new Error(`Download failed: HTTP ${response.status}`);
+    if (!response.ok || !response.body || response.url && new URL(response.url).protocol !== 'https:') throw Object.assign(new Error(`Download failed: HTTP ${response.status}`), { retryable: response.status === 429 || response.status >= 500 });
     const advertised = response.headers.get('content-length');
     if (advertised !== null && (!/^\d+$/.test(advertised) || Number(advertised) > maxBytes)) throw new Error('Download exceeds byte limit');
     fd = fs.openSync(partial, 'wx', 0o600); let bytes = 0; const hash = crypto.createHash('sha256');

@@ -80,7 +80,7 @@ export class SessionShards {
       const plan = value as Partial<Plan>;
       if (!plan || plan.version !== 1 || typeof plan.session !== "string" || typeof plan.directory !== "string"
         || typeof plan.previousDirectory !== "string" || typeof plan.from !== "string"
-        || (plan.to !== null && typeof plan.to !== "string")) continue;
+        || typeof plan.to !== "string") continue;
       const state = text(row, "state");
       if (state !== "committed" && state !== "rolled_back" && state !== "failed") found.set(plan.session, { job: text(row, "id"), plan: plan as Plan });
     }
@@ -98,30 +98,81 @@ export class SessionShards {
 
   private unlink(file: string): void { fs.rmSync(file); syncOwnedDirectory(path.dirname(file)); }
 
+  /** Durable rename receipts let the UI move its saved selection and drafts
+   * even after the old filesystem alias has been retired. */
+  directoryAliases(): Record<string, string> {
+    const aliases: Record<string, string> = Object.create(null);
+    for (const row of this.db.all("SELECT detail FROM migration_journal WHERE kind=? AND state='committed' ORDER BY updated", KIND)) {
+      try {
+        const plan = JSON.parse(text(row, "detail")) as Plan;
+        if (path.isAbsolute(plan.previousDirectory) && path.isAbsolute(plan.directory) && plan.previousDirectory !== plan.directory)
+          aliases[plan.previousDirectory] = plan.directory;
+      } catch { /* not a valid rename receipt */ }
+    }
+    return aliases;
+  }
+
   /** Settle the moves a previous start left unfinished. Never executes a transcript. */
-  recover(): void {
+  recover(): ShardReport["skipped"] {
+    const skipped: ShardReport["skipped"] = [];
     for (const { job, plan } of this.open()) {
+      try {
       const current = this.catalog.get(plan.session);
+      // A journal is data, not authority to remove arbitrary files. Both parent
+      // directories must be real shards of this store, including a missing target.
+      const location = (file: string): boolean => {
+        if (!file) return false;
+        const parent = path.dirname(file);
+        try { return !fs.lstatSync(parent).isSymbolicLink()
+          && SESSION_LAYOUT.shard.test(path.basename(parent))
+          && fs.realpathSync(path.dirname(parent)) === fs.realpathSync(this.paths.sessions)
+          && (!fs.existsSync(file) || ownedSessionPath(this.paths, file)); } catch { return false; }
+      };
+      if (plan.from === "" && plan.to === "") { this.repoint(plan); this.writeJournal(job, "committed", plan); continue; }
+      if (!location(plan.from) || !location(plan.to)) throw new Error("Пути журнала не принадлежат хранилищу Enki; файлы сохранены.");
+      if (plan.from === plan.to) { this.repoint(plan); this.writeJournal(job, "committed", plan); continue; }
+      if (!/^[a-f0-9]{64}$/.test(plan.sha256 ?? "")) throw new Error("В журнале отсутствует контрольная сумма истории; файлы сохранены.");
       const target = plan.to !== "" && fs.existsSync(plan.to);
       const source = plan.from !== "" && fs.existsSync(plan.from);
+      const validSource = source && shaFile(plan.from) === plan.sha256;
+      const validTarget = target && shaFile(plan.to) === plan.sha256;
       if (current?.sessionFile === plan.to) {
+        if (!validTarget) {
+          if (!validSource) throw new Error("Не удалось подтвердить ни одну копию истории; требуется восстановление из резервной копии.");
+          if (target) {
+            // Preserve the conflicting file and restore access to the known copy.
+            this.repoint({ ...plan, to: plan.from });
+            this.writeJournal(job, "rolled_back", plan);
+            skipped.push({ session: plan.session, reason: "Новая копия повреждена; сохранена и подключена проверенная история." });
+            continue;
+          }
+          fs.linkSync(plan.from, plan.to);
+          syncOwnedFile(plan.to); syncOwnedDirectory(path.dirname(plan.to));
+          if (shaFile(plan.to) !== plan.sha256) throw new Error("Не удалось проверить восстановленную историю.");
+        }
+        if (source && !validSource) throw new Error("Исходная история изменилась после переноса; обе копии сохранены.");
         if (source && !sameFile(plan.from, plan.to)) this.unlink(plan.from);
         this.writeJournal(job, "committed", plan);
       } else if (current?.sessionFile === plan.from) {
         if (!target) { this.writeJournal(job, "rolled_back", plan); continue; }
-        if (shaFile(plan.to) !== plan.sha256) { this.writeJournal(job, "failed", plan); throw new Error("Перенесённая история не совпала с проверенной записью журнала."); }
+        if (!validTarget || (source && !validSource)) throw new Error("Копии истории не совпали с журналом; оба файла сохранены.");
         if (source) { this.unlink(plan.to); this.writeJournal(job, "rolled_back", plan); }
         else { this.repoint(plan); this.writeJournal(job, "committed", plan); }
       } else this.writeJournal(job, "rolled_back", plan);
+      } catch (error) {
+        this.writeJournal(job, "failed", plan);
+        skipped.push({ session: plan.session, reason: String(error) });
+      }
     }
+    return skipped;
   }
 
   /** One pass: settle journals, repoint aliases, move misplaced transcripts, prune empty shards. */
   migrate(): ShardReport {
     const report: ShardReport = { moved: [], rewritten: [], skipped: [] };
-    this.recover();
+    report.skipped.push(...this.recover());
     const aliases = this.aliases();
-    const pending = new Set(this.open().map((item) => item.plan.session));
+    const pending = new Set([...this.open().map((item) => item.plan.session), ...report.skipped.map(item => item.session)]);
     for (const record of this.catalog.all()) {
       const directory = aliases.get(record.directory) ?? record.directory;
       const file = record.sessionFile;

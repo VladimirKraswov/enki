@@ -51,9 +51,6 @@ pub fn run() {
             ".enki",
         )
         .expect("Не удалось перенести профиль браузера Enki");
-        if let Err(error) = migration::installation_alias() {
-            eprintln!("Совместимость старых MCP-команд: {error}");
-        }
         if let Err(error) = paths::app_data_dir().and_then(|p| migration::bundled_defaults(&p)) {
             eprintln!("Обновление стандартных инструкций Enki: {error}");
         }

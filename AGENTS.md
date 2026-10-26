@@ -1,6 +1,6 @@
 # Enki — agent instructions
 
-Application name: Enki (Энки). Migrate app-owned names and paths during upgrades without losing sessions. Preserve legacy readers, signing trust, the installed OS identity `dev.local.opencodedesktop` and old absolute-path aliases as explicit compatibility mechanisms; never rename, modify or delete independently installed OpenCode/Pi CLIs, their services or their databases. The protected session is «Мастерская».
+Application name: Enki (Энки). Migrate app-owned names and paths during upgrades without losing sessions. Preserve legacy readers, signing trust, the installed OS identity `dev.local.opencodedesktop` and history readers needed for verified imports. App-owned absolute-path aliases may be retired only after canonical session, preference and tool paths have been verified; do not recreate retired aliases or ship a second launcher. Never rename, modify or delete independently installed OpenCode/Pi CLIs, their services or their databases. The protected session is «Мастерская».
 
 ## Mission and scope
 
