@@ -12,6 +12,8 @@ export function partsPresentation(
     const next = messageIds.flatMap(id => (slot?.partsByMessage[id] ?? [])
       .map(key => slot!.parts[key]).filter(Boolean));
     if (next.length !== parts.length || next.some((part, i) => part !== parts[i])) parts = next;
-    return { parts, status: status(), connected: connected(s) };
+    const waitingForUser = Object.values(s.chat.permissions ?? {}).some(item => item.sessionID === sessionId)
+      || Object.values(s.chat.questions ?? {}).some(item => item.sessionID === sessionId);
+    return { parts, status: status(), connected: connected(s), waitingForUser };
   };
 }

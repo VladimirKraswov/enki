@@ -105,7 +105,7 @@ export interface ToolState {
   output?: string;
   title?: string;
   metadata?: unknown;
-  time?: { start?: number; end?: number; compact?: number };
+  time?: { start?: number; end?: number; compact?: number; output?: number };
   error?: string;
 }
 

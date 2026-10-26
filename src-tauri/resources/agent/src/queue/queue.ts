@@ -13,8 +13,9 @@
 //   - recoverable turn errors keep the queue running; fatal ones pause it.
 
 import { randomUUID } from "node:crypto";
-import type { CommandReceipt, ModelRef, PromptPart, QueueAttachmentRef, QueueItemDTO, QueueStateDTO } from "../protocol.ts";
+import type { CommandReceipt, ModelRef, PendingCorrectionDTO, PromptPart, QueueAttachmentRef, QueueItemDTO, QueueStateDTO } from "../protocol.ts";
 import { isModelRef, isQueuePausingError } from "../protocol.ts";
+import { visiblePromptText } from "../policy/prompt.ts";
 import type { AttachmentStore } from "../store/attachments.ts";
 import { integer, json, optionalText, text, type Database, type Row } from "../store/db.ts";
 import type { EventJournal } from "../store/events.ts";
@@ -86,8 +87,41 @@ export interface EnqueueInput {
 
 export class PromptQueue {
   private host: QueueHost | null = null;
+  private readonly unsubscribe: () => void;
+  private closed = false;
+  private correctionUpdates = new Map<string, string>();
 
-  constructor(private readonly db: Database, private readonly journal: EventJournal, private readonly attachments: AttachmentStore) {}
+  constructor(private readonly db: Database, private readonly journal: EventJournal, private readonly attachments: AttachmentStore) {
+    // recordEntry is a separate durable ledger update, after the SDK appended
+    // the message. Dispatcher acceptance is not evidence of model delivery.
+    this.unsubscribe = journal.subscribe({ all: true }, envelope => {
+      if (envelope.event.type !== "command.updated" || !envelope.sessionID || !envelope.directory) return;
+      const receipt = envelope.event.properties?.receipt as CommandReceipt | undefined;
+      if (receipt?.kind !== "steer") return;
+      const scheduled = this.correctionUpdates.size > 0;
+      this.correctionUpdates.set(envelope.sessionID, envelope.directory);
+      if (!scheduled) queueMicrotask(() => {
+        const updates = this.correctionUpdates; this.correctionUpdates = new Map();
+        if (!this.closed) for (const [sessionID, directory] of updates) this.publish(sessionID, directory);
+      }); // Never publish seq N+1 recursively before other subscribers see N.
+    });
+  }
+
+  close(): void { this.closed = true; this.correctionUpdates.clear(); this.unsubscribe(); }
+
+  private corrections(sessionID: string): PendingCorrectionDTO[] {
+    return this.db.all("SELECT id,payload,state,created,error FROM commands WHERE session_id=? AND kind='steer' AND entry_id IS NULL AND state IN ('accepted','dispatching','running','uncertain') ORDER BY created", sessionID).flatMap(row => {
+      const raw = optionalText(row, "payload");
+      if (!raw) return []; // Old schema-1 receipts contain no recoverable input.
+      const payload = JSON.parse(raw) as { parts?: PromptPart[] };
+      const parts = Array.isArray(payload.parts) ? payload.parts : [];
+      const value = visiblePromptText(parts.flatMap(p => p.type === "text" && !p.synthetic ? [p.text] : []).join("\n"), sessionID);
+      const attachments = parts.flatMap(p => p.type === "file" ? [{ name: p.filename ?? "Файл" }] : []);
+      const state = text(row, "state") as PendingCorrectionDTO["state"];
+      return [{ id: text(row, "id"), text: value, state, createdAt: integer(row, "created"),
+        ...(optionalText(row, "error") ? { error: optionalText(row, "error")! } : {}), ...(attachments.length ? { attachments } : {}) }];
+    });
+  }
 
   bind(host: QueueHost): void { this.host = host; }
 
@@ -112,12 +146,13 @@ export class PromptQueue {
 
   state(sessionID: string): QueueStateDTO {
     const armed = this.armedState(sessionID);
-    return { sessionID, armed: armed.armed, pausedReason: armed.pausedReason, items: this.items(sessionID).map(dto) };
+    return { sessionID, armed: armed.armed, pausedReason: armed.pausedReason, items: this.items(sessionID).map(dto), corrections: this.corrections(sessionID) };
   }
 
   /** Sessions with queued items, for snapshots and attention markers. */
   sessions(directory?: string | null): QueueStateDTO[] {
-    const ids = this.db.all(directory ? "SELECT DISTINCT session_id FROM queue WHERE directory=?" : "SELECT DISTINCT session_id FROM queue", ...(directory ? [directory] : []))
+    const ids = this.db.all(`SELECT DISTINCT session_id FROM queue ${directory ? "WHERE directory=?" : ""}
+      UNION SELECT DISTINCT session_id FROM commands WHERE kind='steer' AND entry_id IS NULL AND state IN ('accepted','dispatching','running','uncertain') ${directory ? "AND directory=?" : ""}`, ...(directory ? [directory, directory] : []))
       .map((row) => text(row, "session_id"));
     return ids.map((id) => this.state(id));
   }
@@ -308,7 +343,7 @@ export class PromptQueue {
       for (const value of [...texts].reverse()) {
         first -= 1;
         this.db.run("INSERT INTO queue(id,session_id,directory,position,text,attachments,model,state,queued_at,error) VALUES(?,?,?,?,?,?,?,?,?,?)",
-          `restored-${randomUUID()}`, sessionID, directory, first, value, "[]",
+          `restored-${randomUUID()}`, sessionID, directory, first, visiblePromptText(value, sessionID), "[]",
           JSON.stringify(model), "ready", Date.now(), "Уточнение не было доставлено до остановки. Проверьте и отправьте заново.");
       }
     });

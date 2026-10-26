@@ -252,7 +252,8 @@ export class StreamTranslator {
         ...(output !== undefined ? { output } : {}),
         ...(status === "error" ? { error: output || "Ошибка инструмента" } : {}),
         ...(metadata !== undefined ? { metadata } : {}),
-        time: { ...(previous?.time ?? {}), ...(time ?? {}) },
+        time: { ...(previous?.time ?? {}), ...(time ?? {}),
+          ...(output !== undefined && output !== previous?.output ? { output: Date.now() } : {}) },
       },
     };
     this.tools.set(callId, { messageID, index, part });

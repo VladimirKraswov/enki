@@ -30,7 +30,8 @@ async function composer(files:Array<[string,string,string]>=[]){
   queue={...queue,items:queue.items.map(i=>i.id!==c.params.item?i:{...i,...(p.text?{text:p.text}:{}),attachments:(i.attachments??[]).filter(f=>!(p.removeAttachments??[]).includes(f.id))})};return queue;});
  fx.on('POST','/sessions/:id/queue/reorder',c=>{const b=c.body as {id:string;before:string|null};const moving=queue.items.find(i=>i.id===b.id)!,rest=queue.items.filter(i=>i.id!==b.id);
   rest.splice(b.before===null?rest.length:rest.findIndex(i=>i.id===b.before),0,moving);queue={...queue,items:rest};return queue;});
- fx.on('POST','/sessions/:id/queue/:item/steer',c=>{queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item)};return {id:`queue-${c.params.item}-1`,kind:'steer',sessionID:sid,state:'accepted',createdAt:1,updatedAt:1};});
+ fx.on('POST','/sessions/:id/queue/:item/steer',c=>{const item=queue.items.find(i=>i.id===c.params.item)!;const id=`queue-${c.params.item}-1`;
+  queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item),corrections:[...(queue.corrections??[]),{id,text:item.text,state:'running',createdAt:1}]};return {id,kind:'steer',sessionID:sid,state:'accepted',createdAt:1,updatedAt:1};});
  fixture.bindStore(store,fx);
  await store.setDirectory(directory,{sessionId:sid});
  store.setModelChoice('p','m','medium');store.setDraft('');
@@ -38,11 +39,24 @@ async function composer(files:Array<[string,string,string]>=[]){
  if(files.length)await attachmentDrafts.add(scope,files.map(([body,name,type])=>new NodeFile([body],name,{type}) as unknown as File));
  const node=document.createElement('div');document.body.append(node);root=createRoot(node);
  const mount=()=>act(async()=>root!.render(createElement(Composer)));
- return {store,fx,attachmentDrafts,scope,mount,sid};
+ return {store,fx,attachmentDrafts,scope,mount,sid,directory};
 }
 const steers=(fx:any)=>fx.made('POST','/sessions/:id/queue/:item/steer');
 const button=(text:string)=>Array.from(document.querySelectorAll('button')).find(b=>b.textContent===text)!;
 afterEach(()=>{if(root)act(()=>root!.unmount());root=undefined;vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML='';});
+
+it('keeps a corrected prompt visibly separate from queued work until the runtime confirms its SDK entry',async()=>{
+ const {store,fx,mount,sid,directory}=await composer();
+ await store.enqueuePrompt('Бэкап только системы в /NAS/1tb');await mount();
+ await vi.waitFor(()=>expect(button('Скорректировать')).toBeDefined());
+ await act(async()=>{button('Скорректировать').click();await vi.waitFor(()=>expect(store.getQueue()).toHaveLength(0));});
+ await vi.waitFor(()=>expect(document.querySelector('.pending-correction')?.textContent).toContain('Бэкап только системы в /NAS/1tb'));
+ expect(document.querySelector('.pending-correction')?.textContent).toContain('Ждёт следующего шага агента');
+ expect(document.querySelector('.queued-prompt')).toBeNull();
+ await act(async()=>fx.emit({type:'queue.updated',properties:{queue:{sessionID:sid,items:[],corrections:[],armed:true,pausedReason:null}}} as never,directory));
+ expect(document.querySelector('.pending-correction')).toBeNull();
+ expect(steers(fx)).toHaveLength(1);expect(fx.made('POST','/sessions/:id/stop')).toEqual([]);expect(fx.made('POST','/commands')).toEqual([]);
+});
 
 it('queued file controls remove the file before Now and re-enable the send control',async()=>{
  const {store,fx,attachmentDrafts,scope,mount}=await composer([['notes','notes.txt','text/plain']]);

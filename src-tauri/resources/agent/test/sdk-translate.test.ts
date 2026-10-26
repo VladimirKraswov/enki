@@ -2,7 +2,7 @@
 // the retired frontend Pi CLI translator suite (test/pi-translate.test.ts):
 // durable ids, tool results completing their call, error/abort/retry status,
 // reasoning, non-text tool output and unknown events. Written, NOT RUN.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MessagePartDTO, ServerEventDTO } from "../src/protocol.ts";
 import type { SdkEntry } from "../src/sdk/adapter.ts";
 import { boundedDetails, entriesPage, entriesToMessages, pageMessages, toolOutputText } from "../src/sdk/history.ts";
@@ -98,6 +98,18 @@ describe("durable history", () => {
 });
 
 describe("live stream", () => {
+  it("timestamps real changed tool output, never a repeated heartbeat", () => {
+    const clock = vi.spyOn(Date, "now");
+    try {
+      clock.mockReturnValue(1000);
+      const t = new StreamTranslator(SID);
+      t.translate({ type: "message_start", message: { role: "assistant", content: [] } } as never);
+      t.translate({ type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} } as never);
+      const update = () => parts(t.translate({ type: "tool_execution_update", toolCallId: "c", toolName: "bash", args: {}, partialResult: { content: [{ type: "text", text: "one line" }] } } as never))[0];
+      clock.mockReturnValue(2000); expect(update().state?.time?.output).toBe(2000);
+      clock.mockReturnValue(5000); expect(update().state?.time?.output).toBe(2000);
+    } finally { clock.mockRestore(); }
+  });
   it("streams reasoning, text and tools under a provisional id, then converges on the durable entry id", () => {
     const t = new StreamTranslator(SID);
     const events = [

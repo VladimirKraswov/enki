@@ -28,6 +28,9 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
   const first = useRef<string | undefined>(following.current ? undefined : positions.get(cacheKey)?.first);
   const [, redraw] = useState(0);
   const order = slot?.messageOrder ?? [];
+  const lastMessage = slot?.messages[order[order.length - 1] ?? ""];
+  const activeTool = lastMessage?.role === 'assistant' && (!lastMessage.time.completed || ['tool-calls', 'tool_calls'].includes(lastMessage.finish ?? ''))
+    ? (slot?.partsByMessage[lastMessage.id] ?? []).map(id => slot!.parts[id]).find(part => part?.type === 'tool' && part.state?.status === 'running') : null;
   const reveal = s.ui.revealMessage?.sessionID === sessionId && s.ui.revealMessage.directory === s.directory
     && s.ui.revealMessage.server === (s.prefs.workspaceKey ?? s.prefs.endpoint) ? s.ui.revealMessage : null;
   if (reveal && order.includes(reveal.messageID)) {
@@ -198,8 +201,11 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
         {end < order.length && <button className="history-more" onClick={newer}>Следующие сообщения · {order.length - end}<Icon name="chevron" size={16}/></button>}
         {bannerError && <div className="msg-error" role="alert">{bannerError}</div>}
         {/* Without a live stream the alert below replaces the spinner: running is unconfirmed. */}
-        {!unconfirmed && slot?.status.type === 'busy' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />Агент работает…</div>}
-        {!unconfirmed && slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
+        {!unconfirmed && (question || permission) && <div className="status-line waiting-for-user" role="status">{permission ? 'Ожидает вашего разрешения' : 'Ожидает вашего ответа'}</div>}
+        {!unconfirmed && !question && !permission && slot?.status.type === 'busy' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{activeTool?.tool === 'bash'
+          ? 'Выполняется команда. Агент ждёт её результат.' : activeTool ? `Выполняется инструмент: ${activeTool.tool ?? 'инструмент'}` : 'Агент работает…'}</div>}
+        {!unconfirmed && !question && !permission && slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
+        {!unconfirmed && !question && !permission && slot?.status.type === 'waiting' && <div className="status-line" role="status">{slot.status.message ?? 'Ожидание следующего шага'}</div>}
         {permission && <PermissionCard req={permission} onReply={r => void store.replyPermission(permission, r)} />}
         {question && <QuestionCard key={question.id} req={question} onReply={a => void store.replyQuestion(question, a)} onReject={() => void store.rejectQuestion(question)} />}
         {unconfirmed && <div className="status-line" role="alert">

@@ -367,7 +367,11 @@ export class PromptQueueController {
       const item = this.getQueue(sid).find(x => x.id === id);
       if (!item || item.state !== "ready" || !this.currentScope(context)) return;
       acceptedReceipt(await backend.client.steerQueued(sid, directory, id));
-      if (this.currentScope(context) && sid === this.state.activeSessionId) this.host.patchUi({ toast: "Уточнение передано агенту. Он учтёт его на следующем шаге." });
+      let refreshed = true;
+      if (this.currentScope(context)) await this.refresh(sid, directory, context).catch(() => { refreshed = false; });
+      if (this.currentScope(context) && sid === this.state.activeSessionId) this.host.patchUi({ toast: refreshed
+        ? "Уточнение сохранено. Агент получит его на следующем шаге."
+        : "Уточнение сохранено. Статус доставки временно недоступен." });
     } catch (error) { this.report(sid, error, context); }
     finally { if (this.steering.get(sid) === context) this.steering.delete(sid); }
   }

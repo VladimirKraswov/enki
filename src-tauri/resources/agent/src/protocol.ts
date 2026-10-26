@@ -60,7 +60,7 @@ export interface ToolStateDTO {
   output?: string;
   title?: string;
   metadata?: unknown;
-  time?: { start?: number; end?: number };
+  time?: { start?: number; end?: number; output?: number };
   error?: string;
 }
 
@@ -365,6 +365,17 @@ export interface QueueStateDTO {
   armed: boolean;
   pausedReason: string | null;
   items: QueueItemDTO[];
+  /** Saved corrections not yet present in the SDK history. These are receipts, never new queued jobs. */
+  corrections?: PendingCorrectionDTO[];
+}
+
+export interface PendingCorrectionDTO {
+  id: string;
+  text: string;
+  state: "accepted" | "dispatching" | "running" | "uncertain";
+  createdAt: number;
+  error?: string;
+  attachments?: { name: string }[];
 }
 
 // ------------------------------------------------------------ schedules

@@ -5,6 +5,7 @@ import { ModelSwitchStatus } from "./ModelSwitchStatus";
 import { ModelSelectionDialog } from "./ModelSelectionDialog";
 import { HostPicker } from "./WorkspacePicker";
 import { ContextMeter } from "./ContextMeter";
+import { PendingCorrections } from "./PendingCorrections";
 import { VoiceInput } from "./VoiceInput";
 import { accessOptions, type AccessMode } from "../state/access";
 import { Icon } from "./Icon";
@@ -50,6 +51,9 @@ function KeptAttachmentChip({ file, onRemove, disabled }: { file: { name: string
 
 export function Composer() {
   const s = useAppState();
+  const activeQueue = s.activeSessionId ? s.queues[s.activeSessionId] : undefined;
+  const pendingCorrections = useMemo(() => (activeQueue?.corrections ?? [])
+    .filter(item => !activeQueue?.items.some(queued => queued.commandId === item.id)), [activeQueue]);
   const switches = useSyncExternalStore(modelServices.subscribe, modelServices.snapshot);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -264,6 +268,8 @@ export function Composer() {
           ?? compactModelName(switchState.target_model ?? switchState.active_model ?? "Модель")}/>}
       {switchError && !switchState?.error && <div className="composer-error" role="alert">{switchError}</div>}
       {attachmentProgress && <div className="workspace-progress" role="status">{attachmentProgress}</div>}
+      <PendingCorrections items={pendingCorrections}
+        connected={connected && s.connection.streamState === "open"}/>
       {store.getQueue().length > 0 && (
         <Suspense fallback={null}><PromptQueue attachments={attachments} removeFile={removeFile} focusEditor={() => textareaRef.current?.focus()} switching={switching}/></Suspense>
       )}

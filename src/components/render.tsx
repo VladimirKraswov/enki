@@ -21,6 +21,7 @@ import { actionCountLabel, answerText, finalAnswer, stepCountLabel, turnMetrics,
 import { exactTime, messageTime } from "../chat/time";
 import { describeMessageError, isModelConnectionError } from "../chat/errors";
 import { ModelConnectionCheck } from "./ModelConnectionCheck";
+import { ToolActivity } from "./ToolActivity";
 export { Markdown } from "./Markdown";
 const GeneratedImages = lazy(() => import("./GeneratedImages"));
 const OutputLimitNotice = lazy(() => import("./OutputLimitNotice"));
@@ -102,7 +103,9 @@ export const ToolPartView = memo(function ToolPartView({
       label={label}
       tone="tool"
       spinner={running && evidence === "active"}
-      right={dur ? <span className="tool-duration">{dur}</span> : undefined}
+      right={running && evidence === "active" && st.time?.start
+        ? <span className="tool-duration"><ToolActivity state={st} tool={part.tool}/></span>
+        : dur ? <span className="tool-duration">{dur}</span> : undefined}
       defaultOpen={st.status === "error"}
     >
       <ToolDetails state={st} />
@@ -205,7 +208,7 @@ export const AssistantMessageView = memo(function AssistantMessageView({
   const parts = visibleParts(snapshot.parts);
   const { status, connected } = snapshot;
   const terminal = !!message.time.completed && !["tool-calls", "tool_calls"].includes(message.finish ?? "");
-  const evidence = executionEvidence(terminal, status === "busy" || status === "retry", connected);
+  const evidence = executionEvidence(terminal, status === "busy" || status === "retry", connected, snapshot.waitingForUser);
   const running = !message.time.completed && evidence === "active";
   const errText = message.error ? describeMessageError(message.error) : null;
   const finishBad =
@@ -264,8 +267,9 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
   const metrics = turnMetrics(messages);
   const terminal = !!last.time.completed && last.finish !== 'tool-calls' && last.finish !== 'tool_calls';
   const connected = snapshot.connected;
-  const confirmedActive = active && connected;
-  const label = last.summary ? 'Сжатие контекста' : confirmedActive ? 'Работаю' : active ? 'Ожидаю подтверждения состояния' : 'Ход работы';
+  const confirmedActive = active && connected && !snapshot.waitingForUser;
+  const label = last.summary ? 'Сжатие контекста' : active && connected && snapshot.waitingForUser ? 'Ожидает вашего ответа'
+    : confirmedActive ? 'Работаю' : active ? 'Ожидаю подтверждения состояния' : 'Ход работы';
   const toggle = () => {
     // Explicit disclosure is reader navigation, not new streaming content to follow to the tail.
     document.getElementById(regionId)?.dispatchEvent(new Event('conversation-disclosure', {bubbles:true}));

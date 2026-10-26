@@ -98,6 +98,10 @@ it("a queued correction is steered into the running turn and marked as steering"
   const steered = await h.request<{ id: string; kind: string }>("POST", `/sessions/${sid}/queue/fix/steer`, {});
   expect(steered.status).toBe(202);
   expect(steered.body.kind).toBe("steer");
+  await h.waitReceipt(steered.body.id, ["running"]);
+  const waiting = await h.request<import("../../src/protocol.ts").QueueStateDTO>("GET", `/sessions/${sid}/queue`);
+  expect(waiting.body.items).toEqual([]);
+  expect(waiting.body.corrections).toEqual([expect.objectContaining({ id: steered.body.id, text: "use tabs", state: "running" })]);
   hold.open();
   await h.waitReceipt("cmd-steer-base", ["completed"]);
   await h.waitReceipt(steered.body.id, ["running", "completed"]);
@@ -106,6 +110,7 @@ it("a queued correction is steered into the running turn and marked as steering"
   expect(correction.parts[0].text).toBe("use tabs");
   expect(correction.parts[0].metadata).toEqual({ arvelaSteering: 1 });
   expect((await h.request<{ items: unknown[] }>("GET", `/sessions/${sid}/queue`)).body.items).toHaveLength(0);
+  expect((await h.request<import("../../src/protocol.ts").QueueStateDTO>("GET", `/sessions/${sid}/queue`)).body.corrections).toEqual([]);
 });
 
 it("a fatal provider error pauses the queue; a recoverable one does not", async () => {

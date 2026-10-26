@@ -637,6 +637,27 @@ select {
   color: var(--text-faint);
   font-size: 0.785714rem;
 }
+.tool-duration:has(.tool-activity) { max-width: 48%; white-space: normal; text-align: right; }
+.tool-activity { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.4; max-width: 100%; }
+.tool-activity > span { white-space: nowrap; }
+.tool-silence { color: var(--text-dim); }
+.status-line.waiting-for-user {
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  border-radius: 10px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  animation: waiting-user-glow 2.4s ease-in-out infinite;
+}
+@keyframes waiting-user-glow {
+  0%, 100% { box-shadow: 0 0 2px color-mix(in srgb, var(--warn) 10%, transparent); }
+  50% { box-shadow: 0 0 14px color-mix(in srgb, var(--warn) 32%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-line.waiting-for-user { animation: none; box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 18%, transparent); }
+}
 .tool-spinner {
   width: 10px;
   height: 10px;
@@ -3238,6 +3259,15 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .user-message-steering .steering-label { color: var(--text-dim); font-size: .785714rem; }
 .user-message-steering .msg-user { align-self: stretch; max-width: 100%; padding: 0; border-radius: 0; background: transparent; font-size: .928571rem; }
 .user-message-steering .message-footer { align-self: flex-end; }
+.pending-corrections { display: grid; gap: 8px; margin-bottom: 10px; max-height: 220px; overflow: auto; }
+.pending-correction { border-left: 2px solid var(--border); padding: 7px 12px; background: var(--panel); border-radius: 4px 10px 10px 4px; min-width: 0; }
+.pending-correction summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; cursor: pointer; font-size: .85rem; }
+.correction-status { color: var(--text-dim); font-size: .8rem; }
+.correction-body { display: flex; gap: 8px; align-items: flex-start; }
+.correction-body p { margin: 7px 0 2px; white-space: pre-wrap; overflow-wrap: anywhere; flex: 1; min-width: 0; }
+.correction-body button { flex-shrink: 0; margin-top: 5px; }
+.correction-files, .correction-warning { margin: 5px 0 0; font-size: .8rem; overflow-wrap: anywhere; color: var(--text-dim); }
+.correction-warning { color: var(--warn); }
 
 :root { --permission-full: #ac4b22; }
 :root[data-theme="dark"] { --permission-full: #f28b58; }

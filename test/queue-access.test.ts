@@ -49,6 +49,15 @@ beforeEach(async () => {
 const queuePosts = () => fx.made("POST", "/sessions/:id/queue");
 const emitQueue = (q: QueueStateDTO) => fx.emit({ type: "queue.updated", properties: { sessionID: q.sessionID, queue: q } } as never, "/test");
 
+it('a status refresh failure after durable acceptance does not claim the correction failed or resend it',async()=>{
+ await store.enqueuePrompt('saved correction');const id=store.getQueue()[0].id;
+ fx.on('GET','/sessions/:id/queue',()=>{throw new Reply(503,{message:'Status temporarily unavailable'});});
+ await store.steerQueued(id);
+ expect(fx.made('POST','/sessions/:id/queue/:item/steer')).toHaveLength(1);
+ expect(store.state.ui.toast).toBe('Уточнение сохранено. Статус доставки временно недоступен.');
+ expect(store.state.ui.sendError).toBeFalsy();
+});
+
 it("a runtime refusal to store the item keeps the text draft and shows why", async () => {
   fx.on("POST", "/sessions/:id/queue", () => { throw new Reply(507, { message: "Не удалось сохранить очередь: диск заполнен." }); });
   store.setDraft("keep this task");
@@ -94,7 +103,7 @@ it("Now steers the running turn through the runtime, never stops it, and a doubl
   expect(fx.made("POST", "/sessions/:id/queue/:item/steer").map(c => c.params.item)).toEqual([id]);
   expect(fx.made("POST", "/sessions/:id/stop")).toEqual([]);
   expect(fx.made("POST", "/commands")).toEqual([]);
-  expect(store.state.ui.toast).toContain("Уточнение передано");
+  expect(store.state.ui.toast).toBe("Уточнение сохранено. Агент получит его на следующем шаге.");
 });
 
 it("a scoped 409 on an item route shows the runtime's reason and re-reads this chat's queue once, without retrying", async () => {
@@ -225,7 +234,7 @@ it("an old steer finalizer cannot remove the new host's double-click fence for t
   await store.steerQueued("host-b-item");
   expect(next.made("POST", "/sessions/:id/queue/:item/steer")).toHaveLength(1);
   finishB(receipt("new-b")); await newSteer;
-  expect(store.state.ui.toast).toContain("Уточнение передано");
+  expect(store.state.ui.toast).toBe("Уточнение сохранено. Агент получит его на следующем шаге.");
   expect(fx.made("POST", "/sessions/:id/queue/:item/steer")).toHaveLength(1);
 });
 

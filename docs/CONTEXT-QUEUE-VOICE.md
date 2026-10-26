@@ -88,6 +88,27 @@ running turn. The SDK shows it to the agent at the **next model/tool boundary**;
 it cannot retroactively change generated tokens and does not kill an executing
 command. If the turn ends before delivery, the item returns to the queue.
 
+While delivery is pending, a compact **Уточнение** card keeps the original text
+visible above the composer, with **Ждёт следующего шага агента**. The durable
+command ledger is the authority: SDK acceptance alone does not mean the model
+has seen the correction. Once the SDK user entry is saved, the card is replaced
+by the labelled correction in chat history. Reopening the chat or reconnecting
+reconstructs the card; uncertain delivery is explicitly marked and never replayed.
+An unavailable status refresh after acceptance does not claim the send failed.
+
+Long-running tools show elapsed time and, when measured from real output events,
+time without new output. Repeated identical output does not reset that clock.
+No output alone is not proof of a hung process. Disconnected or completed calls
+do not animate a running clock. When a command is running, the footer explains
+that the agent is waiting for its result.
+
+If progress needs a human action, the agent must first explain what is needed
+and ask through `question`, rather than poll devices in a long shell sleep.
+Pending questions/permissions show **Ожидает вашего ответа/разрешения** instead
+of working spinners. A soft yellow glow attracts attention; reduced-motion
+settings retain a static highlight. This does not create additional approval
+requirements for actions the owner has already authorized.
+
 Queue guards:
 
 - Durable command ids: a lost acknowledgement is retried under the same id and

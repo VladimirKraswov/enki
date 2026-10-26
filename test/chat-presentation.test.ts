@@ -17,3 +17,12 @@ it('keeps message presentation stable through background deltas but sees same-ti
  expect(select().parts).toHaveLength(0);
  state.chat.sessions.visible.status={type:'busy'};expect(select().status).toBe('busy');
 });
+it('scopes waiting-for-user evidence to the matching chat',()=>{
+ const state={chat:emptyChatRoot()} as AppState;
+ const select=partsPresentation('visible',[],()=> 'busy',()=>true);
+ state.chat.questions.q={id:'q',sessionID:'other',questions:[]} as never;
+ expect(select(state).waitingForUser).toBe(false);
+ state.chat.questions.q={id:'q',sessionID:'visible',questions:[]} as never;
+ expect(select(state).waitingForUser).toBe(true);
+ delete state.chat.questions.q;expect(select(state).waitingForUser).toBe(false);
+});

@@ -855,7 +855,7 @@ export class Runtime {
     if (this.dispatcher?.preparingCount() || this.hub.activeCount() || this.admission.active() || this.updateCopies)
       errors.push(new Error("Подготовка или системная операция ещё не завершена; хранилище не закрыто."));
     let closed = false;
-    if (!errors.length) await attempt(() => { this.db.close(); closed = true; });
+    if (!errors.length) await attempt(() => { this.queue.close(); this.db.close(); closed = true; });
     // A failed close cannot hand writer ownership to another live process.
     if (closed) await attempt(() => this.releaseLock());
     if (errors.length) throw new AggregateError(errors, 'Enki Runtime shutdown was incomplete');

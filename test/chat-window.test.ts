@@ -7,7 +7,7 @@ vi.mock('../src/state/store',()=>({
  useAppState:()=>useSyncExternalStore(cb=>{fixture.listeners.add(cb);return()=>fixture.listeners.delete(cb);},()=>fixture.state),
  // Mirrors the actual store port ChatView uses (single runtime: engine tag 'pi';
  // isLegacySession decides whether live stream status applies).
- store:{get state(){return fixture.state;},pendingInteraction:()=>({permissions:[],questions:[]}),setConversationAtBottom:()=>{},engineIdFor:()=> 'pi',handoffOrigin:()=>null,isPiSession:()=>true,
+ store:{get state(){return fixture.state;},pendingInteraction:()=>fixture.state?.pending??({permissions:[],questions:[]}),setConversationAtBottom:()=>{},engineIdFor:()=> 'pi',handoffOrigin:()=>null,isPiSession:()=>true,
  isLegacySession:(id:string|null)=>!!id&&!!fixture.state?.legacy?.includes(id),isProjectless:()=>false,
  setUi:(patch:any)=>{fixture.state={...fixture.state,ui:{...fixture.state.ui,...patch}};for(const cb of fixture.listeners)cb();}},
 }));
@@ -25,6 +25,16 @@ function append(slot:SessionChatState,id:string){slot.messageOrder.push(id);slot
 function chat(prefix:string,n:number):SessionChatState{const slot={...emptySessionChat(),status:{type:'busy'} as const};for(let i=0;i<n;i++)append(slot,prefix+i);return slot;}
 let cleanup=()=>{};
 afterEach(()=>{cleanup();vi.unstubAllGlobals();document.body.innerHTML='';fixture.listeners.clear();});
+it('replaces the working spinner with an attention status while a user answer is pending',()=>{
+ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
+ fixture.state={prefs:{endpoint:'test'},directory:'fixture',activeSessionId:'a',chat:{sessions:{a:chat('a',3)}},ui:{},connection:{streamState:'open'},historyCursors:{},olderExhausted:{},pending:{permissions:[],questions:[{id:'q'}]}};
+ const el=document.createElement('div');document.body.append(el);const root=createRoot(el);cleanup=()=>act(()=>root.unmount());
+ act(()=>root.render(createElement(ChatView)));
+ expect(el.querySelector('.waiting-for-user')?.textContent).toBe('Ожидает вашего ответа');
+ expect(el.querySelector('.status-line .tool-spinner')).toBeNull();expect(el.textContent).not.toContain('Агент работает');
+ act(()=>{fixture.state={...fixture.state,pending:{permissions:[],questions:[]}};for(const cb of fixture.listeners)cb();});
+ expect(el.querySelector('.waiting-for-user')).toBeNull();expect(el.querySelector('.status-line .tool-spinner')).not.toBeNull();
+});
 it('mounts bounded tails across live growth and repeated chat switches, and preserves reading/reveal/navigation',()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
  const a=chat('a',20000),b=chat('b',5000);
