@@ -18,7 +18,7 @@ export interface RuntimeSyncHost {
   notice(sessionID: string | null, text: string): void;
   broker(request: { id: string; method: string; params: Record<string, unknown> }): void;
   /** Live shared-MCP status reported by one session worker. */
-  mcp?(sessionID: string, servers: RuntimeServerStatus[]): void;
+  mcp?(sessionID: string, servers: RuntimeServerStatus[], error?: string): void;
   /** Progress/outcome of the runtime's single model/context transition authority. */
   contextTransition?(progress: ContextTransitionProgress): void;
   /** The runtime saved new settings (this or another window, or another client). */
@@ -112,7 +112,7 @@ export function routeRuntimeEvent(event: ServerEvent, host: RuntimeSyncHost, dia
     }
     case "mcp.status": {
       const sessionID = str(p.sessionID);
-      if (sessionID && Array.isArray(p.servers)) host.mcp?.(sessionID, p.servers.filter(isServerStatus));
+      if (sessionID && Array.isArray(p.servers)) host.mcp?.(sessionID, p.servers.filter(isServerStatus), str(p.error)?.slice(0, 500));
       return true;
     }
     case "session.context_transition": {

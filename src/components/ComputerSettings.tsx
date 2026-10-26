@@ -21,6 +21,7 @@ export function ComputerSettings(){
   useEffect(()=>{void refresh().catch(e=>setError(err(e)));},[s.prefs.endpoint,s.directory]);
   // Live state comes from the current chat worker's shared-MCP report.
   const live=store.mcpServerStatuses(s.activeSessionId).find(x=>x.id===COMPUTER_SERVER.id);
+  const connectionError=store.mcpConnectionError(s.activeSessionId);
   const action=async(name:"permissions"|"stop")=>{
     setBusy(true);setError("");setNotice("");
     try{const text=await invoke<string>("computer_action",{action:name});setNotice(name==="stop"?"Управление выключено. Текущие сеансы Cua Driver отозваны; новые действия заблокированы до подключения.":text);await refresh();}
@@ -28,27 +29,33 @@ export function ComputerSettings(){
   };
   const apply=async(enabled:boolean)=>{
     if(!status||!local||running||busy)return;
-    const directory=s.directory,workspace=s.prefs.workspaceKey??s.prefs.endpoint;
+    const directory=s.directory,sessionId=s.activeSessionId,workspace=s.prefs.workspaceKey??s.prefs.endpoint;
     setBusy(true);setError("");setNotice("");let written=false;
+    const checkContext=()=>{if(workspace!==(store.state.prefs.workspaceKey??store.state.prefs.endpoint)||store.currentHost())throw new Error("Подключение изменилось. Откройте настройки заново.");};
     try{
-      if(workspace!==(store.state.prefs.workspaceKey??store.state.prefs.endpoint))throw new Error("Подключение изменилось. Откройте настройки заново.");
+      checkContext();
+      // Updating Enki can invalidate the shared bridge's bundled scripts.
+      // Repair/check it before promising tools to an already-open SDK worker.
+      if(enabled)await invoke("shared_install",{nodeProgram:s.prefs.pi?.nodeProgram??s.prefs.browser?.nodeProgram??null});
+      checkContext();
       if(enabled)await invoke("computer_action",{action:"resume"});
       await invoke("computer_set_enabled",{enabled});
       // CAS update of Enki's reserved registry entry; a foreign entry with this id is never replaced.
       try{await setReservedServer(COMPUTER_SERVER,enabled);written=true;}
-      catch(e){if(enabled)await invoke("computer_set_enabled",{enabled:false});throw e;}
+      catch(e){if(enabled&&!status.enabled)await invoke("computer_set_enabled",{enabled:false});throw e;}
       invalidateCapabilities();
       // The reserved registry entry is committed: idle chats reopen with it, busy ones once idle.
-      const refreshed=await store.capabilitiesCommitted(null).catch(()=>null);
-      if(!refreshed&&directory)await store.configureSharedTools(directory).catch(()=>{});
+      const refreshed=await store.capabilitiesCommitted(null);
       if(enabled){
         const ready=await invoke<ComputerStatus>("computer_status");
         const problem=computerReadinessError(ready);if(problem)throw new Error(problem);
-        setNotice(refreshed?`Инструменты управления добавлены в общий набор. Новые и свободные открытые чаты получат их сразу${refreshed.pending?`; занятые (${refreshed.pending}) — после завершения текущей работы`:""}.`
-          :"Инструменты управления добавлены в общий набор. Новые чаты получат их сразу, открытые — после переоткрытия.");
+        if(!refreshed)throw new Error("Нет подключения к локальному агенту. Настройки сохранены; восстановите соединение Enki и нажмите «Подключить».");
+        const connected=await store.connectCurrentMcp(COMPUTER_SERVER.id,sessionId,directory);
+        setNotice(connected?`Подключено к текущему чату · ${connected.tools.length} инструментов. Можно продолжать работу в этом чате.`
+          :"Управление настроено. Инструменты загрузятся при первом обращении в новом чате.");
       }else setNotice("Управление выключено: локальный выключатель блокирует действия и в уже открытых чатах. Остальные инструменты сохранены.");
       await refresh();
-    }catch(e){if(enabled)await invoke("computer_set_enabled",{enabled:false}).catch(()=>{});setError(`${written?"Конфигурация сохранена с резервной копией, но подключение не завершилось. ":""}${err(e)}`);await refresh().catch(()=>{});}
+    }catch(e){if(enabled&&!status.enabled)await invoke("computer_set_enabled",{enabled:false}).catch(()=>{});setError(`${written?"Настройки сохранены, но подключение к чату не подтверждено. ":""}${err(e)}`);await refresh().catch(()=>{});}
     finally{setBusy(false);}
   };
   const p=status?.permissions, os=platform(), windows=os==="windows";
@@ -60,7 +67,8 @@ export function ComputerSettings(){
       <div className="kv"><span>Драйвер</span><b>{status?status.installed?status.version:"Не установлен":"Проверка…"}</b></div>
       <div className="kv"><span>Управление</span><b>{status?.enabled?computerReadinessError(status)?"Не готово":"Включено":"Выключено"}</b></div>
       <div className="kv"><span>Общий набор инструментов</span><b>{connection==="configured"?"Добавлено":connection==="not_configured"?"Не добавлено":connection==="unavailable"?"Не прочитан":"—"}</b></div>
-      <div className="kv"><span>Текущий чат</span><b>{!live?"Нет отчёта агента":live.state==="connected"?`Подключено · ${live.tools.length} инструментов`:live.state==="checking"?"Подключается":"Ошибка подключения"}</b></div>
+      <div className="kv"><span>Текущий чат</span><b>{!s.activeSessionId?"Чат не выбран":status&&!status.enabled?"Управление выключено":connectionError?"Ошибка подключения":!live?busy?"Подключается…":"Не подключено":live.state==="connected"?`Подключено · ${live.tools.length} инструментов`:live.state==="checking"?"Подключается…":"Ошибка подключения"}</b></div>
+      {connectionError&&!error&&<p className="composer-error" role="alert">{connectionError}</p>}
       {!windows&&<><div className="kv"><span>Доступность macOS</span><b>{p?.accessibility===true?"Разрешена":p?.accessibility===false?"Нужен доступ":"Не проверена"}</b></div>
       <div className="kv"><span>Запись экрана</span><b>{p?.screen_recording===true?"Разрешена":p?.screen_recording===false?"Нужен доступ":"Не проверена"}</b></div></>}
       {windows&&<><div className="kv"><span>Интерактивный сеанс Windows</span><b>{p?.interactive_session===true?"Доступен":"Не подтверждён"}</b></div><div className="kv"><span>UI Automation</span><b>{p?.uia===true&&p?.windows_visible===true?"Готово":"Не подтверждено"}</b></div></>}
@@ -71,7 +79,7 @@ export function ComputerSettings(){
       <div className="btn-row computer-actions">
         <button className="btn" disabled={busy} onClick={()=>void refresh().catch(e=>setError(err(e)))}>Проверить</button>
         {status?.installed?<button className="btn" disabled={busy} onClick={()=>void action("permissions")}>{windows?"Диагностика драйвера…":"Разрешения macOS…"}</button>:<button className="btn" onClick={()=>void import("@tauri-apps/plugin-opener").then(x=>x.openUrl("https://cua.ai/docs/cua-driver"))}>Установка Cua Driver</button>}
-        <button className="btn primary" disabled={busy||running||!local||!status?.installed} onClick={()=>void apply(true)}>Подключить</button>
+        <button className="btn primary" disabled={busy||running||!local||!status?.installed} onClick={()=>void apply(true)}>{busy?"Подключение…":"Подключить"}</button>
         <button className="btn" disabled={busy||running||!local||!status?.enabled} onClick={()=>void apply(false)}>Выключить</button>
       </div>
       <div className="computer-stop"><button className="btn" disabled={busy||!status?.installed} onClick={()=>void action("stop")}>Остановить управление</button><small>{windows ? "Выключает новые действия Desktop; сеансы драйвера других приложений сохраняются." : "Выключает новые действия Desktop и отзывает все текущие сеансы Cua Driver на этом Mac. Следующее нажатие «Подключить» заново запускает отозванный драйвер."}</small></div>

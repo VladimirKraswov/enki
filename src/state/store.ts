@@ -50,6 +50,7 @@ import type { CutoverReceiptDTO, RuntimeClient, RuntimeSettingsDTO } from "../ag
 import type { PromptPart } from "../../src-tauri/resources/agent/src/protocol";
 import { onTokenRotated, relayBroker } from "../agent/runtime/connection";
 import { activePluginUi } from "../agent/runtime/pluginUi/active";
+import { waitForMcpServer } from "../capabilities/connection";
 import { taskScheduler } from "../schedules/tasks";
 import { AgentDialogs, applySnapshot, routeRuntimeEvent, type RuntimeSyncHost } from "./runtimeSync";
 import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
@@ -307,9 +308,31 @@ class Store {
 
   private mcpNotices=new McpNotices();
   private readonly mcpStatuses = new Map<string, RuntimeServerStatus[]>();
+  private readonly mcpErrors = new Map<string, string>();
   /** Last shared-MCP status reported by this chat's worker (empty until it reports). */
   mcpServerStatuses(sessionId: string | null): RuntimeServerStatus[] {
     return sessionId ? this.mcpStatuses.get(sessionId) ?? [] : [];
+  }
+  mcpConnectionError(sessionId: string | null): string | null {
+    return sessionId ? this.mcpErrors.get(sessionId) ?? null : null;
+  }
+  /** Explicit Connect: open the SAME chat through its existing SDK/UI lifecycle.
+   * No model prompt, tool execution, new chat, or interruption of an agent. */
+  async connectCurrentMcp(serverId: string, sessionId: string | null, directory: string | null): Promise<RuntimeServerStatus | null> {
+    const runtime = this.runtime, generation = this.connectionGeneration;
+    if (!runtime || this.currentHost()) throw new Error("Нет подключения к локальному агенту. Сначала восстановите соединение Enki.");
+    if (!sessionId || !directory) return null;
+    const current = () => this.runtime === runtime && this.connectionGeneration === generation
+      && this.state.activeSessionId === sessionId && this.state.directory === directory;
+    if (!current()) throw new Error("Выбран другой чат. Повторите подключение в нём.");
+    if (this.isRunning(sessionId)) throw new Error("Агент начал работу. Подключите инструменты после завершения текущего ответа.");
+    const active = activePluginUi.activate(runtime.client, sessionId, directory, this);
+    return waitForMcpServer({ id: serverId, current,
+      report: () => ({ servers: this.mcpServerStatuses(sessionId), error: this.mcpConnectionError(sessionId)
+        ?? (active.session.getView().phase === "error" ? active.session.getView().detail : null) }),
+      subscribe: check => { const stopStore = this.subscribe(check), stopUi = active.session.subscribe(check);
+        return () => { stopStore(); stopUi(); }; },
+      open: () => active.session.open() });
   }
   /**
    * Shared skills/MCP live in the native registry and are read by the runtime
@@ -338,6 +361,10 @@ class Store {
     invalidateCapabilities();
     if (!this.runtime || this.currentHost()) return null;
     const runtime = this.runtime, generation = this.connectionGeneration;
+    const active = this.state.activeSessionId;
+    if (active && !this.isRunning(active) && (directory === null || directory === this.state.directory)) {
+      this.mcpStatuses.delete(active); this.mcpErrors.delete(active); this.mutate({});
+    }
     const result = await runtime.client.refreshCapabilities(directory);
     if (generation !== this.connectionGeneration || runtime !== this.runtime) return null;
     const current = this.state.directory;
@@ -429,10 +456,14 @@ class Store {
       taskScheduler().observe(task ? { type: "schedule.updated", properties: { sessionID, task } } : { type: "schedule.removed", properties: { sessionID, id } });
       this.mutate({});
     },
-    mcp: (sessionID, servers) => {
+    mcp: (sessionID, servers, error) => {
       // Most recently reporting chats last; bounded like the other per-chat caches.
       this.mcpStatuses.delete(sessionID); this.mcpStatuses.set(sessionID, servers);
-      if (this.mcpStatuses.size > MCP_STATUS_LIMIT) this.mcpStatuses.delete(this.mcpStatuses.keys().next().value!);
+      if (error) this.mcpErrors.set(sessionID, error); else this.mcpErrors.delete(sessionID);
+      if (this.mcpStatuses.size > MCP_STATUS_LIMIT) {
+        const oldest = this.mcpStatuses.keys().next().value!;
+        this.mcpStatuses.delete(oldest); this.mcpErrors.delete(oldest);
+      }
       this.mutate({});
     },
     notice: (sessionID, text) => { if (!sessionID || sessionID === this.state.activeSessionId) this.patchUi({ toast: text }); },
@@ -793,6 +824,7 @@ class Store {
       // The transcript cache is emptied below; its LRU bookkeeping goes with it.
       this.historyLoaded.clear();
       this.mcpStatuses.clear();
+      this.mcpErrors.clear();
       this.mutate({
         prefs,
         directory: prefs.selectedDirectory,

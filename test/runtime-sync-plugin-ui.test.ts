@@ -16,7 +16,13 @@ it("forwards validated worker MCP reports to the store", () => {
   const h = host();
   const good: RuntimeServerStatus = { id: "cua-desktop", signature: "abc", state: "connected", tools: ["click"] };
   expect(routeRuntimeEvent({ type: "mcp.status", properties: { sessionID: "s1", servers: [good, { id: 5 }] } }, h.value, new AgentDialogs())).toBe(true);
-  expect(h.calls.mcp).toHaveBeenCalledWith("s1", [good]);
+  expect(h.calls.mcp).toHaveBeenCalledWith("s1", [good], undefined);
+});
+
+it("preserves a missing-bridge error instead of showing an unexplained absent report", () => {
+  const h = host();
+  routeRuntimeEvent({ type: "mcp.status", properties: { sessionID: "s1", servers: [], error: "Мост MCP не установлен" } }, h.value, new AgentDialogs());
+  expect(h.calls.mcp).toHaveBeenCalledWith("s1", [], "Мост MCP не установлен");
 });
 
 it("keeps plugin surface projections out of the chat reducer and shows UI faults", () => {

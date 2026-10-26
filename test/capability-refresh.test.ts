@@ -54,3 +54,28 @@ it("the client speaks the merged runtime contract for defaults and refresh", asy
   expect(await backend.client.configDefaults()).toEqual({ model: { providerID: "p", modelID: "m" }, code: null });
   expect(await backend.client.refreshCapabilities(null)).toEqual({ reopened: 2, pending: 1 });
 });
+
+it("Connect opens the selected SDK surface without sending a model prompt and waits for its MCP report", async () => {
+  await store.setDirectory("/work/a");
+  store.state = { ...store.state, activeSessionId: "same-chat" };
+  const { activePluginUi } = await import("../src/agent/runtime/pluginUi/active");
+  const open = vi.fn(), unsubscribe = vi.fn();
+  vi.spyOn(activePluginUi, "activate").mockReturnValue({ session: { open, subscribe: () => unsubscribe, getView: () => ({ phase: "waiting" }) } } as any);
+  const waiting = store.connectCurrentMcp("cua-desktop", "same-chat", "/work/a");
+  expect(open).toHaveBeenCalledOnce();
+  const server = { id: "cua-desktop", signature: "ready", state: "connected", tools: ["mesh_cua_desktop_check_permissions"] };
+  fx.emit({ type: "mcp.status", properties: { sessionID: "same-chat", servers: [server] } }, "/work/a");
+  await expect(waiting).resolves.toEqual(server);
+  expect(unsubscribe).toHaveBeenCalledOnce();
+  expect(fx.made("POST", "/commands")).toHaveLength(0);
+});
+
+it("retains bridge errors for settings and discards stale success when refreshing an idle current chat", async () => {
+  await store.setDirectory("/work/a");
+  store.state = { ...store.state, activeSessionId: "same-chat" };
+  fx.emit({ type: "mcp.status", properties: { sessionID: "same-chat", servers: [], error: "Мост MCP не установлен" } }, "/work/a");
+  expect(store.mcpConnectionError("same-chat")).toBe("Мост MCP не установлен");
+  await store.capabilitiesCommitted(null);
+  expect(store.mcpConnectionError("same-chat")).toBeNull();
+  expect(store.mcpServerStatuses("same-chat")).toEqual([]);
+});

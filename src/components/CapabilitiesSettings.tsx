@@ -279,6 +279,8 @@ export function CapabilitiesSettings({
                             app.prefs.browser?.nodeProgram ??
                             null,
                         });
+                        const refreshed = await store.capabilitiesCommitted(null);
+                        setNotice(registryNotice(refreshed));
                         await refresh();
                       })
                     }
