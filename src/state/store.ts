@@ -3083,7 +3083,10 @@ class Store {
     try {
       let parts: PromptRequest["parts"] = [];
       if (files.length) {
-        const choice = this.getModelChoice();
+        // The composer may already target the NEXT turn. A question still
+        // belongs to the currently running session and its Vision capability.
+        const active = this.activeSession()?.model;
+        const choice = active ? {providerID: active.providerID, modelID: active.id} : this.getModelChoice();
         const info = choice ? this.modelInfo(choice.providerID, choice.modelID) : null;
         if (!info) throw new Error('Выберите доступную модель для подготовки вложений.');
         const references = isNative() && !this.currentHost();

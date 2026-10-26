@@ -167,3 +167,16 @@ it('navigation while preparing a question file never posts to the new project',a
  store.state={...store.state,directory:'/other'};release([]);expect(await reply).toBe(false);
  expect(fx.made('POST','/questions/:id/reply')).toEqual([]);expect(fx.made('POST','/commands')).toEqual([]);
 });
+it('question files use the running model even when the next prompt has a different deferred selection',async()=>{
+ store.state={...store.state,directory:'/p',activeSessionId:'question-session'};
+ vi.spyOn(store,'activeSession').mockReturnValue({id:'question-session',directory:'/p',model:{providerID:'current',id:'vision'}});
+ const desired=vi.spyOn(store,'getModelChoice').mockReturnValue({providerID:'next',modelID:'text-only'});
+ const info=vi.spyOn(store,'modelInfo').mockImplementation((provider:unknown,id:unknown)=>provider==='current'&&id==='vision'?{id:'vision',name:'Current Vision',capabilities:{input:{image:true}}}:null);
+ const parts=[{type:'file',filename:'sample.png',mime:'image/png',url:'data:image/png;base64,aGk='}];
+ vi.spyOn(store,'prepareRuntimeAttachments').mockResolvedValue(parts);
+ fx.on('GET','/capabilities',()=>({questionAttachments:true}));fx.on('POST','/questions/:id/reply',()=>new Response(null,{status:204}));
+ expect(await store.replyQuestion({id:'q',sessionID:'question-session',questions:[{question:'Образец?'}]},[['Вот образец']],[{id:'f',name:'sample.png',mime:'image/png',size:2,blob:new Blob(['hi'])}])).toBe(true);
+ expect(info).toHaveBeenCalledWith('current','vision');expect(desired).not.toHaveBeenCalled();
+ expect(fx.made('POST','/questions/:id/reply')[0].body).toEqual({answers:[['Вот образец']],parts});
+ expect(fx.made('POST','/commands')).toEqual([]);
+});
