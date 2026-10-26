@@ -26,6 +26,7 @@ it('offers a ready GitHub download as primary, with explicit build inside the op
 it('explains pending CI and hides local build when prerequisites are absent',async()=>{
  f.state.release.binary={state:'pending',message:'Пакет ещё собирается.'};f.prerequisites={available:false,reason:'Не установлен Cargo.'};await render();
  expect(document.body.textContent).toContain('Пакет ещё собирается.');expect(document.body.textContent).toContain('Не установлен Cargo.');
+ expect(document.body.textContent).toContain('Enki 2.0.6.');expect(document.body.textContent).toContain('Уведомление появится, когда установщик будет готов.');
  expect(buttons().some(b=>b.textContent?.includes('Скачать')||b.textContent==='Собрать на этом компьютере')).toBe(false);
 });
 it('a native package transfer shows byte progress and cancellation without offering another build',async()=>{

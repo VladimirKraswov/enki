@@ -377,7 +377,7 @@ export class PromptQueueController {
       let refreshed = true;
       if (this.currentScope(context)) await this.refresh(sid, directory, context).catch(() => { refreshed = false; });
       if (this.currentScope(context) && sid === this.state.activeSessionId) this.host.patchUi({ toast: refreshed
-        ? "Уточнение сохранено. Агент получит его на следующем шаге."
+        ? "Уточнение сохранено."
         : "Уточнение сохранено. Статус доставки временно недоступен." });
     } catch (error) { this.report(sid, error, context); }
     finally { if (this.steering.get(sid) === context) this.steering.delete(sid); }

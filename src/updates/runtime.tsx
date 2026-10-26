@@ -5,6 +5,7 @@ import {useEffect,useSyncExternalStore} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import {UpdateController,requestUpdateSettings} from './controller';
+import {ReadyUpdateBadge} from './ReadyUpdateBadge';
 import {isNative} from '../native/platform';
 import {maintenance} from '../operations/maintenance';
 import {operationJournal} from '../operations/journal';
@@ -51,6 +52,6 @@ export function UpdateRuntime(){
     return()=>{alive=false;stopAwake();clearInterval(timer);checks.stop();unlisten?.();quitListen?.();};
   },[]);return null;
 }
-export function UpdateBadge(){const s=useUpdates();if(!s.release?.available)return null;
-  const hot=s.release.kind==='hot';return <button className={`update-badge ${hot?'hot':'native'}`} aria-label={`Обновление ${s.release.version}`} title={`${hot?'Обновить интерфейс без остановки агентов':s.release.binary?.state==='ready'?'Готово к загрузке':s.release.binary?'Новая версия опубликована; готовим пакет':'Доступна новая версия'} · ${s.release.version}`} onClick={()=>{requestUpdateSettings();store.setUi({settingsOpen:true});}}><span aria-hidden="true">↑</span></button>;
+export function UpdateBadge(){const s=useUpdates();return <ReadyUpdateBadge release={s.release} prepared={updates.prepared()} downloaded={s.downloaded}
+  onOpen={()=>{requestUpdateSettings();store.setUi({settingsOpen:true});}}/>;
 }

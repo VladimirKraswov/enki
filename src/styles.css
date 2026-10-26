@@ -1107,6 +1107,9 @@ select {
 /* ---------- toast ---------- */
 .toast {
   position: fixed;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
@@ -1119,6 +1122,9 @@ select {
   font-size: 0.892857rem;
   z-index: 60;
 }
+.toast > span { min-width: 0; overflow-wrap: anywhere; }
+.toast-close { flex-shrink: 0; color: var(--text-dim); padding: 0 2px; font-size: 1.1rem; line-height: 1.2; border-radius: 3px; }
+.toast-close:hover { color: var(--text); }
 
 /* ---------- resizers ---------- */
 .resizer-v {

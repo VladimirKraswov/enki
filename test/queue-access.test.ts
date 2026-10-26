@@ -115,7 +115,7 @@ it("Now steers the running turn through the runtime, never stops it, and a doubl
   expect(fx.made("POST", "/sessions/:id/queue/:item/steer").map(c => c.params.item)).toEqual([id]);
   expect(fx.made("POST", "/sessions/:id/stop")).toEqual([]);
   expect(fx.made("POST", "/commands")).toEqual([]);
-  expect(store.state.ui.toast).toBe("Уточнение сохранено. Агент получит его на следующем шаге.");
+  expect(store.state.ui.toast).toBe("Уточнение сохранено.");
 });
 
 it("a scoped 409 on an item route shows the runtime's reason and re-reads this chat's queue once, without retrying", async () => {
@@ -246,7 +246,7 @@ it("an old steer finalizer cannot remove the new host's double-click fence for t
   await store.steerQueued("host-b-item");
   expect(next.made("POST", "/sessions/:id/queue/:item/steer")).toHaveLength(1);
   finishB(receipt("new-b")); await newSteer;
-  expect(store.state.ui.toast).toBe("Уточнение сохранено. Агент получит его на следующем шаге.");
+  expect(store.state.ui.toast).toBe("Уточнение сохранено.");
   expect(fx.made("POST", "/sessions/:id/queue/:item/steer")).toHaveLength(1);
 });
 

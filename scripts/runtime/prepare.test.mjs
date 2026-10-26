@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { buildEnvironment, download, materializeBinLinks, normalizePtyHelpers, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, windowsWrapper } from './prepare.mjs';
+import { buildEnvironment, download, materializeBinLinks, normalizePtyHelpers, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, verifyPackagedCompilers, windowsWrapper } from './prepare.mjs';
 import { buildManifest, MANIFEST, verifyArtifact } from './artifact.mjs';
 const temporary = t => { const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'prepare-case-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -191,6 +191,21 @@ test('final native-module probe uses the packaged interpreter and propagates act
   fs.writeFileSync(path.join(external, 'index.cjs'), "module.exports={spawn(){}};");
   await assert.rejects(verifyPackagedNodePty(artifact, 'node/bin/node', { env: { PATH: '/usr/bin:/bin' } }), /ENOENT/);
   await assert.rejects(verifyPackagedNodePty(artifact, '../outside', { env: {} }), /Unsafe packaged interpreter/);
+});
+test('each nested compiler must actually transform TypeScript with the final packaged interpreter', { skip: process.platform === 'win32' && 'POSIX copied-interpreter fixture' }, async t => {
+  const root = temporary(t), artifact = path.join(root, 'artifact'), app = path.join(artifact, 'app');
+  fs.mkdirSync(path.join(artifact, 'node/bin'), { recursive: true }); await bundledNode(artifact);
+  fs.mkdirSync(path.join(app, 'node_modules'), { recursive: true }); fs.writeFileSync(path.join(app, 'package.json'), '{}');
+  const options = { env: { PATH: '/usr/bin:/bin' } };
+  await assert.rejects(verifyPackagedCompilers(artifact, 'node/bin/node', options), /compiler is missing/);
+  for (const relative of ['esbuild', 'sdk/node_modules/esbuild']) {
+    const directory = path.join(app, 'node_modules', relative); fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'package.json'), '{"main":"index.cjs"}');
+    fs.writeFileSync(path.join(directory, 'index.cjs'), "exports.transformSync=()=>({code:'const enki = 42;'});");
+  }
+  await verifyPackagedCompilers(artifact, 'node/bin/node', options);
+  fs.writeFileSync(path.join(app, 'node_modules/sdk/node_modules/esbuild/index.cjs'), "throw Error('MISSING_TARGET_BINARY');");
+  await assert.rejects(verifyPackagedCompilers(artifact, 'node/bin/node', options), /MISSING_TARGET_BINARY/);
 });
 test('relocated package bin wrappers retain sibling asset resolution and use the bundled interpreter', { skip: process.platform === 'win32' && 'POSIX symlinked bin fixture' }, async t => {
   const root = temporary(t), artifact = path.join(root, 'artifact'); fs.mkdirSync(path.join(artifact, 'node/bin'), { recursive: true }); fs.mkdirSync(path.join(artifact, 'app/node_modules/.bin'), { recursive: true });

@@ -25,6 +25,10 @@ export function UpdateSettings(){
   };
   const disabled=!!u.busy||!!busy;
   const hot=u.release?.kind==='hot',built=updates.prepared(),stage=u.status?.build.stage;
+  const releaseDescription=hot?'Обновление интерфейса без остановки агентов'
+    :u.release?.binary?.state==='ready'?'Готовое приложение с GitHub. Скачайте пакет, затем обновите и перезапустите Enki.'
+    :[u.release?.version?`Enki ${u.release.version}.`:'',u.release?.binary?.message??'Проверяем готовность установщика.',
+      u.release?.binary?.state==='pending'?'Уведомление появится, когда установщик будет готов.':''].filter(Boolean).join(' ');
   return <section className="setting-group quality-settings"><h2>Enki {u.status?.hot.uiVersion??version}</h2>
     {u.status&&u.status.nativeVersion!==u.status.hot.uiVersion&&<p className="muted">Нативная версия {u.status.nativeVersion}</p>}
     <SettingField label="Канал"><select value={u.channel} disabled={disabled||u.waiting||compiling} onChange={e=>{const channel=e.target.value==='preview'?'preview':'stable';updates.setChannel(channel);localStorage.setItem('arvela.update.channel',channel);}}><option value="stable">Стабильный</option><option value="preview">Предварительный</option></select></SettingField>
@@ -35,7 +39,7 @@ export function UpdateSettings(){
       {u.waiting&&<button className="btn" onClick={()=>updates.stopWaiting()}>Отменить ожидание</button>}
       {(stage==='error'||stage==='ready')&&<button className="btn" disabled={disabled} onClick={()=>void updates.clear()}>Очистить подготовленные файлы</button>}
     </div>
-    {u.release?.available&&<p className={`update-kind ${hot?'hot':''}`}>{hot?'Обновление интерфейса без остановки агентов':u.release.binary?.state==='ready'?'Готовое приложение с GitHub. Скачайте пакет, затем обновите и перезапустите Enki.':u.release.binary?.message??'Проверяем готовность пакета GitHub.'}</p>}
+    {u.release?.available&&<p className={`update-kind ${hot?'hot':''}`}>{releaseDescription}</p>}
     {u.release?.available&&!hot&&!built&&!compiling&&<details><summary>Собрать из исходников</summary>
       <p className="muted">Дополнительный вариант, если хотите установить выпуск до готовности пакета. Сборка занимает время и выполняется в отдельной папке. Чаты остаются доступны.</p>
       {prerequisites?.available?<button className="btn" disabled={disabled} onClick={()=>void updates.build()}>{u.busy==='build'?'Подготавливаю исходники…':'Собрать на этом компьютере'}</button>:<p className="muted">{prerequisites?.reason??'Проверяем Node.js/npm, Rust и системные инструменты…'}</p>}

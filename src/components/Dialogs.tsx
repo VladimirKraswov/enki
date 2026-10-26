@@ -1,4 +1,5 @@
 import { store, useAppState } from "../state/store";
+import { useEffect, useRef } from "react";
 
 export function DeleteConfirm() {
   const s = useAppState();
@@ -47,14 +48,22 @@ export function DeleteConfirm() {
 
 export function Toast() {
   const s = useAppState();
+  const scope = JSON.stringify([s.prefs.workspaceKey ?? s.prefs.endpoint, s.directory, s.activeSessionId, !!s.ui.settingsOpen]);
+  const previous = useRef({ scope, text: s.ui.toast });
+  useEffect(() => {
+    const old = previous.current; previous.current = { scope, text: s.ui.toast };
+    // A chat's old receipt must not follow the user into settings/another chat.
+    // A new message produced by that navigation is kept.
+    if (old.scope !== scope && old.text === s.ui.toast && s.ui.toast) store.setUi({ toast: null });
+  }, [scope, s.ui.toast]);
   if (!s.ui.toast) return null;
   return (
     <div
       className="toast"
       role="status"
-      onMouseDown={() => store.setUi({ toast: null })}
     >
-      {s.ui.toast}
+      <span>{s.ui.toast}</span>
+      <button type="button" className="toast-close" aria-label="Закрыть уведомление" onClick={() => store.setUi({ toast: null })}>×</button>
     </div>
   );
 }

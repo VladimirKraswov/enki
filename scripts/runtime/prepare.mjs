@@ -10,6 +10,7 @@ import { PLATFORMS, MANIFEST, REMOTE_LAUNCHER, buildManifest, hostPlatform, list
 import { runBuildJob, trustedRunner } from './native-port.mjs';
 import { bootstrapRunner, discardRunner } from './build-runner.mjs';
 import { assertSdkContract } from './sdk-contract.mjs';
+import { compactDependencies } from './compact.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SKIP = new Set(['node_modules', 'dist', 'coverage', '.vite', 'runtime-version.json', 'test', '.DS_Store', '.npmrc']);
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -302,6 +303,17 @@ if(!helper.startsWith(root+path.sep)||!fs.lstatSync(helper).isFile()||fs.realpat
 fs.accessSync(helper,fs.constants.X_OK);}`;
   await run(path.join(artifact, ...nodeRelative.split('/')), ['--input-type=module', '-e', probe], { cwd: app, env, signal, capture: true, timeoutMs: 30_000 });
 }
+/** Extension compilation must still work after pruning. Each esbuild version
+ * uses its own surviving target binary, including copies nested under the SDK. */
+export async function verifyPackagedCompilers(artifact, nodeRelative, { env, signal } = {}) {
+  if (!safeRelative(nodeRelative)) throw new Error('Unsafe packaged interpreter path');
+  const probe = `import fs from 'node:fs';import path from 'node:path';import {createRequire} from 'node:module';
+const require=createRequire(path.join(process.cwd(),'package.json'));let count=0;
+const scan=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){if(!e.isDirectory())continue;const f=path.join(d,e.name);
+if(e.name==='esbuild'&&fs.existsSync(path.join(f,'package.json'))){const compiler=require(f);const r=compiler.transformSync('const enki: number = 42;',{loader:'ts'});if(!r.code.includes('42'))throw Error('Packaged esbuild transform failed');count++;}scan(f);}};
+scan(path.join(process.cwd(),'node_modules'));if(!count)throw Error('Packaged extension compiler is missing');`;
+  await run(path.join(artifact, ...nodeRelative.split('/')), ['--input-type=module', '-e', probe], { cwd: path.join(artifact, 'app'), env, signal, capture: true, timeoutMs: 30_000 });
+}
 /** Windows: compile the native runner from THIS authenticated source into a
  * fresh private directory, then bind it for jobs and durable directory flushes
  * before any artifact recovery may rename directories. An older installed Enki
@@ -314,7 +326,7 @@ async function configureNativePort(repo, signal) {
   return () => { setDirectoryFlushPort(undefined); windowsRunner = undefined; discardRunner(identity); };
 }
 const RECEIPT = 'preparation-receipt.json';
-const PREPARATION_CODE = ['scripts/runtime/prepare.mjs', 'scripts/runtime/artifact.mjs', 'src-tauri/runtime-node.entitlements', 'src-tauri/runtime-node-adhoc.entitlements'];
+const PREPARATION_CODE = ['scripts/runtime/prepare.mjs', 'scripts/runtime/compact.mjs', 'scripts/runtime/artifact.mjs', 'src-tauri/runtime-node.entitlements', 'src-tauri/runtime-node-adhoc.entitlements'];
 /** Digest of everything that determines the prepared artifact's bytes: the
  * staged resource trees (exact copyTree SKIP semantics; links/special files
  * refused), the preparation code, Mac runtime entitlements and the options. */
@@ -389,9 +401,12 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
     await run(node, ['--input-type=module', '-e', "import pty from 'node-pty'; if(typeof pty.spawn!=='function')throw Error('Invalid node-pty ABI')"], { cwd: app, env, signal, timeoutMs: 30_000 });
     await run(node, ['build.mjs'], { cwd: app, env, signal });
     await run(node, [npm, 'prune', '--omit=dev', '--ignore-scripts'], { cwd: app, env, signal }); pruneForeignNative(app, platform);
+    const compaction = compactDependencies(app, platform);
+    console.log(`Runtime compaction: ${compaction.removed.length} packages, ${compaction.savedBytes} bytes removed for ${platform}`);
     const info = JSON.parse(fs.readFileSync(path.join(app, 'runtime-version.json'), 'utf8')), version = `${lock.sdk.version}-${info.version}`, artifact = path.join(work, 'artifact');
     fs.mkdirSync(path.join(artifact, 'app'), { recursive: true }); fs.renameSync(nodeHome, path.join(artifact, 'node'));
     for (const name of ['package.json', 'package-lock.json', 'runtime-lock.json', 'runtime-version.json']) fs.copyFileSync(path.join(app, name), path.join(artifact, 'app', name));
+    fs.writeFileSync(path.join(artifact, 'app/packaging-report.json'), JSON.stringify({ schema: 1, ...compaction }, null, 2) + '\n');
     for (const name of ['dist', 'node_modules']) fs.renameSync(path.join(app, name), path.join(artifact, 'app', name));
     await stageTools(lock, platform, path.join(artifact, 'app'), cache, work, env, signal);
     for (const name of ['include', 'share', 'README.md', 'CHANGELOG.md']) fs.rmSync(path.join(artifact, 'node', name), { recursive: true, force: true });
@@ -401,6 +416,7 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
     normalizePtyHelpers(path.join(artifact, 'app'), platform);
     await sign(artifact, platform, signingIdentity, repo, env, signal);
     await verifyPackagedNodePty(artifact, nodeRelative, { env, signal });
+    await verifyPackagedCompilers(artifact, nodeRelative, { env, signal });
     const manifest = buildManifest(artifact, { version, contract: lock.contract, node: nodeRelative, entry: 'app/dist/main.js' }); fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest, null, 2) + '\n');
     const errors = verifyArtifact(artifact); if (errors.length) throw new Error(errors.slice(0, 5).join('; '));
     if (remote) {
