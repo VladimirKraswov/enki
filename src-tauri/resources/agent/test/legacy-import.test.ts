@@ -151,6 +151,30 @@ it("conversion never drops tool pairs and annotates unrepresentable parts", () =
   expect(converted.unrepresented).toBe(2);
 });
 
+// A continuation seed is a compressed tail, not the old session's context. The
+// archive's cached prefix and total measured THAT session (here 639007 tokens);
+// carrying them made the SDK report a huge context for a few thousand tokens of
+// content, so Enki kept demanding a compaction the SDK refuses ("Nothing to
+// compact (session too small)") and the chat could neither prompt nor change model.
+it("a seeded continuation keeps one turn's own figures, never the archive's context", () => {
+  const converted = convertLegacy([
+    { info: { id: "m1", sessionID: "s", role: "user", time: { created: 1 } }, parts: [{ id: "p1", sessionID: "s", messageID: "m1", type: "text", text: "Ты работаешь?" }] },
+    { info: { id: "m2", sessionID: "s", role: "assistant", time: { created: 2 }, providerID: "deepseek", modelID: "deepseek-flash", cost: 0.0024,
+        tokens: { input: 381, output: 802, reasoning: 0, total: 639007, cache: { read: 637824, write: 0 } } },
+      parts: [{ id: "p2", sessionID: "s", messageID: "m2", type: "text", text: "Да, на связи." }] },
+  ], "f".repeat(64));
+  const assistant = converted.messages.find((message) => message.role === "assistant");
+  expect(assistant).toBeDefined();
+  if (assistant?.role !== "assistant") throw new Error("seed lost the assistant turn");
+  expect(assistant.usage.input).toBe(381);
+  expect(assistant.usage.output).toBe(802);
+  expect(assistant.usage.cacheRead).toBe(0);
+  expect(assistant.usage.cacheWrite).toBe(0);
+  expect(assistant.usage.totalTokens).toBe(1_183);
+  expect(assistant.usage.cost.total).toBeCloseTo(0.0024, 8);
+  expect(assistant.content.filter((block) => block.type === "text").map((block) => (block as { text: string }).text)).toEqual(["Да, на связи."]);
+});
+
 it("rolls back an import interrupted between steps on restart and keeps originals", async () => {
   const data = tempDir("import-restart");
   h = await harness({ data });
