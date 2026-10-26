@@ -36,6 +36,18 @@ CI дополнительно проверяет offline evaluations, fault-сц
 требует проверки приложения после замены. Зелёные unit-тесты не доказывают работу
 GPU, реальный UI, системные разрешения или сохранность конкретной истории.
 
+На macOS готовый GitHub-пакет можно проверить тем же нативным путём без установки:
+сохраните проверенные ответы Hub как JSON с `version`, `nativeFingerprint`,
+`native` (ответ `/api/updates/native/stable` с envelope), затем запустите:
+
+```sh
+ENKI_NATIVE_ACCEPTANCE=/absolute/private/receipt.json cargo test --manifest-path src-tauri/Cargo.toml --locked actual_signed_package_downloads_and_unpacks_without_installation -- --ignored --nocapture
+```
+
+Проверка использует закреплённый ключ, HTTPS, размер/hash, распаковку DMG,
+идентичность/версию и codesign. Она не создаёт план установки, не запускает новое
+приложение и удаляет свой временный каталог после успеха. Обычный CI её не вызывает.
+
 ## Проверочный профиль
 
 `ENKI_PROFILE_DIR` должен быть новым абсолютным каталогом. Перед первым запросом

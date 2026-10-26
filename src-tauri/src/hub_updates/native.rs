@@ -143,6 +143,17 @@ pub fn prepare(
     version: &str,
     directory: &Path,
 ) -> Result<Plan, String> {
+    let artifact = prepare_artifact(build, p, version, directory)?;
+    let plan = Plan::create(&artifact, version)?;
+    super::atomic(&directory.join("install-plan.json"), &plan)?;
+    Ok(plan)
+}
+fn prepare_artifact(
+    build: &Build,
+    p: &Package,
+    version: &str,
+    directory: &Path,
+) -> Result<PathBuf, String> {
     fs::create_dir(directory).map_err(|e| e.to_string())?;
     crate::updates::private(directory)?;
     let file = directory.join(&p.name);
@@ -184,9 +195,7 @@ pub fn prepare(
     build.set(json!({"stage":"unpacking"}));
     let artifact = unpack(build, &file, version, directory)?;
     build.check_cancel()?;
-    let plan = Plan::create(&artifact, version)?;
-    super::atomic(&directory.join("install-plan.json"), &plan)?;
-    Ok(plan)
+    Ok(artifact)
 }
 fn copy_verified(
     build: &Build,
@@ -293,6 +302,39 @@ fn unpack(_build: &Build, file: &Path, _version: &str, _dir: &Path) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Opt-in real signed GitHub download/unpack; ENKI_NATIVE_ACCEPTANCE contains verified Hub head and native response"]
+    fn actual_signed_package_downloads_and_unpacks_without_installation() {
+        let input = PathBuf::from(
+            std::env::var_os("ENKI_NATIVE_ACCEPTANCE").expect("explicit acceptance input"),
+        );
+        assert!(fs::metadata(&input).unwrap().len() < 65536);
+        let v: Value = super::super::read_json(&input).unwrap();
+        let version = v["version"].as_str().unwrap();
+        let fp = v["nativeFingerprint"].as_str().unwrap();
+        let package = verify(&v["native"], version, fp).unwrap();
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "enki-native-acceptance-{}",
+            random
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ));
+        let artifact = prepare_artifact(&Build::default(), &package, version, &directory).unwrap();
+        assert!(artifact.join("Contents/MacOS/enki").is_file());
+        assert!(
+            !directory.join("install-plan.json").exists(),
+            "acceptance never prepares installation"
+        );
+        println!(
+            "Verified and unpacked Enki {version}: {} ({} bytes)",
+            package.sha256, package.bytes
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
     fn fixture() -> Manifest {
         let version = "2.0.6";
         Manifest {
