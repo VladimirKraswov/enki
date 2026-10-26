@@ -50,7 +50,7 @@ export async function resolveWorkshop(
           || archive.id === previous.session.id || archive.directory !== previous.directory)
           throw new Error("Архив не совпал с сохранённой мастерской. Прежняя привязка сохранена.");
       } else if (readOnly(previous.session)) {
-        throw new Error("Архив сохранённой мастерской пока недоступен. Повторите импорт истории; прежняя привязка сохранена.");
+        throw new Error("Архив сохранённой мастерской пока недоступен. Повторите открытие после подключения; связь с сохранённым чатом не изменена.");
       }
     }
     if (session && readOnly(session)) { archive = session; session = undefined; }

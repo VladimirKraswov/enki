@@ -50,7 +50,7 @@ export function ModelServicesSettings() {
             <small>Переключение и очередь между устройствами</small></div>
             <button className="btn" onClick={() => void modelServices.refreshHub().catch(e => setError(String(e)))}>Обновить</button></div>
           {modelServices.hubRoutes().map(route => <div className="setting-row" key={`${route.agent}/${route.providerID}/${route.modelID}`}>
-            <div className="setting-label"><span>{route.label} · {route.agent === "pi" ? "Pi" : "OpenCode"}</span>
+            <div className="setting-label"><span>{route.label} · {route.agent === "pi" ? "Enki" : "Внешний клиент"}</span>
               <small>{route.providerID} / {route.modelID}</small></div>
           </div>)}
           {!modelServices.hubRoutes().length && <div className="setting-row">Нет привязок в каталоге Hub</div>}

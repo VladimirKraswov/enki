@@ -171,10 +171,10 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
         </div>}
         {origin && <div className="handoff-provenance" role="note">
           <Icon name="handoff" size={15} />
-          <span>Продолжение чата {origin.engine === 'pi' ? 'Pi' : 'OpenCode'} «{origin.title}». Расшифровка той переписки передана сюда как контекст; сами сообщения остались в исходном чате.
+          <details><summary>Контекст из чата «{origin.title}»{origin.omitted > 0 ? " · часть контекста недоступна" : ""}</summary><p>Источник: {origin.engine === 'pi' ? 'Enki / Pi' : 'OpenCode'}. Агент использует контекст этой переписки. Полная история доступна в исходном чате.
             {origin.omitted > 0 && ` Ранние ${origin.omitted} реплик(и) не поместились и были опущены.`}{' '}
             {origin.session && <button className="btn small ghost" onClick={() => void store.openChat(origin.session!)}>Открыть исходный чат</button>}
-          </span>
+          </p></details>
         </div>}
         {sessionId && s.ui.historyLoading && !slot && <div className="empty-hint">Загрузка истории…</div>}
         {sessionId && s.ui.historyError && <div className="msg-error" role="alert">{s.ui.historyError}{' '}

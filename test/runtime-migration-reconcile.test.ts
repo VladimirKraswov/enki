@@ -38,7 +38,7 @@ it("stops after a failed job, a changed source or changed connection", async () 
 });
 it("bounds a job that never finishes", async () => {
   const p = port(snapshot("snapshotted"));
-  await expect(reconcileOpenCodeImport(new ConnectionError("lost"), "/owner/source.db", old, p)).rejects.toThrow("ещё не подтверждён");
+  await expect(reconcileOpenCodeImport(new ConnectionError("lost"), "/owner/source.db", old, p)).rejects.toThrow("ещё не подтверждена");
   expect(p.read).toHaveBeenCalledTimes(600); expect(p.notify).toHaveBeenCalledTimes(1);
 });
 it("retries bounded read-only transport failures but never authentication failures", async () => {

@@ -70,7 +70,7 @@ export async function applyCatalog(
   const status = await runtime.client.configStatus();
   const current = await runtime.client.modelsConfig();
   if (status.state === "ready" || status.state === "blocked" || current.readOnly)
-    throw new Error("Активны импортированные настройки моделей Pi. Объединение каталога Hub с ними пока не поддерживается, поэтому изменения не внесены.");
+    throw new Error("Настройки моделей загружены из внешнего профиля. Их объединение с каталогом Hub пока не поддерживается; текущие подключения сохранены.");
   const piMerge = mergePiModels(current.content, plan.pi, plan.removePi);
   if (piMerge.error) throw new Error(piMerge.error);
   // CAS: an edit made elsewhere since the read is refused by the runtime (409).

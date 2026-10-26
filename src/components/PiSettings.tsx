@@ -9,17 +9,17 @@ import { isAbsoluteLocalPath } from "../util/paths";
 /** Sanitized import state (no paths/values) in owner language. */
 export function configSummary(status: ConfigStatusDTO | null, defaults: { model: ModelRef | null; code: string | null } | null): string {
   if (!status) return "Состояние неизвестно";
-  if (status.pendingRestart) return "Перенесено · применится после перезапуска Enki";
-  const state = status.state === "ready" ? "Перенесено и действует" : status.state === "shadowed" ? "Перенесено, но перекрыто собственными настройками Enki"
-    : status.state === "blocked" ? `Перенос заблокирован${status.code ? ` (${status.code})` : ""}` : "Не переносились";
+  if (status.pendingRestart) return "Ожидает перезапуска Enki";
+  const state = status.state === "ready" ? "Настройки применены" : status.state === "shadowed" ? "Используются настройки Enki"
+    : status.state === "blocked" ? `Импорт недоступен${status.code ? ` (${status.code})` : ""}` : "Не импортированы";
   const model = defaults?.model ? ` · модель по умолчанию: ${defaults.model.providerID}/${defaults.model.modelID}`
     : defaults?.code ? " · модель по умолчанию недоступна в каталоге" : "";
   return state + model;
 }
 export function configImportError(error: unknown): string {
   const text = errText(error);
-  if (/CONFIG_SOURCE_UNCONFIGURED/.test(text)) return "Для этого профиля Enki не задан каталог прежних настроек Pi; ничего не прочитано.";
-  if (/CONFIG_NATIVE_UNAVAILABLE/.test(text)) return "Перенос доступен только для Enki на этом компьютере с хранилищем ключей; файл auth.json не используется.";
+  if (/CONFIG_SOURCE_UNCONFIGURED/.test(text)) return "Источник импорта не настроен на этом компьютере. Данные не изменены.";
+  if (/CONFIG_NATIVE_UNAVAILABLE/.test(text)) return "Импорт ключей доступен в локальном приложении Enki с системным хранилищем ключей.";
   return text;
 }
 const DEFERRED: Record<string, string> = { extensions: "расширения", skills: "навыки", prompts: "шаблоны", themes: "темы", packages: "пакеты" };
@@ -147,7 +147,7 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
       const status = await backend.client.configStatus().catch(() => null);
       if (!current()) return;
       setConfig(current => ({ ...current, status }));
-      setNotice(status?.pendingRestart ? "Настройки Pi перенесены в хранилище Enki. Они применятся после перезапуска Enki." : "Настройки Pi перенесены.");
+      setNotice(status?.pendingRestart ? "Настройки сохранены. Перезапустите Enki, чтобы применить их." : "Настройки импортированы.");
     } catch (e) { if (current()) setError(configImportError(e)); }
     finally { if (current()) setBusy(false); }
   };
@@ -158,7 +158,7 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
     try {
       const result = await backend.client.importPiCredentials();
       if (!current()) return;
-      setNotice(`Перенесено ключей: ${result.imported.length}. Существующих сохранено: ${result.kept.length}.`);
+      setNotice(`Добавлено ключей: ${result.imported.length}. Уже подключено: ${result.kept.length}.`);
       if (result.failed.length) setError(result.failed.map(item => `${item.provider}: ${item.reason}`).join(" "));
       await store.refreshModelCatalog();
     } catch (e) { if (current()) setError(configImportError(e)); }
@@ -208,7 +208,7 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
       {error && <p className="composer-error" role="alert">{error}</p>}
 
       <Group title="Среда выполнения" hidden={tab !== "runtime"}>
-        <Row title="Состояние" description="Встроенная среда выполнения запускается вместе с Enki; для SSH-хоста — установленная там среда. Отдельный агент не устанавливается.">
+        <Row title="Состояние" description="Встроенная среда выполнения запускается вместе с Enki; для SSH-хоста — установленная там среда. ">
           <span>{connected ? `Подключена · ${s.connection.version ?? ""} · ${store.hostLabel()}` : "Не подключена"}</span>
         </Row>
         <Row title="Доступ к инструментам по умолчанию" description="Для чатов без своих правил. «Спрашивать» — безопасное значение: без ответа действие отклоняется. Явные запреты чата действуют всегда.">
@@ -237,16 +237,9 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
       </Group>
 
       <Group title="Модели" hidden={tab !== "models"}>
-        <Row title="Выбранная модель" description="Настроенная модель — ещё не доступ. Проверка отправляет один минимальный запрос через среду выполнения.">
-          <span>{access ? `${access.ok ? "Подтверждён" : "Не подтверждён"} · ${access.detail}` : prefs.verifiedModel ? `Подтверждён ранее: ${prefs.verifiedModel}` : "Не проверялся"}</span>
+        <Row title="Выбранная модель" description="Проверка отправляет короткий запрос выбранной модели. Платные провайдеры могут списать средства по своему тарифу.">
+          <span>{access ? `${access.ok ? "Подтверждён" : "Не подтверждён"} · ${access.detail}` : prefs.verifiedModel ? `Последняя успешная проверка: ${prefs.verifiedModel}` : "Проверка не выполнялась"}</span>
           <button className="btn" disabled={busy || !connected || !store.getModelChoice()} onClick={() => { const choice = store.getModelChoice(); if (choice) void checkModel(`${choice.providerID}/${choice.modelID}`); }}>Проверить</button>
-        </Row>
-        <Row title="Ключи прежнего Pi" description="Переносит только отсутствующие ключи в хранилище ОС. Существующие ключи, модели и настройки Enki сохраняются; исходные файлы Pi не изменяются.">
-          <button className="btn" disabled={busy || !connected || !!store.currentHost()} onClick={() => void importKeys()}>Перенести ключи</button>
-        </Row>
-        <Row title="Настройки прежнего Pi" description="Однократный явный перенос models.json и ключей из каталога прежнего Pi в хранилище Enki. Исходные файлы не изменяются; применяется после перезапуска Enki.">
-          <span>{configSummary(config.status, config.defaults)}</span>
-          <button className="btn" disabled={busy || !connected || !!store.currentHost() || !!config.status?.pendingRestart} onClick={() => void importConfig()}>Перенести</button>
         </Row>
         <Row title="Свой идентификатор модели" description="provider/model — для моделей вне встроенного каталога.">
           <input aria-label="Свой идентификатор модели" spellCheck={false} placeholder="deepseek/deepseek-flash" value={custom}
@@ -260,14 +253,25 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
             <button className="btn" disabled={busy || !connected} onClick={() => void checkModel(id)}>
               {checkingModel === id ? "Проверка…" : m.verified ? "Проверена · повторить" : "Проверить"}</button></div>;
         })}</div> : <p className="handoff-note">{connected ? "Среда выполнения не сообщила моделей. Добавьте провайдера в разделе «Модели (Hub)» или ключ API." : "Нет подключения к среде выполнения."}</p>}
+        <details className="settings-disclosure">
+          <summary>Импорт из других приложений</summary>
+          <p className="handoff-note">Подключите API-ключи или настройки из локального профиля Pi. Это необязательный шаг; существующие подключения Enki сохраняются.</p>
+        <Row title="API-ключи" description="Добавляет отсутствующие API-ключи из локального профиля Pi в системное хранилище Enki. Существующие подключения и исходные файлы не изменяются.">
+          <button className="btn" disabled={busy || !connected || !!store.currentHost()} onClick={() => void importKeys()}>Импортировать ключи</button>
+        </Row>
+        <Row title="Модели и настройки" description="Импортирует конфигурацию моделей и ключи из локального профиля Pi. Исходные файлы сохраняются. Изменения применятся после перезапуска Enki.">
+          <span>{configSummary(config.status, config.defaults)}</span>
+          <button className="btn" disabled={busy || !connected || !!store.currentHost() || !!config.status?.pendingRestart} onClick={() => void importConfig()}>Импортировать настройки</button>
+        </Row>
+        </details>
       </Group>
 
       <Group title="Расширения и LSP" hidden={tab !== "extensions"}>
-        <Row title="Расширения агента" description="Абсолютные пути к расширениям Pi на компьютере среды выполнения. Их интерфейсы (виджеты, диалоги, собственные экраны и редактор) показываются над полем ввода чата.">
+        <Row title="Расширения агента" description="Абсолютные пути к расширениям агента на выбранном компьютере. Их интерфейсы (виджеты, диалоги, собственные экраны и редактор) показываются над полем ввода чата.">
           <span>{extensions.length ? `${extensions.length} шт.` : "Нет"}</span>
         </Row>
         <Row title="Добавить расширение" description="Абсолютный путь к .ts/.js файлу расширения.">
-          <input aria-label="Путь к расширению" spellCheck={false} placeholder="/home/user/.pi/agent/extensions/my.ts" value={extension} onChange={(e) => setExtension(e.target.value)} />
+          <input aria-label="Путь к расширению" spellCheck={false} placeholder="/home/user/enki/extensions/my.ts" value={extension} onChange={(e) => setExtension(e.target.value)} />
           <button className="btn" disabled={!runtime || busy || !isAbsoluteLocalPath(extension.trim())} onClick={() => {
             const path = extension.trim();
             if (!extensions.includes(path)) void save({ extensionPaths: [...extensions, path] });
@@ -276,19 +280,19 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
         </Row>
         {extensions.map(path => <div className="kv" key={path}><span>{path}{missing(resources?.extensions, path)}</span>
           <button className="btn" disabled={busy} onClick={() => void save({ extensionPaths: extensions.filter(x => x !== path) })}>Убрать</button></div>)}
-        <ExplicitPaths title="Навыки" description="Абсолютные пути к файлам или каталогам навыков Pi на компьютере среды выполнения. Загружаются только указанные здесь и включённые в общем каталоге; ничего не ищется автоматически."
-          placeholder="/home/user/.pi/agent/skills/my-skill" paths={runtime?.skillPaths ?? []} status={resources?.skills} disabled={!runtime || busy || runtime.skillPaths === undefined}
+        <ExplicitPaths title="Навыки" description="Абсолютные пути к файлам или каталогам навыков на выбранном компьютере. Загружаются только указанные здесь и включённые в общем каталоге; ничего не ищется автоматически."
+          placeholder="/home/user/enki/skills/my-skill" paths={runtime?.skillPaths ?? []} status={resources?.skills} disabled={!runtime || busy || runtime.skillPaths === undefined}
           onChange={(skillPaths) => void save({ skillPaths })} />
-        <ExplicitPaths title="Шаблоны запросов" description="Абсолютные пути к файлам или каталогам шаблонов Pi (prompt templates) на компьютере среды выполнения."
-          placeholder="/home/user/.pi/agent/prompts" paths={runtime?.promptPaths ?? []} status={resources?.prompts} disabled={!runtime || busy || runtime.promptPaths === undefined}
+        <ExplicitPaths title="Шаблоны запросов" description="Абсолютные пути к файлам или каталогам шаблонов запросов на выбранном компьютере."
+          placeholder="/home/user/enki/prompts" paths={runtime?.promptPaths ?? []} status={resources?.prompts} disabled={!runtime || busy || runtime.promptPaths === undefined}
           onChange={(promptPaths) => void save({ promptPaths })} />
-        <ExplicitPaths title="Пакеты Pi" description="Абсолютный путь к локальной папке пакета Pi на компьютере среды выполнения (package.json с полем pi или папки extensions/skills/prompts/themes). Пакеты подключаются только из выбранной локальной папки; npm/git-пакеты не скачиваются и не устанавливаются. Расширения пакета — доверенный код: он выполняется с правами агента, поэтому добавляйте только пакеты, которым доверяете. Ссылки за пределы папки пакета, шаблоны путей и файлы .gitignore не поддерживаются — такие записи не загружаются и показываются ниже. При совпадении имён ресурс пакета важнее навыка или шаблона, указанного выше отдельно (как в Pi)."
-          placeholder="/home/user/pi-packages/my-package" paths={runtime?.packagePaths ?? []} disabled={!runtime || busy || runtime.packagePaths === undefined}
+        <ExplicitPaths title="Пакеты расширений" description="Абсолютный путь к локальной папке пакета расширений, совместимого с Pi SDK (package.json с полем pi или папки extensions/skills/prompts/themes). Пакеты подключаются только из выбранной локальной папки; npm/git-пакеты не скачиваются и не устанавливаются. Расширения пакета — доверенный код: он выполняется с правами агента, поэтому добавляйте только пакеты, которым доверяете. Ссылки за пределы папки пакета, шаблоны путей и файлы .gitignore не поддерживаются — такие записи не загружаются и показываются ниже. При совпадении имён ресурс пакета важнее навыка или шаблона, указанного выше отдельно."
+          placeholder="/home/user/enki/packages/my-package" paths={runtime?.packagePaths ?? []} disabled={!runtime || busy || runtime.packagePaths === undefined}
           onChange={(packagePaths) => void save({ packagePaths })}
           detail={(path) => <PackageDetails status={resources?.packages?.find((item) => item.path === path)} />} />
         {!!resources?.deferred.length && <p className="handoff-note">
-          Из настроек прежнего Pi не включены автоматически: {resources.deferred.map(deferredLabel).join(", ")}. Добавьте нужные расширения, навыки и шаблоны явно выше.
-          Пакеты Pi (npm/git) Enki не скачивает и не устанавливает: укажите локальную папку уже установленного пакета в разделе «Пакеты Pi».</p>}
+          Требуют отдельного подключения: {resources.deferred.map(deferredLabel).join(", ")}. Добавьте нужные расширения, навыки и шаблоны явно выше.
+          Для пакетов из npm или Git укажите локальную папку установленного пакета в разделе «Пакеты расширений».</p>}
         <Row title="Языковые серверы (LSP)" description="Собственное расширение Enki без фоновых демонов; находит установленные серверы на этом компьютере.">
           <label className="switch-label">
             {/* Runtime-owned switch of the connected host; the legacy UI pref is only a one-time migration input. */}

@@ -23,7 +23,7 @@ it('lists active and archived chats from the runtime, labelling read-only OpenCo
  expect(fake.page).toHaveBeenCalledWith(expect.objectContaining({archived:false,directory:'/p'}),expect.anything());
  expect(fake.page).toHaveBeenCalledWith(expect.objectContaining({archived:true,directory:'/p'}),expect.anything());
  expect(document.body.textContent).toContain('Chat a');
- expect(document.body.textContent).toContain('Архив OpenCode (только чтение)');
+ expect(document.body.textContent).toContain('Внешний источник · только чтение');
  expect(document.body.textContent).toContain('Размер недоступен');
 });
 it('a single session is shown without listing the project',async()=>{

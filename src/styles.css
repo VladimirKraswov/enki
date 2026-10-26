@@ -3272,3 +3272,13 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .context-disclosure > summary { color:var(--text-dim); font-size:12px; cursor:pointer; }
 .context-disclosure[open] > summary { margin-bottom:8px; }
 .context-disclosure > section:last-child { border-bottom:0; }
+
+/* Optional integration details stay secondary to everyday Enki settings. */
+.settings-disclosure { margin: 18px 16px 12px; border-top: 1px solid var(--border); padding-top: 14px; }
+.settings-disclosure > summary { color: var(--text-muted); cursor: pointer; font-size: 13px; }
+.settings-disclosure > summary:hover { color: var(--text); }
+.settings-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.settings-disclosure .handoff-note { font-size: 12px; line-height: 1.5; }
+.handoff-provenance details { min-width: 0; }
+.handoff-provenance summary { cursor: pointer; overflow-wrap: anywhere; }
+.handoff-provenance p { margin: 8px 0 0; }

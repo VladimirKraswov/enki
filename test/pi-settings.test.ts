@@ -101,11 +101,11 @@ it('local Pi packages: counts and runtime diagnostics are shown verbatim; adding
  // Imported old-Pi package pointers stay deferred: only an explanation, nothing is activated.
  expect(text).toContain('пакеты');expect(text).toContain('укажите локальную папку');
  expect(writes()).toEqual([]);
- const field=document.querySelector<HTMLInputElement>('[aria-label="Пакеты Pi"]')!;
+ const field=document.querySelector<HTMLInputElement>('[aria-label="Пакеты расширений"]')!;
  const add=field.closest('.setting-control')!.querySelector<HTMLButtonElement>('button')!;
  expect(add.textContent).toBe('Добавить');
- input('Пакеты Pi','relative/pkg');expect(add.disabled).toBe(true);
- input('Пакеты Pi','/pkgs/new');
+ input('Пакеты расширений','relative/pkg');expect(add.disabled).toBe(true);
+ input('Пакеты расширений','/pkgs/new');
  await act(async()=>add.click());
  await vi.waitFor(()=>expect(fx.made('PUT','/settings')).toHaveLength(1));
  expect(fx.made('PUT','/settings')[0].body).toEqual({packagePaths:['/pkgs/tools','/pkgs/gone','/pkgs/new']});
@@ -114,8 +114,8 @@ it('local Pi packages: counts and runtime diagnostics are shown verbatim; adding
 });
 it('an older runtime without package support keeps the package editor disabled',async()=>{
  click('Расширения и LSP');
- const field=document.querySelector<HTMLInputElement>('[aria-label="Пакеты Pi"]')!;
- input('Пакеты Pi','/pkgs/new');
+ const field=document.querySelector<HTMLInputElement>('[aria-label="Пакеты расширений"]')!;
+ input('Пакеты расширений','/pkgs/new');
  const add=field.closest('.setting-control')!.querySelector<HTMLButtonElement>('button')!;
  expect(add.textContent).toBe('Добавить');expect(add.disabled).toBe(true);
 });
@@ -123,8 +123,8 @@ it('a delayed save from host A cannot replace host B settings or end its still-p
  fx.on('GET','/settings',()=>({...base,packagePaths:[]}));
  fx.on('GET','/settings/resources',()=>({extensions:[],skills:[],prompts:[],packages:[],deferred:[]}));
  click('Обновить');click('Расширения и LSP');
- const packageAdd=()=>document.querySelector<HTMLInputElement>('[aria-label="Пакеты Pi"]')!.closest('.setting-control')!.querySelector<HTMLButtonElement>('button')!;
- input('Пакеты Pi','/host-a/new');
+ const packageAdd=()=>document.querySelector<HTMLInputElement>('[aria-label="Пакеты расширений"]')!.closest('.setting-control')!.querySelector<HTMLButtonElement>('button')!;
+ input('Пакеты расширений','/host-a/new');
  await vi.waitFor(()=>expect(packageAdd().disabled).toBe(false));
  let finishWrite!:(value:unknown)=>void;
  fx.on('PUT','/settings',()=>new Promise(resolve=>{finishWrite=resolve;}));
@@ -144,7 +144,7 @@ it('a delayed save from host A cannot replace host B settings or end its still-p
  await vi.waitFor(()=>expect(finishLoad).toBeTypeOf('function'));
  await act(async()=>{finishWrite({...base,packagePaths:['/host-a/new']});await pendingSave;});
  // A's finally must not clear B's busy state and enable a write during B's load.
- input('Пакеты Pi','/host-b/not-submitted');
+ input('Пакеты расширений','/host-b/not-submitted');
  expect(packageAdd().disabled).toBe(true);
  expect(document.body.textContent).not.toContain('/host-a/new');
  expect(document.body.textContent).not.toContain('Сохранено. Новые сессии');
@@ -160,8 +160,8 @@ it('late resource diagnostics from host A cannot replace the visible host B pack
  fx.on('GET','/settings',()=>({...base,packagePaths:[]}));
  fx.on('GET','/settings/resources',()=>({extensions:[],skills:[],prompts:[],packages:[],deferred:[]}));
  click('Обновить');click('Расширения и LSP');
- const packageAdd=()=>document.querySelector<HTMLInputElement>('[aria-label="Пакеты Pi"]')!.closest('.setting-control')!.querySelector<HTMLButtonElement>('button')!;
- input('Пакеты Pi','/host-a/new');
+ const packageAdd=()=>document.querySelector<HTMLInputElement>('[aria-label="Пакеты расширений"]')!.closest('.setting-control')!.querySelector<HTMLButtonElement>('button')!;
+ input('Пакеты расширений','/host-a/new');
  await vi.waitFor(()=>expect(packageAdd().disabled).toBe(false));
  let finishResources!:(value:unknown)=>void;
  fx.on('PUT','/settings',()=>({...base,packagePaths:['/host-a/new']}));
@@ -195,8 +195,14 @@ it('transfers only missing credentials explicitly and shows feedback above the m
  fx.on('POST','/credentials/import-pi',()=>({imported:['deepseek'],kept:['local'],failed:[]}));
  click('Модели');
  expect(fx.made('POST','/credentials/import-pi')).toHaveLength(0);
- await act(async()=>click('Перенести ключи'));
- await vi.waitFor(()=>expect(document.body.textContent).toContain('Перенесено ключей: 1. Существующих сохранено: 1.'));
+ const disclosure=document.querySelector<HTMLDetailsElement>('.settings-disclosure')!;
+ expect(disclosure.open).toBe(false);
+ expect(disclosure.querySelector('summary')?.textContent).toBe('Импорт из других приложений');
+ act(()=>disclosure.querySelector('summary')!.click());
+ expect(disclosure.open).toBe(true);
+ expect(writes()).toEqual([]);
+ await act(async()=>click('Импортировать ключи'));
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Добавлено ключей: 1. Уже подключено: 1.'));
  expect(fx.made('POST','/legacy/pi-agent')).toHaveLength(0);
  const status=document.querySelector('.settings-notice')!, group=document.querySelector('[aria-label="Модели"]')!;
  expect(status.compareDocumentPosition(group)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

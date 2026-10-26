@@ -43,11 +43,11 @@ export function InformationDialog({directory,session,onClose}:{directory:string;
    {loading&&<p role="status">Загрузка сведений…</p>}
    {errors.map(error=><p key={error} role="alert" className="error-text">{error}</p>)}
    {!loading&&<button className="btn small" onClick={()=>setRevision(v=>v+1)}>Обновить</button>}
-   {rows.some(row=>row.storage?.kind==='payload')&&<p className="information-note">OpenCode: размер записей сообщений и частей в общей базе, без индексов и свободного места. Pi: размер файла истории. Внешние вложения и файлы проекта не учитываются.</p>}
+   {rows.some(row=>row.storage?.kind==='payload')&&<p className="information-note">Размер истории включает сообщения в базе или файле чата. Индексы базы, свободное место, внешние вложения и файлы проекта не учитываются.</p>}
    {!session&&<input type="search" aria-label="Найти сессию" placeholder="Найти сессию" value={query} onChange={event=>setQuery(event.target.value)}/>}
    {!loading&&!filtered.length&&<p>Сессий не найдено.</p>}
    <div className="information-list">{filtered.map(row=><section key={`${row.engine}:${row.session.id}`}><h4>{row.session.title}</h4>
-    <div className="information-summary"><span>{row.engine==='OpenCode'?'Архив OpenCode (только чтение)':'Enki'}{row.session.agent?` · ${row.session.agent}`:''}</span><b>{row.storage?formatBytes(row.storage.bytes):'Размер недоступен'}</b><span>{row.session.time.archived?'Архив':'Не в архиве'}</span></div>
+    <div className="information-summary"><span>{row.engine==='OpenCode'?'Внешний источник · только чтение':'Enki'}{row.session.agent?` · ${row.session.agent}`:''}</span><b>{row.storage?formatBytes(row.storage.bytes):'Размер недоступен'}</b><span>{row.session.time.archived?'Архив':'Не в архиве'}</span></div>
     <dl><dt>Создана</dt><dd>{date(row.session.time.created)}</dd><dt>Изменена</dt><dd>{date(row.session.time.updated)}</dd>
     {row.storage?.messages!==undefined&&<><dt>Сообщений</dt><dd>{row.storage.messages}</dd></>}
     {row.session.model&&<><dt>Модель</dt><dd>{row.session.model.id}</dd></>}

@@ -912,7 +912,7 @@ class Store {
     if (!current()) return;
     // Import/map the source history BEFORE queued/timed work is mapped to it.
     await this.importLegacyHistory(backend).catch(error => {
-      if (current()) this.patchUi({ toast: `История прежней версии пока не импортирована (${errText(error)}). Исходные файлы не изменены; повтор при следующем подключении.` });
+      if (current()) this.patchUi({ toast: `Не удалось открыть сохранённую историю (${errText(error)}). Исходные файлы не изменены; повтор при следующем подключении.` });
     });
     if (!current()) return;
     const legacy = this.state.prefs.queues ?? {};
@@ -930,9 +930,9 @@ class Store {
           this.persistPrefs();
         }
         if (unaddressableQueueItems(legacy))
-          this.patchUi({ toast: "Некоторые запросы старой очереди повреждены и не перенесены. Их копия сохранена в настройках Enki." });
+          this.patchUi({ toast: "Некоторые сохранённые запросы очереди повреждены и требуют восстановления. Их копия сохранена в настройках Enki." });
       } catch (error) {
-        if (current()) this.patchUi({ toast: `Старая очередь пока не перенесена (${errText(error)}). Запросы сохранены; перенос повторится при следующем подключении.` });
+        if (current()) this.patchUi({ toast: `Не удалось восстановить очередь (${errText(error)}). Запросы сохранены; восстановление повторится при следующем подключении.` });
       }
     }
     if (!current()) return;
@@ -941,12 +941,12 @@ class Store {
         .filter((value): value is string => !!value);
       await taskScheduler().migrateLegacy(localStorage, backend, { installation, workspace, servers });
     } catch (error) {
-      if (current()) this.patchUi({ toast: `Старые таймеры пока не перенесены (${errText(error)}). Они сохранены и не запускались; перенос повторится при следующем подключении.` });
+      if (current()) this.patchUi({ toast: `Не удалось восстановить таймеры (${errText(error)}). Они сохранены и не запускались; восстановление повторится при следующем подключении.` });
     }
     if (!current()) return;
     await this.refreshCutoverIssues(backend, installation, workspace);
     if (this.cutoverIssueList.length)
-      this.patchUi({ toast: `Не все запросы и таймеры из прежней версии удалось перенести (${this.cutoverIssueList.length}). Они сохранены и не отправлялись — см. «Восстановление».` });
+      this.patchUi({ toast: `Некоторые сохранённые запросы и таймеры требуют восстановления (${this.cutoverIssueList.length}). Они сохранены и не отправлялись — см. «Восстановление».` });
   }
 
   /**
@@ -995,9 +995,9 @@ class Store {
           await reconcileOpenCodeImport(error, info.sources.opencode, info, {
             read: () => backend.client.migrations(),
             current,
-            notify: () => this.patchUi({ toast: "Перенос большой истории продолжается в фоне. Проверяю его журнал; заново запускать перенос не нужно." }),
+            notify: () => this.patchUi({ toast: "Подготовка истории продолжается в фоне. Повторный запуск не нужен." }),
           });
-          this.patchUi({ toast: "История прежней версии успешно импортирована." });
+          this.patchUi({ toast: "История чатов доступна." });
         }
       }
       if (!current()) return;
@@ -1009,7 +1009,7 @@ class Store {
         const result = await backend.client.importPiCli(metas) as { results?: Array<{ code?: string; skipped?: string | null }> };
         // Per-chat failures are reported with codes and stay importable; only a clean pass is marked.
         const failed = (result.results ?? []).filter(r => r.code && r.code !== "source_missing").length;
-        if (failed) throw new Error(`не удалось импортировать чатов Pi: ${failed}`);
+        if (failed) throw new Error(`не удалось открыть чаты из внешнего источника: ${failed}`);
       }
       if (!current()) return;
       mark("piCli");
@@ -1038,8 +1038,8 @@ class Store {
         if (receipt.kind === "queue") { this.mutate(s => ({ prefs: { ...s.prefs, queues: pruneQueues(s.prefs.queues ?? {}, done) } })); this.persistPrefs(); }
         else await taskScheduler().refresh();
       }
-      this.patchUi({ toast: receipt.state === "accepted" ? "Перенесено. Очередь приостановлена до вашей проверки." : receipt.reason ?? "Пока не удалось перенести." });
-    } catch (error) { this.patchUi({ toast: `Повтор переноса не удался: ${errText(error)}` }); }
+      this.patchUi({ toast: receipt.state === "accepted" ? "Восстановлено. Очередь приостановлена до вашей проверки." : receipt.reason ?? "Пока не удалось восстановить." });
+    } catch (error) { this.patchUi({ toast: `Восстановление не удалось: ${errText(error)}` }); }
     await this.refreshCutoverIssues(backend, installationId(localStorage), this.state.prefs.workspaceKey ?? this.state.prefs.endpoint);
   }
   /** The user decided to drop a quarantined item; its journal row stays as an audit record. */
@@ -2468,7 +2468,7 @@ class Store {
     }
     if (this.isLegacySession(this.state.activeSessionId)) {
       // Imported archives are read-only; the old prompts are never replayed.
-      this.patchUi({ sendError: "Этот чат импортирован из архива OpenCode и доступен только для чтения. Продолжите его в новом чате Enki; черновик сохранён." });
+      this.patchUi({ sendError: "Этот чат доступен только для чтения. Нажмите «Продолжить чат», чтобы работать с его контекстом. Черновик сохранён." });
       return false;
     }
     const initialScope = attachmentScope(this.state.prefs.workspaceKey ?? this.state.prefs.endpoint, this.state.directory, this.state.activeSessionId);

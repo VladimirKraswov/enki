@@ -4,7 +4,7 @@ export interface UpdateState {release:Release|null;status:NativeStatus|null;busy
 export type Transport=<T>(action:string,extra?:Record<string,unknown>)=>Promise<T>;
 /** Native builder stages in order; each is cancellable and blocks conflicting controls. */
 export const ACTIVE_BUILD_STAGES=['preparing','dependencies','runtime','compiling'] as const;
-export const BUILD_STAGE_TEXT:Record<string,string>={preparing:'Проверка инфраструктуры и исходников',dependencies:'Установка зависимостей сборки',runtime:'Подготовка среды выполнения Enki (Node.js и Pi SDK)',compiling:'Сборка приложения',ready:'Приложение собрано',error:'Сборка остановлена'};
+export const BUILD_STAGE_TEXT:Record<string,string>={preparing:'Проверка инфраструктуры и исходников',dependencies:'Установка зависимостей сборки',runtime:'Подготовка компонентов Enki',compiling:'Сборка приложения',ready:'Приложение собрано',error:'Сборка остановлена'};
 export class UpdateController {
   private state:UpdateState={release:null,status:null,busy:'',error:'',notice:'',downloaded:false,waiting:false,channel:'stable'};
   private listeners=new Set<()=>void>();

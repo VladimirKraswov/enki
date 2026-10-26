@@ -24,10 +24,15 @@ it('a Pi-only model is accepted, an OpenCode-only one is refused, and "Доба�
     const buttons = (text: string) => [...host.querySelectorAll('button')].filter(b => b.textContent === text);
     try {
         await act(async () => root.render(createElement(ModelCatalogSettings)));
-        expect(host.textContent).toContain('Pi: local');
-        expect(host.textContent).toContain('Нет записи Pi — Enki 2.0 эту модель не применяет');
+        expect(host.textContent).toContain('Провайдер: local');
+        expect(host.textContent).toContain('Подключение модели не настроено');
         // Pi only: saved without any OpenCode block.
         await act(async () => buttons('Изменить')[0].click());
+        expect(host.querySelector('#catalog-0-opencodeId')).toBeNull();
+        await act(async () => buttons('Совместимость с внешними клиентами')[0].click());
+        expect(host.querySelector('#catalog-0-opencodeId')).not.toBeNull();
+        await act(async () => buttons('Совместимость с внешними клиентами')[0].click());
+        expect(host.querySelector('#catalog-0-opencodeId')).toBeNull();
         await act(async () => buttons('Сохранить в черновике')[0].click());
         expect(host.querySelector('[role=alert]')).toBeNull();
         expect(host.textContent).toContain('Совпадает с опубликованной версией');
@@ -38,7 +43,7 @@ it('a Pi-only model is accepted, an OpenCode-only one is refused, and "Доба�
         // The template is Pi only.
         expect(newCatalogModel(3)).toEqual({ id: 'model-3', label: 'Новая модель', pi: { providerId: 'local-model-3', provider: { baseUrl: 'http://127.0.0.1:8000/v1', api: 'openai-completions', apiKey: 'local', models: [] } } });
         await act(async () => buttons('Добавить модель')[0].click());
-        expect(host.textContent).toContain('Pi: local-model-3');
+        expect(host.textContent).toContain('Провайдер: local-model-3');
         expect(host.textContent).not.toContain('совместимость 0.2.x (OpenCode): local-model-3');
     }
     finally {

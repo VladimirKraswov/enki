@@ -24,7 +24,7 @@ const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const pretty = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
 
 /** The sole Enki 2.0 runtime applies only the Pi entry; OpenCode is optional 0.2.x compatibility. */
-export const PI_REQUIRED = "Нужна запись Pi (providerId и provider): только её применяет среда выполнения Enki 2.0. Блок OpenCode необязателен и нужен лишь ещё не обновлённым клиентам Enki 0.2.x.";
+export const PI_REQUIRED = "Укажите идентификатор провайдера и параметры подключения, чтобы модель была доступна в Enki.";
 
 /** A new catalog entry: Pi only (no OpenCode executable or provider is required). */
 export function newCatalogModel(index: number): HubModel {
@@ -63,6 +63,7 @@ function ModelDraft({
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
+  const [compatibility, setCompatibility] = useState(false);
   const ocText = model.opencode ? pretty(model.opencode.provider) : "";
   const piText = model.pi ? pretty(model.pi.provider) : "";
   const [draft, setDraft] = useState({
@@ -88,18 +89,18 @@ function ModelDraft({
       };
       if (draft.opencodeId.trim() || draft.opencodeProvider.trim()) {
         if (!PROVIDER_ID.test(draft.opencodeId.trim()))
-          throw new Error("providerId OpenCode (совместимость 0.2.x): без пробелов, до 64 символов");
+          throw new Error("Идентификатор внешнего провайдера: без пробелов, до 64 символов");
         next.opencode = {
           providerId: draft.opencodeId.trim(),
-          provider: parseJson(draft.opencodeProvider, "provider OpenCode"),
+          provider: parseJson(draft.opencodeProvider, "Параметры внешнего клиента"),
         };
       }
       if (draft.piId.trim() || draft.piProvider.trim()) {
         if (!PROVIDER_ID.test(draft.piId.trim()))
-          throw new Error("providerId Pi: без пробелов, до 64 символов");
+          throw new Error("Идентификатор провайдера: без пробелов, до 64 символов");
         next.pi = {
           providerId: draft.piId.trim(),
-          provider: parseJson(draft.piProvider, "provider Pi"),
+          provider: parseJson(draft.piProvider, "Параметры подключения"),
         };
       }
       if (!next.pi) throw new Error(PI_REQUIRED);
@@ -126,9 +127,8 @@ function ModelDraft({
             <span>{model.id}</span>
             <small>
               {model.pi
-                ? [`Pi: ${model.pi.providerId}`, model.opencode ? `совместимость 0.2.x (OpenCode): ${model.opencode.providerId}` : null]
-                  .filter(Boolean).join(" · ")
-                : "Нет записи Pi — Enki 2.0 эту модель не применяет"}
+                ? `Провайдер: ${model.pi.providerId}`
+                : "Подключение модели не настроено"}
             </small>
             {model.note ? <small>{model.note}</small> : null}
           </div>
@@ -168,17 +168,17 @@ function ModelDraft({
             ))}
             {(
               [
-                ["providerId Pi", "piId", "local-artemis", "Обязательно: эту запись применяет среда выполнения Enki."],
-                ["provider Pi (JSON)", "piProvider", pretty({ baseUrl: "http://127.0.0.1:18008/v1", api: "openai-completions", apiKey: "local", models: [] }), "Обязательно: адрес и модели для среды выполнения Enki."],
+                ["Идентификатор провайдера", "piId", "local-artemis", "Обязательно: эту запись применяет среда выполнения Enki."],
+                ["Подключение модели (JSON)", "piProvider", pretty({ baseUrl: "http://127.0.0.1:18008/v1", api: "openai-completions", apiKey: "local", models: [] }), "Обязательно: адрес и модели для среды выполнения Enki."],
                 ["Привязки сервиса Hub (JSON)", "controlBindings", pretty({"artemis31-v100": "artemis31-v100"}), "Пусто — модель без управления через Hub."],
-                ["providerId OpenCode (совместимость 0.2.x)", "opencodeId", "local-artemis", "Необязательно: только для ещё не обновлённых клиентов Enki 0.2.x; Enki 2.0 не запускает OpenCode и эту запись не применяет."],
-                ["provider OpenCode (JSON, совместимость 0.2.x)", "opencodeProvider", pretty({ npm: "@ai-sdk/openai-compatible", options: { baseURL: "http://127.0.0.1:18021/v1", apiKey: "local" }, models: {} }), "Необязательно: пусто — клиенты 0.2.x эту модель не получат."],
+                ["Идентификатор внешнего провайдера", "opencodeId", "local-artemis", "Необязательно: запись для клиентов с форматом каталога OpenCode. На подключение Enki не влияет."],
+                ["Подключение внешнего клиента (JSON)", "opencodeProvider", pretty({ npm: "@ai-sdk/openai-compatible", options: { baseURL: "http://127.0.0.1:18021/v1", apiKey: "local" }, models: {} }), "Необязательно: параметры подключения для внешнего клиента."],
               ] as const
-            ).map(([title, key, placeholder, hint]) => (
+            ).filter(([, key]) => compatibility || !key.startsWith("opencode")).map(([title, key, placeholder, hint]) => (
               <div className="setting-row" key={key}>
                 <div className="setting-label">
                   <label htmlFor={`catalog-${index}-${key}`}>{title}</label>
-                  {key === "controlBindings" && <SettingHelp topic={title} description="JSON-объект: идентификатор модели в каталоге Pi → точный идентификатор в реестре сервиса. Каждая настроенная модель должна иметь привязку. Hub проверяет её перед загрузкой; названия моделей для маршрутизации не используются."/>}
+                  {key === "controlBindings" && <SettingHelp topic={title} description="JSON-объект: идентификатор модели в каталоге Enki → точный идентификатор в реестре сервиса. Каждая настроенная модель должна иметь привязку. Hub проверяет её перед загрузкой; названия моделей для маршрутизации не используются."/>}
                   <small>{hint}</small>
                 </div>
                 <div className="setting-control">
@@ -194,6 +194,7 @@ function ModelDraft({
                 </div>
               </div>
             ))}
+            <button type="button" className="btn small ghost" aria-expanded={compatibility} onClick={() => setCompatibility(value => !value)}>Совместимость с внешними клиентами</button>
             {error ? <p role="alert" className="composer-error">{error}</p> : null}
             <div className="setting-row">
               <div className="setting-label" />

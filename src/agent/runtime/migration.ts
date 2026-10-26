@@ -19,7 +19,7 @@ export async function reconcileOpenCodeImport(error: unknown, source: string, pr
       if (!(readError instanceof ConnectionError) || ++readFailures >= 3) throw readError;
       await pause(); continue;
     }
-    if (!port.current() || info.sources.opencode !== source) throw new Error("Источник переноса истории изменился; исходные данные сохранены.");
+    if (!port.current() || info.sources.opencode !== source) throw new Error("Источник истории изменился; исходные данные сохранены.");
     const jobs = info.journal.filter(job => job.kind === "opencode" && !known.has(job.id));
     if (!jobId) {
       if (jobs.length !== 1) throw error;
@@ -34,9 +34,9 @@ export async function reconcileOpenCodeImport(error: unknown, source: string, pr
       return;
     }
     if (!["staging", "snapshotted", "verified", "publishing"].includes(job.state))
-      throw new Error("Перенос истории остановлен. Исходная база сохранена; подробности доступны в журнале миграции.");
+      throw new Error("Подготовка истории остановлена. Исходная база сохранена; подробности доступны в журнале импорта.");
     if (lastPhase !== job.state) { port.notify(job.state); lastPhase = job.state; }
     await pause();
   }
-  throw new Error("Перенос большой истории ещё не подтверждён. Исходная база сохранена; проверьте журнал миграции перед повтором.");
+  throw new Error("Подготовка истории ещё не подтверждена. Исходная база сохранена; проверьте журнал импорта перед повтором.");
 }

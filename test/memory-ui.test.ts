@@ -67,7 +67,7 @@ it('allows revoking the native memory grant when Hub is unavailable',async()=>{
  const original=await projects.get(scope);scope={...scope,server:'http://127.0.0.1:4096'};await projects.bind(scope,original!.projectID,original!.title,null);platform.native=true;
  const grant={scope:{...scope,project:original!.projectID},enabled:true,revision:1};vi.mocked(readRetrieval).mockResolvedValue({grant,key:'project-0123456789abcdef',registered:true});
  vi.mocked(connectRetrieval).mockResolvedValue({grant:{...grant,enabled:false,revision:2},key:'project-0123456789abcdef',registered:false});vi.mocked(memoryPage).mockRejectedValue(Error('Hub offline'));
- await mount(null);await until(()=>expect(node.querySelector('[role=alert]')?.textContent).toContain('Hub offline'));expect(button('Отключить поиск агентам').disabled).toBe(false);
- const observations=vi.mocked(synchronizeMemorySources).mock.calls.length;await click('Отключить поиск агентам');await until(()=>expect(button('Подключить поиск обоим агентам').disabled).toBe(true));
+ await mount(null);await until(()=>expect(node.querySelector('[role=alert]')?.textContent).toContain('Hub offline'));expect(button('Отключить память').disabled).toBe(false);
+ const observations=vi.mocked(synchronizeMemorySources).mock.calls.length;await click('Отключить память');await until(()=>expect(button('Подключить память').disabled).toBe(true));
  expect(connectRetrieval).toHaveBeenCalledWith(grant.scope,false);expect(synchronizeMemorySources).toHaveBeenCalledTimes(observations);expect(node.textContent).toContain('Поиск отключён');
 });

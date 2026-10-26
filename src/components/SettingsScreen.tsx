@@ -25,7 +25,7 @@ export const SETTINGS_SECTIONS = [
   { id: "updates", title: "Обновления", group: "Приложение", icon: "settings", description: "Версии и резервные копии", keywords: "stable preview резервные восстановление обновление" },
   { id: "skillQuality", title: "Качество навыков", group: "Общие возможности", icon: "file", description: "Сравнение версий и откат навыков", keywords: "skill тест испытания baseline candidate" },
   { id: "general", title: "Общее", group: "Приложение", icon: "settings", description: "Рабочее пространство и удалённые компьютеры", keywords: "сервер адрес endpoint ssh хост" },
-  { id: "engines", title: "Обзор агента", group: "Агенты", icon: "chat", description: "Среда выполнения Enki (Pi SDK) и архив OpenCode", keywords: "engine движок агент Pi OpenCode модель архив" },
+  { id: "engines", title: "Обзор агента", group: "Агент", icon: "chat", description: "Подключение агента и состояние истории чатов", keywords: "engine движок агент Pi OpenCode модель архив" },
   { id: "appearance", title: "Внешний вид", group: "Приложение", icon: "sun", description: "Тема, основной цвет, размеры шрифтов и ширина чата", keywords: "оформление акцент интерфейс текст код межстрочный интервал светлая тёмная" },
   { id: "usage", title: "Использование", group: "Приложение", icon: "monitor", description: "Расход токенов по моделям и дням", keywords: "метрики статистика токены модель кэш расход" },
   { id: "images", title: "Изображения", group: "Общие возможности", icon: "file", description: "Генерация изображений и наборов иконок", keywords: "CPU OpenVINO API картинки рисование текстуры icons" },
@@ -38,7 +38,7 @@ export const SETTINGS_SECTIONS = [
   { id: "modelServices", title: "Сервисы моделей", group: "Общие возможности", icon: "server", description: "Переключение моделей, загрузка и доступные агенты", keywords: "inference api модели loader прогресс Pi OpenCode" },
   { id: "modelCatalog", title: "Модели (Hub)", group: "Общие возможности", icon: "file", description: "Общий каталог моделей на Hub и применение на этом устройстве", keywords: "hub каталог модели opencode pi провайдер синхронизация windows mac" },
   { id: "helper", title: "Сервисы помощника", group: "Общие возможности", icon: "server", description: "Обработка PDF, аудио и видео на CPU-контейнере", keywords: "вложения файлы контейнер Proxmox PDF видео аудио MCP" },
-  { id: "pi", title: "Агент Enki", group: "Агенты", icon: "chat", description: "Модели, расширения, политика доступа и LSP встроенной среды выполнения", keywords: "pi sdk движок engine модель расширение lsp язык сервер runtime" },
+  { id: "pi", title: "Агент Enki", group: "Агент", icon: "chat", description: "Модели, расширения, политика доступа и LSP встроенной среды выполнения", keywords: "pi sdk движок engine модель расширение lsp язык сервер runtime" },
   { id: "about", title: "О приложении", group: "Приложение", icon: "code", description: "Версия приложения и состояние сервера", keywords: "диагностика поток событий SSE провайдеры" },
 ] as const;
 type Section = typeof SETTINGS_SECTIONS[number]["id"];
@@ -129,7 +129,7 @@ export function SettingsScreen() {
       <div className="settings-window-drag" data-tauri-drag-region />
       <button ref={back} className="settings-back" onClick={() => requestExit("close")}><Icon name="arrowDown" size={17} style={{ transform: "rotate(90deg)" }}/>Вернуться в приложение</button>
       <div className="settings-search"><Icon name="search" size={16}/><input type="search" aria-label="Поиск настроек" placeholder="Поиск настроек…" value={query} onChange={e => setQuery(e.target.value)}/></div>
-      <nav aria-label="Разделы настроек">{["Приложение", "Общие возможности", "Агенты"].map(group => <div className="settings-nav-group" key={group}><div className="settings-nav-label">{group}</div>{SETTINGS_SECTIONS.filter(x => x.group === group).map(item => <button key={item.id} aria-current={!query && section === item.id ? "page" : undefined} onClick={() => navigate(item.id)}><Icon name={item.icon} size={17}/>{item.title}</button>)}</div>)}</nav>
+      <nav aria-label="Разделы настроек">{["Приложение", "Общие возможности", "Агент"].map(group => <div className="settings-nav-group" key={group}><div className="settings-nav-label">{group}</div>{SETTINGS_SECTIONS.filter(x => x.group === group).map(item => <button key={item.id} aria-current={!query && section === item.id ? "page" : undefined} onClick={() => navigate(item.id)}><Icon name={item.icon} size={17}/>{item.title}</button>)}</div>)}</nav>
       <span className="settings-sidebar-version">Enki {appVersion}</span>
     </aside>
     <div className="settings-main" ref={content}><div className="settings-window-drag" data-tauri-drag-region/><div className="settings-page">
@@ -157,8 +157,8 @@ export function SettingsScreen() {
         {section === "engines" && <>
 
         <Group title="Агент">
-          <Row title="Среда выполнения Enki" description="Встроенный агент (Pi SDK) выполняет все чаты этого компьютера или выбранного SSH-хоста. Отдельный процесс агента не запускается."><span>{s.connection.phase === "connected" ? `Подключена · ${s.connection.version ?? ""}` : "Не подключена"}</span><button className="btn" onClick={() => navigate("pi")}>Настроить агента</button></Row>
-          <Row title="Архив OpenCode" description="Прежние чаты OpenCode доступны только для чтения. Продолжение создаёт новый чат Enki с перенесённой историей; исходный архив не меняется."><span>Только чтение</span></Row>
+          <Row title="Среда выполнения Enki" description="Агент Enki выполняет задачи на этом компьютере или выбранном удалённом компьютере. Запускается вместе с приложением."><span>{s.connection.phase === "connected" ? `Подключена · ${s.connection.version ?? ""}` : "Не подключена"}</span><button className="btn" onClick={() => navigate("pi")}>Настроить агента</button></Row>
+          <Row title="История чатов" description="Чаты из внешних источников доступны для чтения. Кнопка «Продолжить чат» создаёт рабочий чат с их контекстом. Источник остаётся доступен отдельно."><span>Сохраняется на устройстве</span></Row>
           <Row title="Поток событий"><span>{s.connection.streamState}</span></Row>
         </Group>
       </>}

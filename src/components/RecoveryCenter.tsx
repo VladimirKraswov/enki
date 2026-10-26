@@ -35,13 +35,13 @@ export function RecoveryCenter({workspace, close}:{workspace:string; close:()=>v
         {quit.filter(q=>q.endpoint===store.state.prefs.endpoint).map(q=><article key={q.sessionId}><b>Остановка не подтверждена</b><p>При закрытии приложения агент не ответил. Проверьте состояние чата.</p><button className="btn small" disabled={!!busy} onClick={()=>void run(q.sessionId,async()=>{await store.openAttentionChat(q.sessionId,q.directory);close();})}>Открыть чат</button></article>)}
         {!issues.length&&<p className="muted">Нет ожидающих ответов и ошибок в загруженных чатах.</p>}
         {issues.map(item=><article key={item.id}><b>{item.title}</b><p>{item.reason}</p><button className="btn small" disabled={!!busy} onClick={()=>void run(item.id,async()=>{await store.openAttentionChat(item.id,item.directory);close();})}>Открыть чат</button></article>)}
-        {store.cutoverIssues().length>0&&<div className="context-panel-header"><h3>Перенос из прежней версии</h3></div>}
+        {store.cutoverIssues().length>0&&<div className="context-panel-header"><h3>Восстановление сохранённых заданий</h3></div>}
         {store.cutoverIssues().map(item=><article key={item.id}>
-          <b>{item.kind==='queue'?'Запрос очереди не перенесён':'Таймер не перенесён'}</b>
-          <p>{item.state==='received'?'Перенос ещё не завершён; содержимое сохранено.':item.reason ?? 'Нужна ваша проверка.'} Ничего не отправлялось.</p>
+          <b>{item.kind==='queue'?'Запрос очереди требует восстановления':'Таймер требует восстановления'}</b>
+          <p>{item.state==='received'?'Восстановление ещё не завершено; содержимое сохранено.':item.reason ?? 'Нужна ваша проверка.'} Ничего не отправлялось.</p>
           <div className="btn-row">
-            {item.retryable&&<button className="btn small" disabled={!!busy} onClick={()=>void run(item.id,()=>store.retryCutover(item.id))}>Повторить перенос</button>}
-            {item.state==='quarantined'&&<button className="btn small" disabled={!!busy} title="Сохранённая копия останется в журнале среды выполнения" onClick={()=>void run(item.id,()=>store.resolveCutover(item.id))}>Больше не переносить</button>}
+            {item.retryable&&<button className="btn small" disabled={!!busy} onClick={()=>void run(item.id,()=>store.retryCutover(item.id))}>Повторить восстановление</button>}
+            {item.state==='quarantined'&&<button className="btn small" disabled={!!busy} title="Сохранённая копия останется в журнале среды выполнения" onClick={()=>void run(item.id,()=>store.resolveCutover(item.id))}>Не восстанавливать</button>}
           </div>
         </article>)}
         <div className="context-panel-header"><h3>Журнал отправок</h3><label><input type="checkbox" checked={all} onChange={e=>setAll(e.target.checked)}/> Все</label></div>
@@ -49,7 +49,7 @@ export function RecoveryCenter({workspace, close}:{workspace:string; close:()=>v
         {shown.map(record=><article key={record.id}>
           <div className="recovery-title"><b>{labels[record.state]}</b><time>{new Date(record.updatedAt).toLocaleString()}</time></div>
           <p className="recovery-preview" title={record.text}>{record.text||'Вложения'}</p>
-          <small>{record.engine} · {record.model}{record.attachments ? ` · Файлов: ${record.attachments.files.length}` : ''}</small>
+          <small>{record.engine === 'pi' ? 'Enki' : 'Источник: OpenCode'} · {record.model}{record.attachments ? ` · Файлов: ${record.attachments.files.length}` : ''}</small>
           <div className="btn-row">
             <button className="btn small" disabled={!!busy} onClick={()=>void run(record.id,async()=>{await store.openAttentionChat(record.sessionId,record.directory);close();})}>Открыть чат</button>
             {['dispatching','uncertain'].includes(record.state)&&<button className="btn small" disabled={!!busy} onClick={()=>void run(record.id,()=>store.reconcileOperation(record))}>Проверить доставку</button>}

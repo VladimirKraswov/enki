@@ -32,7 +32,7 @@ it('every active native build phase, including runtime preparation, is cancellab
  const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind:'source',channel:'stable',digest:'c'.repeat(64)}:action==='status'?{...native,build:{stage,version:'1.0.1'}}:{});
  const c=new UpdateController(call as Transport,async()=>{});await c.check();await c.download();
  for(const active of ACTIVE_BUILD_STAGES){stage=active;await c.refresh();expect(c.compiling()).toBe(true);expect(BUILD_STAGE_TEXT[active]).toBeTruthy();c.setChannel('preview');expect(c.snapshot().channel).toBe('stable');}
- expect(BUILD_STAGE_TEXT.runtime).toMatch(/среды выполнения/);
+ expect(BUILD_STAGE_TEXT.runtime).toMatch(/Подготовка компонентов Enki/);
  stage='runtime';await c.refresh();await c.cancel();
  expect(call.mock.calls.filter(([action])=>action==='cancel')).toHaveLength(1);
  stage='error';await c.refresh();expect(c.compiling()).toBe(false);

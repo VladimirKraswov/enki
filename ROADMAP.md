@@ -3,7 +3,7 @@
 - [x] Actual owner archive imported read-only:255 sessions/47239 messages/211229 parts.
 - [x] UI archive reads now project one tail page, preserving cursors and V1/V2 order without expanding the complete transcript; full import validation remains strict. Five reader regressions, ten integration checks and167 public SDK tests pass. Actual200-message tail:5.607s,~121MiB peak RSS.
 - [x] Lost import acknowledgement follows its exact durable job/source/archive with bounded read-only reconciliation and connection fencing; no repeated POST. Six focused UI checks pass. A separate continuation deadline allows the measured25-second seed and fails boundedly at120seconds without replay; its regression passes.
-- [ ] Canonical2.0.1 publication, fresh runtime/native package/current CI and actual owner archive/workshop/continuation acceptance.
+- [x] Canonical2.0.1 publication, fresh runtime/native package/current CI and actual owner archive/workshop/continuation acceptance.
 
 # Enki roadmap
 
@@ -33,7 +33,13 @@ separately. Focused regression counts are not a full-suite or live-model claim.
 - Source: three compact chat controls; named keyboard actions for terminal, changes, handoff and recovery. Context prioritizes schedules/results/children/sources; timer details and technical tools expand on demand. Long titles retain fixed action slots.
 - Source: model picker groups owned local models, authenticated paid routes and explicitly free API routes. SDK catalogue alone is not access or pricing proof. Read-only discovery is bounded, cached, credential-scoped and cancellable; unloaded Hub models remain selectable without loading a GPU.
 - Source: explicit credential-only Pi transfer preserves existing keys, Hub models and legacy files. Idle SDK defaults no longer display a false working badge or empty extension bar.
-- Focused UI/runtime regressions and dark/light isolated real-component preview passed. Full canonical qualification, platform CI, publication and owner installation are pending; source version alone does not establish delivery.
+- [x] Canonical gates, exact three-platform CI, both signed Hub packets and owner installation verified. Actual native compact toolbar/context and idle state checked; DeepSeek key-only import and local/paid picker verified after owner OS permission. Original CLI data unchanged; owned builds cleaned.
+
+## Independent application language (2.0.3)
+
+- Main settings, model catalog, memory, history and recovery use Enki terminology. Optional external imports and compatibility fields are secondary; data provenance and recovery actions remain available.
+- Generic progress appears once in the chat; explicit extension progress, draft conflicts and recovery remain visible when relevant.
+- Focused43 and all1100 frontend tests, build and isolated UI checks passed. Original copy assertions updated to requested terminology; behavior checks retained. Canonical release and installed UI verification pending.
 
 ## Reference image editing and bounded revisions (0.2.115)
 

@@ -42,10 +42,10 @@ it("the UI texts state what really happened to open chats and to the Pi import",
   const { configSummary, configImportError } = await import("../src/components/PiSettings");
   const status: ConfigStatusDTO = { state: "none", code: null, configRevision: 0, generationId: null, deferred: [] };
   expect(configSummary(null, null)).toBe("Состояние неизвестно");
-  expect(configSummary({ ...status, pendingRestart: { configRevision: 1, generationId: "g" } }, null)).toMatch(/после перезапуска/);
+  expect(configSummary({ ...status, pendingRestart: { configRevision: 1, generationId: "g" } }, null)).toMatch(/Ожидает перезапуска/);
   expect(configSummary({ ...status, state: "ready" }, { model: { providerID: "p", modelID: "m" }, code: null })).toMatch(/p\/m/);
   expect(configSummary({ ...status, state: "ready" }, { model: null, code: "CONFIG_DEFAULT_MODEL_UNAVAILABLE" })).toMatch(/недоступна/);
-  expect(configImportError(new Error("CONFIG_SOURCE_UNCONFIGURED: x"))).toMatch(/не задан каталог прежних настроек Pi/);
+  expect(configImportError(new Error("CONFIG_SOURCE_UNCONFIGURED: x"))).toMatch(/Источник импорта не настроен/);
 });
 
 it("the client speaks the merged runtime contract for defaults and refresh", async () => {

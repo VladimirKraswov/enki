@@ -9,7 +9,7 @@ vi.mock("../src/agent/runtime/pluginUi/active", () => ({ activePluginUi: { subsc
 vi.mock("../src/components/PluginTerminalSurface", () => ({ PluginTerminalSurface: () => null }));
 import { PluginUiPanel } from "../src/components/PluginUiPanel";
 afterEach(() => { document.body.innerHTML = ""; vi.unstubAllGlobals(); });
-it("the SDK visibility preference never claims an idle chat is working; real busy/idle changes drive the badge", () => {
+it("generic activity is shown only by the chat; explicit extension progress follows real busy state", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fake.view = { phase: "live", generation: 1, mode: { custom: false, terminalInput: false }, notices: [], snapshot: {
     state: { statuses: { extension: "Расширение подключено" }, working: { visible: true, message: null }, widgets: [] }, pendingDraft: null, pendingSubmission: null,
@@ -22,11 +22,18 @@ it("the SDK visibility preference never claims an idle chat is working; real bus
     expect(node.querySelector(".plugin-ui-working")).toBeNull();
     expect(node.textContent).toContain("Расширение подключено");
     fake.running = true; act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
-    expect(node.querySelector(".plugin-ui-working")?.textContent).toBe("Агент выполняет запрос…");
+    expect(node.querySelector(".plugin-ui-working")).toBeNull();
+    fake.view.snapshot.state.working.message = "Проверка файлов: 3 из 10";
+    act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
+    expect(node.querySelector(".plugin-ui-working")?.textContent).toBe("Проверка файлов: 3 из 10");
     fake.running = false; act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
     expect(node.querySelector(".plugin-ui-working")).toBeNull();
     expect(node.textContent).toContain("Интерфейс расширения");
     fake.view.snapshot.state.statuses = {};
+    act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
+    expect(node.textContent).toBe("");
+    fake.running = true;
+    fake.view.snapshot.state.working.message = "   ";
     act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
     expect(node.textContent).toBe("");
     draft = { kind: "conflict", local: "my draft", canonical: { text: "other window", revision: 2 }, message: "Черновик изменён в другом окне" };

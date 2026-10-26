@@ -60,7 +60,7 @@ it("offers the private helper separately from ASR and MCP and validates its loop
 it("never offers an external agent install, endpoint or CLI path: the runtime is bundled", () => {
   click('Обзор агента');
   expect(document.body.textContent).toContain('Среда выполнения Enki');
-  expect(document.body.textContent).toContain('Архив OpenCode');
+  expect(document.body.textContent).toContain('История чатов');
   expect([...document.querySelectorAll('button')].some(e => /Установить OpenCode|Настроить OpenCode/.test(e.textContent ?? ''))).toBe(false);
   expect(document.querySelector('[aria-label="Путь к OpenCode CLI"]')).toBeNull();
   expect(document.querySelector('[aria-label="Адрес локального сервера OpenCode"]')).toBeNull();
@@ -75,7 +75,7 @@ it("keeps shared capability drafts when navigating and warns on exit",()=>{
 
 it("shows one executing agent and no OpenCode configuration sections",()=>{
  const nav=document.querySelector('nav[aria-label="Разделы настроек"]')!;
- expect([...nav.querySelectorAll('.settings-nav-label')].map(x=>x.textContent)).toEqual(['Приложение','Общие возможности','Агенты']);
+ expect([...nav.querySelectorAll('.settings-nav-label')].map(x=>x.textContent)).toEqual(['Приложение','Общие возможности','Агент']);
  expect([...nav.querySelectorAll('button')].filter(x=>x.textContent==='Агент Enki')).toHaveLength(1);
  expect([...nav.querySelectorAll('button')].filter(x=>x.textContent==='OpenCode')).toHaveLength(0);
  expect(nav.textContent).not.toContain('Разрешения OpenCode');

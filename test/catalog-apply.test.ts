@@ -48,7 +48,7 @@ it('removes only previously managed providers for a published empty catalog', as
 it('refuses an active imported generation and a remote runtime without writing anything', async () => {
   for (const state of ['ready', 'blocked'] as const) {
     const client = port('{}', { state });
-    await expect(applyCatalog({ version: 2, models: [model] }, prefs, { client, remote: false })).rejects.toThrow(/импортированные настройки/);
+    await expect(applyCatalog({ version: 2, models: [model] }, prefs, { client, remote: false })).rejects.toThrow(/Настройки моделей загружены из внешнего профиля/);
     expect(client.saveModelsConfig).not.toHaveBeenCalled();
   }
   const remote = port('{}');

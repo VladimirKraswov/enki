@@ -73,12 +73,15 @@ export function PluginUiPanel({ sessionId, directory }: { sessionId: string; dir
   const state = snapshot.state;
   const statuses = Object.entries(state.statuses);
   const showSurface = expanded || view.mode.custom || view.mode.terminalInput;
-  if (!showSurface && !(running && state.working.visible) && !statuses.length && !state.widgets.length && !notices.length
+  // ChatView already owns the generic activity indicator. Only an explicit
+  // extension message adds useful information here.
+  const workingMessage = running && state.working.visible ? state.working.message?.trim() : undefined;
+  if (!showSurface && !workingMessage && !statuses.length && !state.widgets.length && !notices.length
       && !snapshot.pendingDraft && !snapshot.pendingSubmission && active.draft.stash === null
       && draft.kind !== "conflict" && draft.kind !== "retrying" && !actionError) return null;
   return <div className="plugin-ui" aria-label="Расширения чата">
     <div className="plugin-ui-bar">
-      {running && state.working.visible && <span className="plugin-ui-working" role="status" title="Агент выполняет текущий запрос. Индикатор исчезнет после завершения.">{state.working.message ?? "Агент выполняет запрос…"}</span>}
+      {workingMessage && <span className="plugin-ui-working" role="status">{workingMessage}</span>}
       {statuses.map(([key, text]) => <span key={key} className="plugin-ui-status" title={key}>{text}</span>)}
       <span style={{ flex: 1 }} />
       <button type="button" className="btn small ghost" aria-expanded={showSurface} disabled={view.mode.custom}
@@ -106,7 +109,7 @@ export function PluginUiPanel({ sessionId, directory }: { sessionId: string; dir
     </div>}
     {draft.kind === "retrying" && <div className="workspace-progress" role="status">Черновик не подтверждён ({draft.message}). Повторяю ту же правку…</div>}
     {active.draft.stash !== null && draft.kind !== "conflict" && <div className="workspace-progress" role="status">
-      <span>Ваш прежний текст сохранён.</span>
+      <span>Ваш черновик сохранён.</span>
       <button type="button" className="btn small ghost" onClick={() => active.draft.restoreStash()}>Вернуть мой текст</button>
     </div>}
     {actionError && <div className="composer-error" role="alert">{actionError}</div>}

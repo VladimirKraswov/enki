@@ -73,7 +73,7 @@ export function UsageSettings() {
   const money = computed?.money ?? null;
   const notes = (computed?.notes ?? []).filter((note, index, list) => list.indexOf(note) === index);
   return <div className="usage-settings">
-    <p className="settings-intro">Статистика по ответам агента Enki, включая импортированные архивы.</p>
+    <p className="settings-intro">Статистика по ответам агента и сохранённой истории чатов.</p>
     <div className="usage-toolbar">
       <div className="usage-periods" role="group" aria-label="Период использования"><SettingHelp topic="usage.period" title="Период и подсчёт токенов"/>
         {([ ["7d", "7 дней"], ["30d", "30 дней"], ["all", "Всё время"] ] as const).map(([key, title]) => <button key={key} className="btn" aria-pressed={period === key} onClick={() => setPeriod(key)}>{title}</button>)}
