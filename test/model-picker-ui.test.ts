@@ -24,7 +24,7 @@ it("keeps offline rows selectable and refresh accessible, including an empty cat
     act(() => root.render(createElement(SelectMenu, { ...props, refreshing: true, refreshError: "offline" })));
     expect([...document.querySelectorAll("button")].find(b => b.textContent === "Обновление…")?.disabled).toBe(true);
     act(() => root.render(createElement(SelectMenu, { ...props, options: [], refreshError: "offline" })));
-    expect(document.body.textContent).toContain("Настроенных моделей пока нет.");
+    expect(document.body.textContent).toContain("Доступных моделей пока нет.");
     expect(document.querySelector('[role="status"]')?.textContent).toBe("offline");
     act(() => root.render(createElement(SelectMenu, props)));
     act(() => (document.querySelector('[role="option"]') as HTMLButtonElement).click());
@@ -52,6 +52,27 @@ it("tints DeepSeek rows during peak hours and shows the cheaper-in countdown", (
     // A row without the hint stays untinted.
     const plain = rows.find(r => r.textContent?.includes("Local"));
     expect(plain!.className).not.toContain("select-option-peak");
+  } finally { act(() => root.unmount()); }
+});
+
+it("labels sections without making their headings selectable and removes empty sections after search", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const node = document.createElement("div"); document.body.append(node); const root = createRoot(node);
+  const options = [
+    { value: "local/qwen", label: "Qwen", section: "Мои локальные модели" },
+    { value: "cloud/deepseek", label: "DeepSeek", section: "Платные модели" },
+    ...Array.from({ length: 7 }, (_, i) => ({ value: `free/${i}`, label: `Free ${i}`, section: "Бесплатные модели" })),
+  ];
+  try {
+    act(() => root.render(createElement(SelectMenu, { label: "Модель", value: "local/qwen", options, onChange: () => {} })));
+    act(() => node.querySelector("button")!.click());
+    expect([...document.querySelectorAll('[role="group"]')].map(g => g.getAttribute("aria-label"))).toEqual(["Мои локальные модели", "Платные модели", "Бесплатные модели"]);
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(9);
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Поиск: Модель"]')!;
+    act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "DeepSeek"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    expect(document.querySelectorAll('[role="group"]')).toHaveLength(1);
+    expect(document.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Платные модели");
   } finally { act(() => root.unmount()); }
 });
 

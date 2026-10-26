@@ -1079,12 +1079,14 @@ class Store {
       this.mutate({
         providers: prov.all ?? [],
         connectedProviderIds: prov.connected ?? [],
+        modelCatalogChecking: prov.checking === true,
         providerDefaults: prov.default ?? null,
         configDefaultAgent: null,
         configModel: null,
         compaction: compactionOf(settings),
         agents: [],
       });
+      if (prov.checking) void this.settleModelCatalog(backend);
     } catch (e) {
       if (gen === this.directoryGeneration && backend === this.backend) {
         if (directory && e instanceof ApiError && (e.filesystemDenied || e.status >= 500))
@@ -2007,7 +2009,8 @@ class Store {
     });
   }
 
-  /** Configured models remain visible; access evidence is a badge, not a filter. */
+  /** Configured entries for connection diagnostics. The chat picker separately
+   * requires current access; the SDK's unrelated built-ins never become rows. */
   piModelOptions(): {
     providerID: string;
     modelID: string;
@@ -2024,7 +2027,7 @@ class Store {
       source: "catalog" | "custom";
       verified: boolean;
     };
-    const out: Option[] = this.state.providers.flatMap((provider) => Object.values(provider.models).map((m) => ({
+    const out: Option[] = this.configuredProvidersWithModels().flatMap((provider) => Object.values(provider.models).map((m) => ({
       providerID: provider.id,
       modelID: m.id,
       label: m.name ?? m.id,
@@ -2271,6 +2274,22 @@ class Store {
     this.persistPrefs();
   }
 
+  private modelCatalogueWait: { backend: RuntimeBackend; generation: number; promise: Promise<void> } | null = null;
+  /** One bounded response after background discovery, so a missed startup SSE
+   * cannot leave the menu checking forever. No polling or navigation wait. */
+  private settleModelCatalog(backend: RuntimeBackend): Promise<void> {
+    if (this.modelCatalogueWait?.backend === backend && this.modelCatalogueWait.generation === this.connectionGeneration) return this.modelCatalogueWait.promise;
+    const generation = this.connectionGeneration, signal = this.globalAbort?.signal;
+    const promise = backend.client.providersSettled(signal).then(providers => {
+      if (generation !== this.connectionGeneration || backend !== this.runtime || signal?.aborted) return;
+      this.mutate({ providers: providers.all ?? [], connectedProviderIds: providers.connected ?? [], providerDefaults: providers.default ?? null, modelCatalogChecking: providers.checking === true });
+    }).catch(() => {
+      if (generation === this.connectionGeneration && backend === this.runtime && !signal?.aborted)
+        this.mutate({ modelCatalogChecking: false });
+    }).finally(() => { if (this.modelCatalogueWait?.promise === promise) this.modelCatalogueWait = null; });
+    this.modelCatalogueWait = { backend, generation, promise }; return promise;
+  }
+
   connectedProvidersWithModels(): ProviderInfo[] {
     return this.state.providers.filter((p) =>
       this.state.connectedProviderIds.includes(p.id),
@@ -2293,7 +2312,8 @@ class Store {
         const all = prov.all ?? [];
         const kept = errors.length ? this.state.providers.filter(p => !all.some(n => n.id === p.id)) : [];
         const connected = [...new Set([...(prov.connected ?? []), ...this.state.connectedProviderIds.filter(id => kept.some(p => p.id === id))])];
-        this.mutate({ providers: [...all, ...kept], connectedProviderIds: connected, providerDefaults: prov.default ?? null });
+        this.mutate({ providers: [...all, ...kept], connectedProviderIds: connected, providerDefaults: prov.default ?? null, modelCatalogChecking: prov.checking === true });
+        if (prov.checking) void this.settleModelCatalog(backend);
       }
       if (errors.length) throw new Error(errors.join("\n"));
     });
@@ -3156,6 +3176,7 @@ class Store {
   }
 
   private handleEvent(event: ServerEvent): void {
+    if (event.type === "provider.catalog.updated") return; // Global stream owns the catalogue snapshot.
     // An event too large for the wire (e.g. a big attachment in a part) was
     // replaced by a stub: that chat's history is authoritative and re-read.
     if (event.type === "event.oversized") {
@@ -3361,6 +3382,13 @@ class Store {
       onEvent: ({ directory, payload }) => {
         if (generation !== this.connectionGeneration || backend !== this.runtime ||
             !payload || typeof payload.type !== "string") return;
+        if (payload.type === "provider.catalog.updated") {
+          void backend.providers(ctrl.signal, null).then(providers => {
+            if (generation !== this.connectionGeneration || backend !== this.runtime || ctrl.signal.aborted) return;
+            this.mutate({ providers: providers.all ?? [], connectedProviderIds: providers.connected ?? [], providerDefaults: providers.default ?? null, modelCatalogChecking: providers.checking === true });
+          }).catch(() => undefined);
+          return;
+        }
         if (payload.type === "session.model_migrated") {
           if (!ctrl.signal.aborted) this.projectMigratedModel(payload.properties, directory);
           return;

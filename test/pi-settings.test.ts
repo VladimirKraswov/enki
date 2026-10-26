@@ -9,7 +9,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { DEFAULT_PREFS } from '../src/state/prefs';
 import { runtimeFixture, type RuntimeFixture } from './helpers/runtime-fixture';
-const fake=vi.hoisted(()=>({state:{} as any,backend:null as any,host:null as object|null,settingsListeners:new Set<(s:any)=>void>(),checkPiModelAccess:vi.fn(),getModelChoice:vi.fn(()=>null),setPiSettings:vi.fn(),setPiCustomModel:vi.fn(),setupPiLsp:vi.fn()}));
+const fake=vi.hoisted(()=>({state:{} as any,backend:null as any,host:null as object|null,settingsListeners:new Set<(s:any)=>void>(),checkPiModelAccess:vi.fn(),getModelChoice:vi.fn(()=>null),setPiSettings:vi.fn(),setPiCustomModel:vi.fn(),setupPiLsp:vi.fn(),refreshModelCatalog:vi.fn()}));
 // onRuntimeSettings mirrors Store.onRuntimeSettings: `runtime.settings` events of the connected runtime.
 vi.mock('../src/state/store',()=>({useAppState:()=>fake.state,errText:(e:unknown)=>String(e),store:{...fake,maybeBackend:()=>fake.backend,piModelOptions:()=>[],hostLabel:()=>'Этот компьютер',
   currentHost:()=>fake.host,onRuntimeSettings:(l:(s:any)=>void)=>{fake.settingsListeners.add(l);return()=>{fake.settingsListeners.delete(l);};},
@@ -189,4 +189,15 @@ it('a remote host cannot toggle this computer\'s language servers',async()=>{
  fake.host={};await act(async()=>root.render(createElement(PiSettings,{onDirtyChange:dirty})));
  click('Расширения и LSP');
  expect(lsp().disabled).toBe(true);expect(document.body.textContent).toContain('Только на этом компьютере');
+});
+
+it('transfers only missing credentials explicitly and shows feedback above the model list', async()=>{
+ fx.on('POST','/credentials/import-pi',()=>({imported:['deepseek'],kept:['local'],failed:[]}));
+ click('Модели');
+ expect(fx.made('POST','/credentials/import-pi')).toHaveLength(0);
+ await act(async()=>click('Перенести ключи'));
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Перенесено ключей: 1. Существующих сохранено: 1.'));
+ expect(fx.made('POST','/legacy/pi-agent')).toHaveLength(0);
+ const status=document.querySelector('.settings-notice')!, group=document.querySelector('[aria-label="Модели"]')!;
+ expect(status.compareDocumentPosition(group)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

@@ -44,6 +44,7 @@ function ContextContents({ server, sid, directory }: { server: string; sid: stri
   const scope = attachmentScope(server, directory, sid);
   const [notice, setNotice] = useState("");
   const [proposed, setProposed] = useState<Outcome | null>(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const close = () => store.setUi({ contextOpen: false });
 
   useEffect(() => {
@@ -79,20 +80,14 @@ function ContextContents({ server, sid, directory }: { server: string; sid: stri
   return <aside id={CONTEXT_PANEL_ID} className="context-panel" ref={panel} tabIndex={-1} aria-labelledby="context-panel-title"
     onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); close(); } }}>
     <div className="context-panel-header">
-      <h2 id="context-panel-title">Контекст задачи</h2>
+      <h2 id="context-panel-title">В этом чате</h2>
       <button className="icon-btn" aria-label="Закрыть контекст задачи" onClick={close}><Icon name="close" size={16}/></button>
     </div>
     {!sid && <p className="context-note">Откройте чат.</p>}
-    {sid && <TaskDiagnostics chat={chat}/>}
-    {sid && <OutcomeSection scope={{server,directory:directory??"",sessionID:sid,engine:RUNTIME_AGENT_ID}} requests={(chat?.messageOrder??[]).filter(id=>chat?.messages[id]?.role==="user").map(id=>({id,label:safeLabel((chat?.partsByMessage[id]??[]).map(p=>chat?.parts[p]).filter(p=>p?.type==="text"&&!p.synthetic).map(p=>p?.text??"").join(" "),100)}))} onOpen={jump} onPropose={card=>setProposed({...card})}/>}
-    <MemorySection server={server} directory={directory} proposed={proposed}/>
-    <ProjectMapSection server={server} directory={directory}/>
-    {sid && <section aria-labelledby="context-skill-title">
-      <div className="context-section-title"><h3 id="context-skill-title">Навык по опыту чата</h3></div>
-
-      <button className="btn small ghost" onClick={draftSkill}>Подготовить создание навыка</button>
-    </section>}
     <ScheduleSection scheduler={scheduler} server={server} directory={directory} sessionID={sid} />
+    {sid && <details className="context-disclosure"><summary>Запросы и подтверждения</summary>
+    {sid && <OutcomeSection scope={{server,directory:directory??"",sessionID:sid,engine:RUNTIME_AGENT_ID}} requests={(chat?.messageOrder??[]).filter(id=>chat?.messages[id]?.role==="user").map(id=>({id,label:safeLabel((chat?.partsByMessage[id]??[]).map(p=>chat?.parts[p]).filter(p=>p?.type==="text"&&!p.synthetic).map(p=>p?.text??"").join(" "),100)}))} onOpen={jump} onPropose={card=>{setProposed({...card});setToolsOpen(true);}}/>}
+    </details>}
     <FileSection id="results" title="Результаты" files={context.results} empty="Результатов пока нет."
       action={{ label: "Подготовить запрос на создание результата", disabled: !sid, run: draftResult }}
       icon="file" describe={resultOrigin} onOpen={jump} />
@@ -100,6 +95,19 @@ function ContextContents({ server, sid, directory }: { server: string; sid: stri
     <FileSection id="sources" title="Источники" files={context.sources} empty="Источников пока нет."
       action={{ label: "Добавить источник в черновик", disabled: !sid || !!s.ui.sending, run: addSource }}
       icon="folder" describe={f => f.mime ? `Вложение · ${safeLabel(f.mime, 60)}` : "Вложение"} onOpen={jump} />
+    <details className="context-disclosure" open={toolsOpen} onToggle={event => setToolsOpen(event.currentTarget.open)}><summary>Память, инструменты и диагностика</summary>
+    {toolsOpen && <>
+    {sid && <TaskDiagnostics chat={chat}/>}
+
+    <MemorySection server={server} directory={directory} proposed={proposed}/>
+    <ProjectMapSection server={server} directory={directory}/>
+    {sid && <section aria-labelledby="context-skill-title">
+      <div className="context-section-title"><h3 id="context-skill-title">Навык по опыту чата</h3></div>
+
+      <button className="btn small ghost" onClick={draftSkill}>Подготовить создание навыка</button>
+    </section>}
+    </>}
+    </details>
     {notice && <p className="context-error" role="alert">{notice}</p>}
     {sid && moreHistory && <p className="context-note">
       {moreHistory && <button className="btn small ghost" disabled={s.ui.historyLoading} onClick={() => void store.loadOlderMessages(sid)}>

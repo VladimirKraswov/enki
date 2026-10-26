@@ -82,6 +82,7 @@ export interface AppState {
   chat: ChatRootState;
   providers: ProviderInfo[];
   connectedProviderIds: string[];
+  modelCatalogChecking?: boolean;
   providerDefaults: Record<string, string> | null;
   configDefaultAgent: string | null;
   configModel: string | null;

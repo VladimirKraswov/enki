@@ -1,5 +1,6 @@
 import { modelServices, isSwitching } from "../models/services";
 import { compactModelName } from "../models/display";
+import { availablePickerModels } from "../models/picker";
 import { ModelSwitchStatus } from "./ModelSwitchStatus";
 import { ModelSelectionDialog } from "./ModelSelectionDialog";
 import { HostPicker } from "./WorkspacePicker";
@@ -164,32 +165,11 @@ export function Composer() {
   useEffect(() => { selectionAbort.current?.abort(); selectionTicket.current++; refreshTicket.current++; setSelection(null); setRefreshError(""); setRefreshing(false); }, [selectionScope]);
   useEffect(() => () => { selectionAbort.current?.abort(); selectionScopeRef.current = ""; selectionTicket.current++; refreshTicket.current++; }, []);
 
-  const modelList = useMemo(() => {
-    const out: {
-      providerID: string;
-      modelID: string;
-      label: string;
-      detail?: string;
-    }[] = [];
-    // The runtime's own catalogue (built-in + configured providers); access evidence is a badge.
-    const options = store.piModelOptions();
-    for (const m of options.filter(m => modelServices.visible(m.providerID, m.modelID, engineId)))
-      out.push({
-        providerID: m.providerID,
-        modelID: m.modelID,
-        label: compactModelName(m.label),
-        detail: `${m.label} · ${m.providerID}${m.verified ? " · проверена ранее" : " · требует проверки"}`,
-      });
-    for (const m of modelServices.configuredModels(engineId)) {
-      // A service binding supplements the runtime catalogue; it never adds unknown providers.
-      if (!options.some(o => o.providerID === m.providerID)) continue;
-      const existing = out.find(o => o.providerID === m.providerID && o.modelID === m.modelID);
-      const detail = `${m.label} · ${m.providerID} · ${modelServices.errorFor(m.providerID, m.modelID) ? "сервис недоступен" : "проверка при выборе"}`;
-      if (existing) existing.detail = detail;
-      else out.push({ ...m, label: compactModelName(m.label), detail });
-    }
-    return out;
-  }, [providers, s.prefs.pi?.verifiedModels, s.prefs.pi?.verifiedModel, switches.revision]);
+  const modelList = useMemo(() => availablePickerModels(providers, s.connectedProviderIds,
+    (provider, model) => modelServices.manages(provider, model) && modelServices.visible(provider, model, engineId))
+    .filter(m => modelServices.visible(m.providerID, m.modelID, engineId))
+    .map(m => ({ ...m, label: compactModelName(m.label) })),
+  [providers, s.connectedProviderIds, switches.revision, engineId]);
 
   const refreshModels = async () => {
     if (refreshing) return;
@@ -359,20 +339,22 @@ export function Composer() {
             label="Модель"
             className="composer-model-picker"
             disabled={running || s.ui.sending || switching || !!selection?.pending}
-            value={modelList.length === 0
-              ? "Настройте модель в разделе «Модели»"
-              : choice ? `${choice.providerID}/${choice.modelID}` : ""}
+            value={choice ? `${choice.providerID}/${choice.modelID}` : ""}
+            fallbackLabel={s.modelCatalogChecking ? "Проверка доступных моделей…" : choice
+              ? `${compactModelName(store.modelInfo(choice.providerID, choice.modelID)?.name ?? choice.modelID)} · доступ не подтверждён`
+              : "Выберите доступную модель"}
             options={modelList.map((m) => {
               const peak = m.providerID === "deepseek" ? deepseekPeakStatus(priceNow) : null;
               return {
                 value: `${m.providerID}/${m.modelID}`,
                 label: m.label,
-                detail: m.detail ?? m.providerID,
+                detail: m.detail,
+                section: m.section,
                 peak: peak?.peak && peak.untilMs != null ? { note: `дешевле через ${formatUntilCheap(peak.untilMs)}` } : undefined,
               };
             })}
             onRefresh={() => void refreshModels()}
-            refreshing={refreshing}
+            refreshing={refreshing || s.modelCatalogChecking === true}
             refreshError={refreshError}
             onChange={(value) => {
               const [providerID, ...rest] = value.split("/");

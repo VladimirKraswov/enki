@@ -151,6 +151,19 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
     } catch (e) { if (current()) setError(configImportError(e)); }
     finally { if (current()) setBusy(false); }
   };
+  const importKeys = async () => {
+    const { backend, current } = captureRuntime();
+    if (!backend || !current() || store.currentHost()) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const result = await backend.client.importPiCredentials();
+      if (!current()) return;
+      setNotice(`Перенесено ключей: ${result.imported.length}. Существующих сохранено: ${result.kept.length}.`);
+      if (result.failed.length) setError(result.failed.map(item => `${item.provider}: ${item.reason}`).join(" "));
+      await store.refreshModelCatalog();
+    } catch (e) { if (current()) setError(configImportError(e)); }
+    finally { if (current()) setBusy(false); }
+  };
   useEffect(() => { void load(); }, [connected, workspace, backendForRender]);
   // `runtime.settings` from the connected runtime (any window or client) replaces the shown values.
   useEffect(() => store.onRuntimeSettings(settings => setRuntime(current => current ? settings : current)), []);
@@ -190,6 +203,10 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
         ["runtime", "Среда выполнения"], ["models", "Модели"], ["extensions", "Расширения и LSP"], ["capabilities", "Возможности"],
       ].map(([id, title]) => <button key={id} aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>{title}</button>)}</nav>
 
+      {busy && <p role="status">Обращаюсь к среде выполнения…</p>}
+      {notice && <p role="status" className="settings-notice">{notice}</p>}
+      {error && <p className="composer-error" role="alert">{error}</p>}
+
       <Group title="Среда выполнения" hidden={tab !== "runtime"}>
         <Row title="Состояние" description="Встроенная среда выполнения запускается вместе с Enki; для SSH-хоста — установленная там среда. Отдельный агент не устанавливается.">
           <span>{connected ? `Подключена · ${s.connection.version ?? ""} · ${store.hostLabel()}` : "Не подключена"}</span>
@@ -223,6 +240,9 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
         <Row title="Выбранная модель" description="Настроенная модель — ещё не доступ. Проверка отправляет один минимальный запрос через среду выполнения.">
           <span>{access ? `${access.ok ? "Подтверждён" : "Не подтверждён"} · ${access.detail}` : prefs.verifiedModel ? `Подтверждён ранее: ${prefs.verifiedModel}` : "Не проверялся"}</span>
           <button className="btn" disabled={busy || !connected || !store.getModelChoice()} onClick={() => { const choice = store.getModelChoice(); if (choice) void checkModel(`${choice.providerID}/${choice.modelID}`); }}>Проверить</button>
+        </Row>
+        <Row title="Ключи прежнего Pi" description="Переносит только отсутствующие ключи в хранилище ОС. Существующие ключи, модели и настройки Enki сохраняются; исходные файлы Pi не изменяются.">
+          <button className="btn" disabled={busy || !connected || !!store.currentHost()} onClick={() => void importKeys()}>Перенести ключи</button>
         </Row>
         <Row title="Настройки прежнего Pi" description="Однократный явный перенос models.json и ключей из каталога прежнего Pi в хранилище Enki. Исходные файлы не изменяются; применяется после перезапуска Enki.">
           <span>{configSummary(config.status, config.defaults)}</span>
@@ -307,9 +327,6 @@ export function PiSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean)
         <div className="kv"><span>Терминал</span><b>{caps ? caps.pty ? "Есть" : "Недоступен в этой сборке" : "—"}</b></div>
       </Group>
 
-      {busy && <p role="status">Обращаюсь к среде выполнения…</p>}
-      {notice && <p role="status" className="settings-notice">{notice}</p>}
-      {error && <p className="composer-error" role="alert">{error}</p>}
     </section>
   );
 }

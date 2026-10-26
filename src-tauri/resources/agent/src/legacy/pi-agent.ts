@@ -192,12 +192,13 @@ function auth(value: unknown, plan: PiAgentPlan): void {
   }
 }
 /** Explicit caller-selected directory only; all source files are read-only. */
-export function planPiAgentImport(sourceDir: string, options: { origin: string }): PiAgentPlan {
+export function planPiAgentImport(sourceDir: string, options: { origin: string; credentialsOnly?: boolean }): PiAgentPlan {
   if (!validOrigin(options.origin)) reject("invalid_origin", "/");
   const root = directory(sourceDir);
   const plan: PiAgentPlan = { version: 1, origin: options.origin, files: [], sourceHashes: {}, bindings: [], secrets: [], deferred: [],
     discovery: { extensions: false, skills: false, prompts: false, packages: false, project: false } };
   for (const name of ["models.json", "settings.json", "keybindings.json", "auth.json"] as const) {
+    if (options.credentialsOnly && name !== "auth.json") continue;
     const file = path.join(root, name);
     if (!fs.lstatSync(file, { throwIfNoEntry: false })) continue;
     const bytes = readStable(file, 4 * 1024 * 1024);

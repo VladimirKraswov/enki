@@ -20,13 +20,20 @@ Sections below are the 0.2.x history (external OpenCode/Pi engines). 2.0 status:
 - [x] Native profile storage now uses explicit WebView builder settings, including the detached browser viewer. Config conversion in the pinned Tauri omitted these fields; unsupported macOS test profiles fail closed. Mac all-target check/strict Clippy/test compilation and focused profile2/path5 checks passed.
 - [x] V18 actual native test-profile isolation and authenticated Hub catalog read passed. V19 full Windows native232/build-runner6 and Linux package passed. SDK auth reads now use a bounded per-broker queue; six regressions and162 public Node tests passed, including OAuth/CAS and actual concurrent SDK auth.
 - [x] Official Node npm empty directories are normalized together with app dependencies before signing; both trees validate before deletion, shared traversal limits retained. Public native-port/artifact/prepare37 passed/1 Windows skip; original strict inventory unchanged. Windows packaging regression before the fix is retained.
-- [ ] Fresh final runtime/native package, current three-platform CI, ordinary Hub/model/material acceptance, canonical publication and owner replacement/cleanup. Earlier V13 profile isolation failed and was restored before V18 qualification; do not treat an ancestor package as the final release.
+- [x] Stable 2.0.1: exact three-platform CI, genuine prepared runtime, signed Mac app/DMG, canonical Hub receipt and both verified packets; owner app replaced and all 31611 installed files verified. Real history imported (255 chats); protected workshop and explicit bounded continuation verified; ordinary Qwen Medium/PBR acceptance completed. Original CLI sources remain unchanged; earlier profile failures and final evidence retained privately.
 
 Full release gates and platform builds follow [VERIFICATION](docs/VERIFICATION.md).
 A version in source does not establish publication or installation: verify the
 canonical signed Hub receipt, served source/UI packets and the installed build
 separately. Focused regression counts are not a full-suite or live-model claim.
 - [ ] Separate live acceptance: Windows Job/NTFS first update and rollback, remote Linux host install/update/rollback, ordinary-user upgrade from 0.2.x.
+
+## Compact task context and available models (2.0.2)
+
+- Source: three compact chat controls; named keyboard actions for terminal, changes, handoff and recovery. Context prioritizes schedules/results/children/sources; timer details and technical tools expand on demand. Long titles retain fixed action slots.
+- Source: model picker groups owned local models, authenticated paid routes and explicitly free API routes. SDK catalogue alone is not access or pricing proof. Read-only discovery is bounded, cached, credential-scoped and cancellable; unloaded Hub models remain selectable without loading a GPU.
+- Source: explicit credential-only Pi transfer preserves existing keys, Hub models and legacy files. Idle SDK defaults no longer display a false working badge or empty extension bar.
+- Focused UI/runtime regressions and dark/light isolated real-component preview passed. Full canonical qualification, platform CI, publication and owner installation are pending; source version alone does not establish delivery.
 
 ## Reference image editing and bounded revisions (0.2.115)
 

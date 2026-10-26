@@ -113,6 +113,7 @@ export interface ModelRuntimeOptions {
 /** Projection bound to a model runtime: every session opened on it gets the
  * preflight and header injector, including ephemeral model-access checks. */
 const projections = new WeakMap<SdkModelRuntime, ConfigProjection>();
+const modelConfigPaths = new WeakMap<SdkModelRuntime, string>();
 
 export async function createModelRuntime(options: ModelRuntimeOptions): Promise<SdkModelRuntime> {
   const credentials = options.credentials.kind === "vault" ? options.credentials.store
@@ -129,6 +130,7 @@ export async function createModelRuntime(options: ModelRuntimeOptions): Promise<
     ...(credentials ? { credentials } : {}),
   });
   if (options.config) projections.set(runtime, options.config);
+  modelConfigPaths.set(runtime, options.config?.modelsPath ?? `${options.agentDir}/models.json`);
   return runtime;
 }
 
@@ -512,9 +514,51 @@ export function catalogSnapshot(runtime: SdkModelRuntime): CatalogProvider[] {
   }));
 }
 
+/** Private request material for read-only access discovery. Never a protocol DTO.
+ * Skip command-backed/config auth: listing models must not execute a configured
+ * API-key command. Explicit model requests retain the SDK's normal semantics. */
+export async function catalogueRequest(runtime: SdkModelRuntime, model: SdkModel, signal: AbortSignal): Promise<{ baseURL: string; headers: Record<string, string>; subscription: boolean } | null> {
+  configProjection(runtime)?.assertAdmissible(model.provider);
+  const status = runtime.getProviderAuthStatus(model.provider);
+  if (!status.configured || !["stored", "runtime", "environment", "models_json_key", "fallback"].includes(status.source ?? "")) return null;
+  const commandHeaders = (value: unknown): boolean => !!value && typeof value === "object" && Object.values(value).some(v => typeof v === "string" && v.trimStart().startsWith("!"));
+  const registered = runtime.getRegisteredProviderConfig(model.provider);
+  if (commandHeaders(model.headers) || commandHeaders(registered?.headers)) return null;
+  const file = modelConfigPaths.get(runtime);
+  if (file && fs.existsSync(file)) {
+    try {
+      if (fs.statSync(file).size > 4 * 1024 * 1024) return null;
+      const providers = JSON.parse(fs.readFileSync(file, "utf8")).providers;
+      const config = providers?.[model.provider];
+      if (commandHeaders(config?.headers) || commandHeaders(config?.modelOverrides?.[model.id]?.headers)
+        || commandHeaders(config?.models?.find((m: { id?: string }) => m.id === model.id)?.headers)) return null;
+    } catch { return null; }
+  }
+  const resolved = await runtime.getAuth(model, { signal });
+  if (!resolved) return null;
+  const headers: Record<string, string> = {};
+  if (resolved.auth.apiKey) {
+    if (model.api === "anthropic-messages") { headers["x-api-key"] = resolved.auth.apiKey; headers["anthropic-version"] ??= "2023-06-01"; }
+    else if (model.api === "google-generative-ai") headers["x-goog-api-key"] = resolved.auth.apiKey;
+    else headers.Authorization = `Bearer ${resolved.auth.apiKey}`;
+  }
+  for (const [name, value] of Object.entries(resolved.auth.headers ?? {})) {
+    for (const k of Object.keys(headers)) if (k.toLowerCase() === name.toLowerCase()) delete headers[k];
+    if (value !== null) headers[name] = value;
+  }
+  for (const [name, value] of configProjection(runtime)?.headersFor(model.provider, model.id) ?? []) {
+    for (const k of Object.keys(headers)) if (k.toLowerCase() === name.toLowerCase()) delete headers[k];
+    if (value !== null) headers[name] = value;
+  }
+  return { baseURL: resolved.auth.baseUrl ?? model.baseUrl, headers, subscription: runtime.isUsingSubscription(model.provider) };
+}
+
 export async function refreshCatalog(runtime: SdkModelRuntime, signal: AbortSignal): Promise<string[]> {
   const result = await runtime.refresh({ allowNetwork: true, signal });
   return [...result.errors.entries()].map(([provider, error]) => `${provider}: ${error.message}`.slice(0, 300));
+}
+export async function refreshCredentialSnapshot(runtime: SdkModelRuntime, signal: AbortSignal): Promise<void> {
+  await runtime.refresh({ allowNetwork: false, signal });
 }
 
 export function modelThinkingLevels(model: SdkModel): string[] {

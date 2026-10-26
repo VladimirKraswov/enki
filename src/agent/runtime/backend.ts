@@ -86,7 +86,7 @@ export class RuntimeBackend implements AgentBackend {
   }
   async providers(signal?: AbortSignal): Promise<ProviderResponse> {
     const providers = await this.client.providers(signal);
-    return { all: providers.all, connected: providers.connected, default: providers.default };
+    return { all: providers.all, connected: providers.connected, default: providers.default, checking: providers.checking };
   }
   /** The runtime has one primary agent; there is no agent catalogue to choose from. */
   async agents() { return []; }

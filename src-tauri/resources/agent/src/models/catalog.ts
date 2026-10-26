@@ -3,6 +3,7 @@
 
 import type { ModelInfoDTO, ProviderDTO, ProvidersDTO } from "../protocol.ts";
 import { catalogSnapshot, modelThinkingLevels, type SdkModel, type SdkModelRuntime } from "../sdk/adapter.ts";
+import { accessFor } from "./access.ts";
 
 export function modelInfo(model: SdkModel): ModelInfoDTO {
   const levels = modelThinkingLevels(model).filter((level) => level !== "off");
@@ -24,14 +25,14 @@ export function modelInfo(model: SdkModel): ModelInfoDTO {
   };
 }
 
-export function providers(runtime: SdkModelRuntime, defaults: { providerID: string; modelID: string } | null): ProvidersDTO {
+export function providers(runtime: SdkModelRuntime, defaults: { providerID: string; modelID: string } | null, access?: Map<string, NonNullable<ModelInfoDTO["access"]>>): ProvidersDTO {
   const all: ProviderDTO[] = catalogSnapshot(runtime).map((provider) => ({
     id: provider.id,
     name: provider.name,
     source: "builtin",
     ...(provider.baseUrl ? { options: { baseURL: provider.baseUrl } } : {}),
     auth: { configured: provider.configured },
-    models: Object.fromEntries(provider.models.map((model) => [model.id, modelInfo(model)])),
+    models: Object.fromEntries(provider.models.map((model) => [model.id, { ...modelInfo(model), ...(access ? { access: accessFor(access, provider.id, model.id) } : {}) }])),
   }));
   return {
     all,

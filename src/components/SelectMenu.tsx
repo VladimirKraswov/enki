@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { FloatingPopover } from "./FloatingPopover";
 import { Icon } from "./Icon";
 export function SelectMenu({
@@ -12,8 +12,10 @@ export function SelectMenu({
   onRefresh,
   refreshing = false,
   refreshError,
+  fallbackLabel,
 }: {
   label: string;
+  fallbackLabel?: string;
   className?: string;
   icon?: string;
   value: string;
@@ -21,6 +23,7 @@ export function SelectMenu({
     value: string;
     label: string;
     detail?: string;
+    section?: string;
     /** Shown but not selectable; `detail` explains why. */
     disabled?: boolean;
     /** DeepSeek peak-hours hint: tints the row and shows the countdown. */
@@ -39,10 +42,11 @@ export function SelectMenu({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const selected = options.find((o) => o.value === value);
   const filtered = options.filter((o) =>
-    (o.label + " " + (o.detail ?? ""))
+    (o.label + " " + (o.detail ?? "") + " " + (o.section ?? ""))
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
+  const sections = [...new Set(filtered.map(o => o.section))];
   return (
     <div
       className={`select-menu ${className ?? ""}`}
@@ -57,7 +61,7 @@ export function SelectMenu({
           e.preventDefault();
           const rows = [
             ...(popupRef.current?.querySelectorAll<HTMLButtonElement>(
-              "[role=option]",
+              "[role=option]:not(:disabled)",
             ) ?? []),
           ];
           const i = rows.indexOf(document.activeElement as HTMLButtonElement);
@@ -74,7 +78,7 @@ export function SelectMenu({
         aria-label={label}
         aria-haspopup={onRefresh ? "dialog" : "listbox"}
         aria-expanded={open}
-        title={selected ? [selected.label, selected.detail].filter(Boolean).join(" · ") : value || label}
+        title={selected ? [selected.label, selected.detail].filter(Boolean).join(" · ") : fallbackLabel || value || label}
         disabled={disabled}
         onClick={() => {
           setOpen(!open);
@@ -83,7 +87,7 @@ export function SelectMenu({
       >
         {icon && <Icon name={icon} size={16}/>}
         <span>
-          {selected?.label ?? value ?? label}
+          {selected?.label ?? fallbackLabel ?? (value || label)}
         </span>
         <Icon name="down" size={13} />
       </button>
@@ -102,7 +106,8 @@ export function SelectMenu({
             />
           )}
           <div className="select-options" role={onRefresh ? "listbox" : undefined} aria-label={onRefresh ? label : undefined}>
-            {filtered.map((o) => (
+            {sections.map(section => {
+              const rows = filtered.filter(o => o.section === section).map((o) => (
               <button
                 role="option"
                 className={o.peak ? "select-option-peak" : undefined}
@@ -124,13 +129,17 @@ export function SelectMenu({
                 </span>
                 {o.value === value && <Icon name="check" size={15} />}
               </button>
-            ))}
+              ));
+              return section ? <div key={section} role="group" aria-label={section} className="select-section">
+                <div className="select-section-title" aria-hidden="true">{section}</div>{rows}
+              </div> : <Fragment key="ungrouped">{rows}</Fragment>;
+            })}
           </div>
           {onRefresh && <div className="select-refresh">
             <button type="button" disabled={refreshing} onClick={onRefresh}>
               <Icon name="refresh" size={14}/>{refreshing ? "Обновление…" : "Обновить список"}
             </button>
-            {!filtered.length && <small>Настроенных моделей пока нет.</small>}
+            {!filtered.length && <small>Доступных моделей пока нет.</small>}
             {refreshError && <small role="status">{refreshError}</small>}
           </div>}
         </FloatingPopover>

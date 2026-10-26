@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { activePluginUi, type ActiveUi } from "../agent/runtime/pluginUi/active";
 import type { DraftSyncState } from "../agent/runtime/pluginUi/draftSync";
 import type { PluginUiView } from "../agent/runtime/pluginUi/session";
@@ -6,8 +6,6 @@ import type { UiWidget } from "../agent/runtime/pluginUi/types";
 import { store, useAppSelector, errText } from "../state/store";
 import type { AppState } from "../state/types";
 import { PluginTerminalSurface } from "./PluginTerminalSurface";
-
-const panelSnapshot = (s: AppState) => ({ connected: s.connection.phase === "connected", theme: String(s.prefs.theme) });
 
 const NO_VIEW: PluginUiView = { phase: "connecting", detail: "", snapshot: null, mode: { custom: false, terminalInput: false }, draftRevision: -1, generation: 0, notices: [] };
 const OFFLINE: DraftSyncState = { kind: "offline" };
@@ -45,7 +43,8 @@ export function PluginUiBelowComposer() {
  */
 export function PluginUiPanel({ sessionId, directory }: { sessionId: string; directory: string }) {
   // Only what the panel shows: streamed chat deltas must not re-render it.
-  const { connected, theme } = useAppSelector(panelSnapshot);
+  const selectPanel = useCallback((s: AppState) => ({ connected: s.connection.phase === "connected", theme: String(s.prefs.theme), running: store.isRunning(sessionId) }), [sessionId]);
+  const { connected, theme, running } = useAppSelector(selectPanel);
   const client = connected ? store.client : null;
   useEffect(() => {
     if (!client) return;
@@ -74,9 +73,11 @@ export function PluginUiPanel({ sessionId, directory }: { sessionId: string; dir
   const state = snapshot.state;
   const statuses = Object.entries(state.statuses);
   const showSurface = expanded || view.mode.custom || view.mode.terminalInput;
+  if (!showSurface && !(running && state.working.visible) && !statuses.length && !state.widgets.length && !notices.length
+      && !snapshot.pendingDraft && !snapshot.pendingSubmission && !active.draft.stash && !actionError) return null;
   return <div className="plugin-ui" aria-label="Расширения чата">
     <div className="plugin-ui-bar">
-      {state.working.visible && <span className="plugin-ui-working" role="status">{state.working.message ?? "Работаю…"}</span>}
+      {running && state.working.visible && <span className="plugin-ui-working" role="status" title="Агент выполняет текущий запрос. Индикатор исчезнет после завершения.">{state.working.message ?? "Агент выполняет запрос…"}</span>}
       {statuses.map(([key, text]) => <span key={key} className="plugin-ui-status" title={key}>{text}</span>)}
       <span style={{ flex: 1 }} />
       <button type="button" className="btn small ghost" aria-expanded={showSurface} disabled={view.mode.custom}

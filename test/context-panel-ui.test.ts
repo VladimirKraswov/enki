@@ -113,6 +113,9 @@ it("cancels child reads when an SSH runtime's forwarded endpoint changes under t
 
 it("prepares a common skill request in the selected chat without replacing its draft or starting work",async()=>{
  await mount();
+ expect([...document.querySelectorAll("button")].some(b=>b.textContent==="Подготовить создание навыка")).toBe(false);
+ await act(async()=>[...document.querySelectorAll("summary")].find(b=>b.textContent==="Память, инструменты и диагностика")!.click());
+ await vi.waitFor(()=>expect([...document.querySelectorAll("button")].some(b=>b.textContent==="Подготовить создание навыка")).toBe(true));
  await act(async()=>[...document.querySelectorAll("button")].find(b=>b.textContent==="Подготовить создание навыка")!.click());
  const request=fake.setDraft.mock.calls[0][0] as string;
  expect(request).toMatch(/^user draft\n\n/);

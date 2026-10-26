@@ -198,6 +198,7 @@ export interface ModelInfoDTO {
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   variants?: Record<string, { id: string }> | null;
   thinkingLevelMap?: Record<string, string | null>;
+  access?: { state: "available" | "unavailable" | "unknown"; kind?: "local" | "paid" | "free" | "subscription"; checkedAt?: number; reason?: string };
 }
 
 export interface ProviderDTO {
@@ -210,6 +211,7 @@ export interface ProviderDTO {
 }
 
 export interface ProvidersDTO {
+  checking?: boolean;
   all: ProviderDTO[];
   connected: string[];
   default: Record<string, string> | null;

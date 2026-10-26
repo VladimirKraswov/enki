@@ -178,6 +178,7 @@ export interface ModelInfo {
   limit?: { context?: number; input?: number; output?: number };
   variants?: Record<string, ModelVariantInfo> | null;
   status?: string;
+  access?: { state: "available" | "unavailable" | "unknown"; kind?: "local" | "paid" | "free" | "subscription"; checkedAt?: number; reason?: string };
 }
 
 export interface ProviderInfo {
@@ -185,10 +186,12 @@ export interface ProviderInfo {
   name?: string;
   source?: string;
   options?: { baseURL?: string };
+  auth?: { configured: boolean; source?: string };
   models: Record<string, ModelInfo>;
 }
 
 export interface ProviderResponse {
+  checking?: boolean;
   all: ProviderInfo[];
   default: Record<string, string> | null;
   connected: string[];

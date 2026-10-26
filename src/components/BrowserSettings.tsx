@@ -95,7 +95,7 @@ function browserButtonTitle(local: boolean, native: boolean, enabled: boolean, p
   return "Открыть встроенную панель браузера агента";
 }
 
-export function BrowserButton() {
+export function BrowserButton({ compact = false }: { compact?: boolean } = {}) {
   const app = useAppState(), setup = useBrowserSetup();
   const [busy, setBusy] = useState(false);
   const native = isNative(), local = isLocalComputer(app.prefs.endpoint, !!store.currentHost());
@@ -136,5 +136,5 @@ export function BrowserButton() {
       await openSessionBrowser({directory, engine, sessionId},current,null,browserNodeProgram(app.prefs));
       if (current()) store.setUi({ browserOpen: true });
     })().catch(error => { if (current()) store.setUi({ toast: `Браузер: ${message(error)}` }); }).finally(() => setBusy(false));
-  }}><Icon name="browser" size={17}/><span>{busy ? "Открываю…" : "Браузер"}</span></button>;
+  }}><Icon name="browser" size={17}/>{!compact && <span>{busy ? "Открываю…" : "Браузер"}</span>}</button>;
 }

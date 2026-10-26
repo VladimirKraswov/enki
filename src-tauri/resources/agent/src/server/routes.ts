@@ -13,15 +13,17 @@ import { legacyPiDigest, type PiCliMeta } from "../legacy/pi-cli.ts";
 import { validPiId } from "../legacy/pi-jsonl.ts";
 import { CutoverInputError, validBatch } from "../migration/cutover.ts";
 import { checkModelAccess } from "../models/check.ts";
+import { accessFor } from "../models/access.ts";
 import { providers } from "../models/catalog.ts";
 import { VaultCredentialStore } from "../models/credentials.ts";
+import { importLegacyCredentials } from "../models/import-credentials.ts";
 import { fileContent, listFiles } from "../platform/files.ts";
 import { validDirectory } from "../platform/paths.ts";
 import {
   API_PREFIX, CONTRACT_VERSION, EVENT_FRAME_CHARACTERS, SCHEMA_VERSION, SDK_VERSION, isId, isModelRef, isPromptPart, isReadOnlyOrigin, validateCommand,
   type CapabilitiesDTO, type EventEnvelope, type HealthDTO, type ModelRef, type PermissionRule, type PromptPart, type SessionDTO,
 } from "../protocol.ts";
-import { refreshCatalog, trustStore } from "../sdk/adapter.ts";
+import { refreshCatalog, refreshCredentialSnapshot, trustStore } from "../sdk/adapter.ts";
 import { MAX_MINUTES } from "../schedule/scheduler.ts";
 import { sessionDTO, validRules, type SessionRecord } from "../sessions/catalog.ts";
 import { ForkRefused } from "../sessions/registry.ts";
@@ -476,10 +478,22 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
 
   // --------------------------------------------------------------- models
   r("GET", "/providers", () => {
-    const first = runtime.modelRuntime.getAvailableSnapshot()[0];
-    return providers(runtime.modelRuntime, first ? { providerID: first.provider, modelID: first.id } : null);
+    void runtime.modelAccess?.refresh();
+    const access = runtime.modelAccess?.snapshot();
+    const first = runtime.modelRuntime.getAvailableSnapshot().find(m => !access || accessFor(access, m.provider, m.id)?.state === "available");
+    return { ...providers(runtime.modelRuntime, first ? { providerID: first.provider, modelID: first.id } : null, access), checking: runtime.modelAccess?.checking ?? false };
   });
-  r("POST", "/providers/refresh", async (request) => ({ errors: await refreshCatalog(runtime.modelRuntime, AbortSignal.any([request.signal, AbortSignal.timeout(30_000)])) }));
+  r("GET", "/providers/settled", async request => {
+    await runtime.modelAccess?.settled(request.signal);
+    const access = runtime.modelAccess?.snapshot();
+    const first = runtime.modelRuntime.getAvailableSnapshot().find(m => !access || accessFor(access, m.provider, m.id)?.state === "available");
+    return { ...providers(runtime.modelRuntime, first ? { providerID: first.provider, modelID: first.id } : null, access), checking: runtime.modelAccess?.checking ?? false };
+  });
+  r("POST", "/providers/refresh", async (request) => {
+    const errors = await refreshCatalog(runtime.modelRuntime, AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]));
+    runtime.modelAccess?.invalidate(); void runtime.modelAccess?.refresh();
+    return { errors };
+  });
   r("POST", "/models/check", async (request) => {
     const body = object(request.body);
     const providerID = textParam(body.providerID, "providerID", 512), modelID = textParam(body.modelID, "modelID", 512);
@@ -492,6 +506,23 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     } catch (error) { return { ok: false, detail: error instanceof Error ? error.message : String(error) }; }
   });
   r("GET", "/models/hub", () => ({ available: runtime.config.broker.available() }));
+  r("POST", "/credentials/import-pi", async request => {
+    if (runtime.config.host !== "local" || runtime.config.credentials !== "vault" || runtime.config.broker.kind !== "supervisor") throw new HttpError(409, "Перенос ключей доступен только на этом компьютере с хранилищем Enki.");
+    if (!runtime.config.userPiAgentDir) throw new HttpError(409, "Каталог прежнего Pi не задан. Ничего не прочитано.");
+    // Storage-only operation; it does not bypass ConfigProjection's model
+    // admission and never replaces its immutable model/header generation.
+    const store = new VaultCredentialStore(runtime.config.broker);
+    let result;
+    try { result = await importLegacyCredentials(runtime.config.userPiAgentDir, store, provider => runtime.modelRuntime.hasConfiguredAuth(provider), request.signal); }
+    catch (error) {
+      if (error instanceof PiConfigError) throw new HttpError(409, "Файл ключей прежнего Pi не прошёл проверку. Существующие настройки сохранены.");
+      if (request.signal.aborted) throw error;
+      throw new HttpError(409, "Не удалось прочитать ключи прежнего Pi. Проверьте доступ Enki к исходному каталогу.");
+    }
+    await refreshCredentialSnapshot(runtime.modelRuntime, request.signal);
+    runtime.modelAccess?.invalidate();
+    return result;
+  });
   r("POST", "/credentials/:provider", async (request) => {
     const provider = textParam(request.params.provider, "provider", 128);
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(provider)) throw new HttpError(400, "Некорректный провайдер.");
@@ -501,6 +532,7 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     if (key === null) await store.delete(provider);
     else await store.modify(provider, async () => ({ type: "api_key", key: textParam(key, "apiKey", 4096).trim() }));
     await refreshCatalog(runtime.modelRuntime, AbortSignal.timeout(15_000)).catch(() => []);
+    runtime.modelAccess?.invalidate(); void runtime.modelAccess?.refresh();
     return { provider, configured: key !== null };
   });
   // An active imported generation (ready, or blocked with its own models.json)

@@ -13,7 +13,7 @@ export function RecoveryButton() {
   return <><button className="icon-btn" aria-label="Требует внимания и журнал отправок" title="Требует внимания" onClick={() => setOpen(true)}><Icon name="context" size={17}/></button>
     {open && <RecoveryCenter key={workspace} workspace={workspace} close={() => setOpen(false)}/>}</>;
 }
-function RecoveryCenter({workspace, close}:{workspace:string; close:()=>void}) {
+export function RecoveryCenter({workspace, close}:{workspace:string; close:()=>void}) {
   useAppState();
   const [records,setRecords] = useState<Operation[]>([]), [notice,setNotice] = useState(''), [busy,setBusy] = useState(''), [all,setAll] = useState(false);
   const first = useRef<HTMLButtonElement>(null), dialog=useRef<HTMLDialogElement>(null);

@@ -397,6 +397,7 @@ export class RuntimeClient {
 
   // ----------------------------------------------------------------- models
   providers(signal?: AbortSignal) { return this.request<ProvidersDTO>("GET", "/providers", { signal }); }
+  providersSettled(signal?: AbortSignal) { return this.request<ProvidersDTO>("GET", "/providers/settled", { signal, timeoutMs: 35000 }); }
   refreshProviders() { return this.request<{ errors: string[] }>("POST", "/providers/refresh", { body: {}, timeoutMs: 45000 }); }
   checkModel(providerID: string, modelID: string, signal?: AbortSignal) {
     return this.request<{ ok: boolean; detail: string }>("POST", "/models/check", { body: { providerID, modelID }, signal, timeoutMs: 120000 });
@@ -404,6 +405,7 @@ export class RuntimeClient {
   setCredential(provider: string, apiKey: string | null) {
     return this.request<{ provider: string; configured: boolean }>("POST", `/credentials/${encodeURIComponent(provider)}`, { body: { apiKey } });
   }
+  importPiCredentials() { return this.request<{ imported: string[]; kept: string[]; failed: Array<{ provider: string; reason: string }> }>("POST", "/credentials/import-pi", { body: {}, timeoutMs: 120000 }); }
   /** `readOnly` when an imported Pi generation is active (the runtime refuses PUT then). */
   modelsConfig() {
     return this.request<{ path: string; content: string; readOnly?: boolean; source?: "owner" | "imported"; state?: ConfigStatusDTO["state"]; configRevision?: number }>("GET", "/config/models");

@@ -43,6 +43,7 @@ import { AttachmentStore } from "../store/attachments.ts";
 import { CommandLedger } from "../store/commands.ts";
 import { acquireWriterLock, Database, text } from "../store/db.ts";
 import { EventJournal } from "../store/events.ts";
+import { CatalogueAccess } from "../models/access.ts";
 
 export interface RuntimeSettings {
   defaultPolicy: DefaultPolicy;
@@ -158,6 +159,7 @@ export class Runtime {
   registry!: SessionRegistry;
   dispatcher!: Dispatcher;
   modelRuntime!: SdkModelRuntime;
+  modelAccess?: CatalogueAccess;
   private releaseLock: () => void;
   private archiveReaders = new Map<string, OpenCodeArchiveReader>();
   private capabilityScopes = new Map<string, { at: number; scope: CapabilitiesScope | null }>();
@@ -241,6 +243,8 @@ export class Runtime {
         ...(projection.state === "none" ? {} : { config: projection }),
       });
       config.signal?.throwIfAborted();
+      runtime.modelAccess = new CatalogueAccess(runtime.modelRuntime, (p, m) => !!runtime.hub.route(p, m),
+        () => runtime.journal.append(null, null, { type: "provider.catalog.updated", properties: {} }, true), config.allowModelNetwork);
       runtime.wire();
       runtime.recover();
       if (config.initialMaintenance) runtime.maintenance.holdAtStartup();
@@ -797,6 +801,7 @@ export class Runtime {
   }
   stopAdmission(): void {
     this.draining = true; this.admission.stop();
+    this.modelAccess?.cancel();
     this.registry?.setAdmission(false); this.pool.setAdmission(false);
     this.scheduler.setAdmission(false); this.hub.setAdmission(false);
     this.pty.setAdmission(false);
@@ -819,6 +824,7 @@ export class Runtime {
     this.stopAdmission();
     const errors: unknown[] = [];
     const attempt = async (work: () => void | Promise<void>) => { try { await work(); } catch (error) { errors.push(error); } };
+    await attempt(() => this.modelAccess?.close());
     await attempt(() => this.scheduler.stop());
     await attempt(() => this.hub.stop());
     await attempt(() => this.interactions.cancelAll());

@@ -84,7 +84,9 @@ export function ScheduleSection({ scheduler, server, directory, sessionID, showA
       // This window can withdraw its own attempt; another window's send must settle there.
       const foreign = t.state === "dispatching" && status.flight !== t.id;
       return <li className="context-task" key={t.id}>
-        <div className="context-row"><Icon name="clock" size={16}/><strong title={t.prompt}>{t.title}</strong><span>{t.mode === "once" ? "Один раз" : `Каждые ${intervalLabel(t.minutes)}`}</span></div>
+        <details className="context-task-details" open={showAll || t.state === "error" || !!pending || undefined}>
+        <summary className="context-row" aria-label={`Таймер: ${t.title}`} title="Раскрыть задание и управление таймером"><Icon name="clock" size={16}/><strong title={t.prompt}>{t.title}</strong><span>{!t.enabled ? "На паузе" : t.state === "dispatching" ? "Отправка…" : t.mode === "once" ? "Один раз" : `Каждые ${intervalLabel(t.minutes)}`}</span></summary>
+        <div className="context-task-body">
         <small>{modelLabel(t)}</small>
         {showAll && <small title={t.directory}>Чат: {t.sessionID} · {t.directory}{t.server !== server ? " · другое подключение" : ""}</small>}
         <p className="context-note">{t.prompt}</p>
@@ -98,6 +100,7 @@ export function ScheduleSection({ scheduler, server, directory, sessionID, showA
           <button className="btn small ghost" disabled={pending === "remove" || unavailable || foreign}
             onClick={() => void mutate(() => scheduler.remove(t.id))}>Удалить</button>
         </div>
+        </div></details>
       </li>;
     })}</ul>}
     {form && <form id={`${sectionId}-form`} className="context-task-form" onSubmit={e => { e.preventDefault(); void addTask(); }}
