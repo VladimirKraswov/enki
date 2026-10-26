@@ -190,3 +190,28 @@ it("a changed registry blocks startup recovery before another connection can ope
   expect(f.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("настройки подключения изменились"), "warning");
   await f.events.session_shutdown!({});
 });
+
+
+it("six slow but healthy services share two startup slots and all fit the existing deadline", async () => {
+  const f = fixture();
+  const specs = Array.from({length:6}, (_,index) => ({...server,id:`service-${index}`,name:`Service ${index}`}));
+  f.setRegistry(async () => ({servers:specs,sources:[]}));
+  f.connection.tools.mockResolvedValue([{name:"read_project",inputSchema:{type:"object"}}]);
+  let active=0,peak=0;
+  vi.mocked(f.pool.acquire).mockImplementation(async () => {
+    active++;peak=Math.max(peak,active);
+    await new Promise(resolve => setTimeout(resolve,10_000));active--;
+    return {connection:f.connection,release:f.release};
+  });
+  vi.useFakeTimers();
+  try {
+    const start=f.events.session_start!({},f.ctx);
+    await vi.advanceTimersByTimeAsync(60_000);await start;
+    expect(f.tools.size).toBe(6);
+    expect(peak).toBe(2);
+    expect(f.report.mock.calls.at(-1)?.[0].every((status:{state:string})=>status.state==="connected")).toBe(true);
+    expect(f.ctx.ui.notify).not.toHaveBeenCalled();
+    expect(f.connection.call).not.toHaveBeenCalled();
+    await f.events.session_shutdown!({});expect(f.release).toHaveBeenCalledTimes(6);
+  } finally {vi.useRealTimers();}
+});

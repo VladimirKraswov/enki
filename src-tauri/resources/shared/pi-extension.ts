@@ -181,14 +181,22 @@ export function attachShared(pi: ExtensionAPI, options: SharedOptions): void {
           ctx.ui.notify(`${spec.name}: ${catalogRead ? "Сервис вернул несовместимый список инструментов. Проверьте настройки MCP." : MCP_STARTUP_ERROR}`, "warning");
         }
       };
-      for (const spec of specs) {
-        if (!live()) break;
-        await discover(spec, false);
-      }
-      for (const spec of retry) {
-        if (!live()) break;
-        await discover(spec, true);
-      }
+      const pass = async (batch: SharedServerSpec[], recovery: boolean) => {
+        let next = 0;
+        const worker = async () => {
+          while (live()) {
+            const spec = batch[next++];
+            if (!spec) return;
+            await discover(spec, recovery);
+          }
+        };
+        // Two small startup slots avoid a slow optional service consuming the
+        // whole deadline of later healthy services; never spawn an unbounded
+        // process per registry entry. Recovery still starts after every first try.
+        await Promise.all([worker(), worker()]);
+      };
+      await pass(specs, false);
+      await pass(retry, true);
     } catch {
       if (current()) ctx.ui.notify("Не удалось прочитать каталог инструментов MCP. Проверьте его настройки.", "warning");
     } finally {
