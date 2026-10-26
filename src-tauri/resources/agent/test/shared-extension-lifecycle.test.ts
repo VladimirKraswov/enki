@@ -118,3 +118,75 @@ it("shutdown while a call reads the registry never reaches the released connecti
   expect(f.connection.call).not.toHaveBeenCalled();
   await expect(tool.execute("id", {}, new AbortController().signal)).rejects.toThrow(SAFE_ERROR);
 });
+
+
+it("a transient startup handshake recovers once without executing any tool or asking the owner to resend", async () => {
+  const f = fixture();
+  vi.mocked(f.pool.acquire).mockRejectedValueOnce(Error("transport closed private-secret"));
+  const start = f.events.session_start!({}, f.ctx);
+  await vi.waitFor(() => expect(f.pending).toHaveLength(1));
+  f.discovered(0); await start;
+  expect(f.pool.acquire).toHaveBeenCalledTimes(2);
+  expect([...f.tools.keys()]).toEqual(["mesh_demo_read_project"]);
+  expect(f.connection.call).not.toHaveBeenCalled();
+  expect(f.ctx.ui.notify).not.toHaveBeenCalled();
+  expect(f.report.mock.calls.at(-1)?.[0][0].state).toBe("connected");
+  await f.events.session_shutdown!({});
+  expect(f.release).toHaveBeenCalledOnce();
+});
+
+it("discovery failure releases the failed lease before the single recovery attempt", async () => {
+  const f = fixture();
+  f.connection.tools.mockRejectedValueOnce(Error("catalog connection closed"));
+  const start = f.events.session_start!({}, f.ctx);
+  await vi.waitFor(() => expect(f.pending).toHaveLength(1));
+  expect(f.release).toHaveBeenCalledOnce();
+  f.discovered(0); await start;
+  expect(f.pool.acquire).toHaveBeenCalledTimes(2);
+  expect(f.connection.call).not.toHaveBeenCalled();
+  await f.events.session_shutdown!({});
+  expect(f.release).toHaveBeenCalledTimes(2);
+});
+
+
+it("shutdown while recovery checks the registry cannot reconnect or notify over the next generation", async () => {
+  const f = fixture();
+  let reads = 0, finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  f.setRegistry(async () => { if (++reads > 1) await gate; return readRegistry(root, "global"); });
+  vi.mocked(f.pool.acquire).mockRejectedValueOnce(Error("closed"));
+  const start = f.events.session_start!({}, f.ctx);
+  await vi.waitFor(() => expect(reads).toBe(2));
+  await f.events.session_shutdown!({});
+  finish(); await start;
+  expect(f.pool.acquire).toHaveBeenCalledOnce();
+  expect(f.tools.size).toBe(0);
+  expect(f.ctx.ui.notify).not.toHaveBeenCalled();
+  expect(f.connection.call).not.toHaveBeenCalled();
+});
+
+
+it("an uncertain tool-call failure is still sent once and never enters startup recovery", async () => {
+  const f = fixture();
+  const start = f.events.session_start!({}, f.ctx);
+  await vi.waitFor(() => expect(f.pending).toHaveLength(1));
+  f.discovered(0); await start;
+  f.connection.call.mockRejectedValueOnce(Error("private upstream failure"));
+  await expect(f.tools.get("mesh_demo_read_project")!.execute("call", {}, new AbortController().signal)).rejects.toThrow(SAFE_ERROR);
+  expect(f.connection.call).toHaveBeenCalledOnce();
+  expect(f.pool.acquire).toHaveBeenCalledOnce();
+  await f.events.session_shutdown!({});
+});
+
+it("a changed registry blocks startup recovery before another connection can open", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.setRegistry(async () => { const value = await readRegistry(root, "global"); return ++reads === 1 ? value : {...value, servers: [{...server, enabled:false}]}; });
+  vi.mocked(f.pool.acquire).mockRejectedValueOnce(Error("closed"));
+  await f.events.session_start!({}, f.ctx);
+  expect(f.pool.acquire).toHaveBeenCalledOnce();
+  expect(f.tools.size).toBe(0);
+  expect(f.connection.call).not.toHaveBeenCalled();
+  expect(f.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("настройки подключения изменились"), "warning");
+  await f.events.session_shutdown!({});
+});

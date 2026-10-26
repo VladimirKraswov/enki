@@ -1,40 +1,52 @@
-# Текущая задача — Enki 2.0.11 (совместимый UI)
+# Текущая задача — Enki 2.0.12
 
-W `.local/pi-sdk-migration-20261024/review`; evidence stabilize-v34.
-Не запускатьстарые задачи/офисныхагентов/GPU inference/benchmarks.
+Рабочая копия: `.local/pi-sdk-migration-20261024/question-input`.
+Доказательства: `stabilize-v35`; предыдущие `stabilize-v33` и `stabilize-v34`.
+Не запускать старые задания, офисных агентов, GPU-тесты или inference.
 
-Native2.0.8 +hotUI2.0.9 установлены, runtime19583850cfe05f94. Сохраненывсе261
-каталога/архив255/47239/211229, одинпрежнийtombstone. RootR untrackedopencode.json
-и независимыеCLI не трогать. Ownercurrent taskкопируетSD; актуальноечтоонпросил
-неподменятьпрежнимbackup-only. Не прерыватьdd, не отвечатьнавопросывместоowner.
+## Уже доставлено
 
-210/9a25b5f опубликованнаHub/mainпослеoriginalcanonicalgates794.34s:
-1158UI/398runtime/276Rust(+7ignored), exactsource/hot pinned-signatureverified.
-NativeFP464340769d4d200d6d68e2227cae62ebd227ede4c0ae2075d1bdef5f7389f980,
-CI40379015148вработе. 209native отказалstrictWindowsgate иззастарыхпакетов
-вкэшированномtarget/release/agent-runtime. 210исправляет системно build.rs:
-verifiedstage +atomicswap, старыеunknownfilesсохраняютсявнеbundledtree.
-3Rustregressionspassed, реальныйCargooutputравенpreparedmanifest.
-Локальныйprepared210runtime59b738a4d3529d37,29402files,77removedpackages,
-299161539Bremoved. Nodeпокаавтономныйpinned; thin/systemNodeНЕреализованявно.
+Нативная Enki 2.0.10 установлена из квалифицированного пакета GitHub.
+Полная сверка 29407 файлов с install plan, strict codesign прошли.
+Exe SHA256: 338f09d142e8851774d22219252b1538e15203284eab7de0b91a4faa3d72201d.
+Runtime 59b738a4d3529d37 подключён; все 262 каталога чатов сохранены,
+архив 255/47239/211229 и живые JSONL проверены. Один прежний tombstone.
+Микрофон/файлы/скриншоты в вопросах уже входят в установленную версию.
+Совместимый UI 2.0.11 опубликован Hub/main и штатно применён без перезапуска.
+Канонические gates 211 прошли за 621.38с. Пакеты 210 всех трёх ОС прошли CI;
+пакеты 211 запущены отдельно и не выдаются за установленные.
 
-210функции: questionmic/files/clipboard/nativeDrop +durableperquestiondrafts,
-длинныйголосфайломбезобрезки, ACKfence/doubleclick, noquestionclosewhen
-unsent audiorecovery, PiDialogmic. /questions/:id/reply parts→samewaiting
-SDKtool(image/text), SHAblobsbeforeACK, SSe metadata, capabilityguardoldremote,
-cleanupsession-ownedfileswithoutdeletingothers. ActualSDKtestimageinsame
-turn(singleuserentry), browserlight/dark/narrowpassed. Helpers/evidenceH33.
+Активная сессия владельца 10c15e8e-ee2b-4e5b-aeaf-035f3b342e15 была
+приостановлена между командами для установки и возобновлена один раз.
+Её актуальная задача — VM/сервисы; не подменять старой задачей TrimUI/backup.
+Истории, настройки, R/untracked opencode.json и независимые CLI не трогать.
+Системные окна SecurityAgent/Terminal не автоматизировать. CUA owner AX —
+только emit:false и строгий список безопасных строк: старые заголовки содержат
+секреты. Не получать app в разрыве замены bundle.
 
-211fix (UI-only): composerchoice можетбытьdeferredдляСЛЕДУЮЩЕГОхода, поэтому
-questionattachmentsберутactiveSession.model.Воспроизведеноredнастаром210
-всвоемtemporarytestфайле,онудалён,Qclean;20focusedgreen. NativeFPдолжен
-совпастьс210. Далее211cleancommit; сначала датьCI210выпуститьпакеты и штатно
-установитьnative210, проверитьhash/codesign/истории. Затемoriginal
-release:local stable211 сwarmH30/cargo-target/jobs2, freshHub/main, штатныйhotUI211
-безостановкиагентов. Отдельные211nativepackagesнеобъявлятьустановленными/
-готовымираньшефактов. Не менятьimmutable210 и не ослаблятьgates.
+## Новый подтверждённый дефект
 
-Не управлятьSecurityAgent/Terminal. CUAownerAXтолькоemit:false+anchoredfilters:
-sidebarстарыеtitleсодержатсекреты, broadprogressсовпадаетсbashпаролями.
-Не getAppвразрывезаменыbundle. Послеустановки проверитьcapquestionAttachments,
-runtime59...,всесессии/одинGUI, затемубратьтолькосвоистарыебилды.
+Владелец прислал предупреждение генератора: общий MCP недоступен.
+Прямой read-only MCP handshake установленной Enki успешно вернул 8 инструментов
+за 8032мс. В Settings → Изображения реальный API отвечает: SDXL Lightning и
+FLUX.2 Klein загружены. Генерация не запускалась.
+До исправления один сбой discovery оставлял чат без инструментов до открытия
+заново; это воспроизведено двумя красными регрессиями. Исправлено: сначала
+первые проверки всех сервисов, затем один повтор только initialize/list-tools.
+Общий deadline 35с и gate действий сохранены; действия/промпты не повторяются.
+Неудачная lease освобождается до восстановления; epoch/registry/cancel fences
+не допускают поздних инструментов. Успешный повтор не показывает предупреждение.
+Ошибки запуска отделены от ошибок действия; секреты upstream не отображаются.
+
+Профильные проверки: 10 UI и 31 runtime tests прошли (lifecycle/pool/hardening).
+Typecheck и отдельный обзор diff прошли. Далее original `npm run release:local -- stable`,
+fresh Hub/подписанные пакеты, main, native CI 212. Использовать pinned Node
+установленной Enki, CARGO_BUILD_JOBS=2 и тёплый `stabilize-v30/cargo-target`.
+Затем штатно установить native 212 в безопасный момент, проверить hashes,
+подключение MCP, истории и один GUI; возобновлять только действительно
+приостановленную сессию, без дубля при уже активном таймере.
+
+Удалены только доказанные собственные: measurement runtime, Q/src-tauri/target
+и /Applications/.Enki-previous-60420.app (2.0.7). Последнюю 2.0.8 rollback-копию
+и тёплый Cargo target сохранить до окончательной проверки, затем убрать свои
+сборки по подтверждённым путям. Не ослаблять gates и не менять immutable releases.

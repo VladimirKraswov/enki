@@ -59,14 +59,15 @@ it("connection failure does not advertise tools or expose upstream error text", 
   await f.events.session_start({}, f.ctx);
   expect(f.tools.size).toBe(0);
   expect(JSON.stringify(f.ctx.ui.notify.mock.calls)).not.toContain("private-secret");
+  expect(f.pool.acquire).toHaveBeenCalledTimes(2);
   expect(f.report.mock.calls.at(-1)?.[0][0].state).toBe("error");
   await f.events.session_shutdown();
 });
 
 // Ported from capabilities-registry (former OpenCode configureShared): one
 // unavailable optional MCP is reported and never blocks the others; a new
-// session (not a retry loop) is the only further attempt.
-it("an unavailable optional server is reported while the others still attach, and is retried only by a new session", async () => {
+// session can try again after the single bounded read-only recovery.
+it("an unavailable optional server is reported while the others still attach, and gets one read-only recovery before a new session", async () => {
   const f = await fixture();
   await writeFile(path.join(root, "global.json"), JSON.stringify({ version: 1, sources: [], servers: [{ ...server, id: "failing", name: "Unavailable" }, { ...server, id: "working", name: "Working" }] }));
   vi.mocked(f.pool.acquire).mockImplementation(async (spec: any) => {
@@ -76,12 +77,13 @@ it("an unavailable optional server is reported while the others still attach, an
   await f.events.session_start({}, f.ctx);
   expect([...f.tools.keys()]).toEqual(["mesh_working_read_project"]);
   expect(f.report.mock.calls.at(-1)?.[0].map((s: any) => [s.id, s.state])).toEqual([["failing", "error"], ["working", "connected"]]);
-  expect(f.pool.acquire).toHaveBeenCalledTimes(2);
+  expect(f.pool.acquire).toHaveBeenCalledTimes(3);
+  expect(vi.mocked(f.pool.acquire).mock.calls.map(([spec]) => spec.id)).toEqual(["failing", "working", "failing"]);
   expect(JSON.stringify(f.ctx.ui.notify.mock.calls)).not.toContain("private-secret");
   await f.events.session_shutdown();
-  expect(f.pool.acquire).toHaveBeenCalledTimes(2);
+  expect(f.pool.acquire).toHaveBeenCalledTimes(3);
   await f.events.session_start({}, f.ctx);
-  expect(f.pool.acquire).toHaveBeenCalledTimes(4);
+  expect(f.pool.acquire).toHaveBeenCalledTimes(6);
   await f.events.session_shutdown();
 });
 
@@ -89,6 +91,7 @@ it("a namespace collision with an existing tool refuses the whole server instead
   const f = await fixture(["mesh_demo_read_project"]);
   await f.events.session_start({}, f.ctx);
   expect(f.tools.size).toBe(0);
+  expect(f.pool.acquire).toHaveBeenCalledOnce();
   await f.events.session_shutdown();
 });
 

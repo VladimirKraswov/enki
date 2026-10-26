@@ -10,6 +10,8 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import { toolName, signature, type SharedRegistry, type SharedServerSpec } from "./registry.mjs";
 
+export const MCP_STARTUP_ERROR = "Не удалось подключиться к сервису MCP. Проверьте его настройки в каталоге инструментов. Действия сервиса при подключении не запускались.";
+
 export const SAFE_ERROR = "Общий MCP недоступен. Проверьте каталог инструментов; действие не повторялось.";
 
 export interface McpTool { name: string; description?: string; inputSchema?: { type?: string; [key: string]: unknown } }
@@ -87,23 +89,44 @@ export function attachShared(pi: ExtensionAPI, options: SharedOptions): void {
     const current = () => generation === epoch;
     const live = () => current() && !cancel.signal.aborted;
     let statuses: ServerStatus[] = [];
+    const labels = new Map<string, string>();
     try {
       const specs = (await options.registry()).servers.filter((s) => s.enabled);
       if (!current()) return;
+      for (const spec of specs) labels.set(spec.id, spec.name);
       statuses = specs.map((s) => ({ id: s.id, signature: signature(s), state: "checking", tools: [] }));
       options.report(statuses);
-      // Sequential discovery keeps startup process/memory pressure bounded.
-      for (const spec of specs) {
+      // Give every service its first chance before recovering failed discovery.
+      // Only initialize/list-tools are retried, once, inside the same deadline.
+      // No tool call, generation or model turn is replayed.
+      const retry: SharedServerSpec[] = [];
+      const discover = async (spec: SharedServerSpec, recovery: boolean) => {
         if (!live()) return;
         const status = statuses.find((s) => s.id === spec.id);
+        let release: (() => void) | undefined, catalogRead = false;
         try {
+          if (recovery) {
+            const active = (await options.registry()).servers.find((s) => s.id === spec.id && s.enabled);
+            if (!live()) return;
+            if (JSON.stringify(active) !== JSON.stringify(spec)) {
+              if (status) status.state = "error";
+              options.report(statuses);
+              ctx.ui.notify(`${spec.name}: настройки подключения изменились. Обновите инструменты чата.`, "warning");
+              return;
+            }
+          }
           const lease = await options.pool.acquire(spec, options.scope, ctx.cwd, cancel.signal);
-          if (generation !== epoch) { lease.release(); return; }
-          // Held from here: stop() releases it even while discovery is pending.
-          held.push(lease.release);
+          if (!live()) { lease.release(); return; }
+          // Failed discovery must release its lease before recovery. The same
+          // idempotent release also fences shutdown/restart during either await.
+          let released = false;
+          release = () => { if (!released) { released = true; held = held.filter((value) => value !== release); lease.release(); } };
+          held.push(release);
           const tools = await lease.connection.tools(cancel.signal);
           if (!current()) return;
-          if (cancel.signal.aborted || tools.length > 128) throw new Error(SAFE_ERROR);
+          if (cancel.signal.aborted) throw new Error(SAFE_ERROR);
+          catalogRead = true;
+          if (tools.length > 128) throw new Error(SAFE_ERROR);
           const taken = new Set(options.reserved());
           const names = new Set<string>();
           for (const tool of tools) {
@@ -148,18 +171,34 @@ export function attachShared(pi: ExtensionAPI, options: SharedOptions): void {
           if (status) Object.assign(status, { state: "connected", tools: [...names] });
           options.report(statuses);
         } catch {
+          release?.();
           if (!current()) return;
+          // Once the catalog was read, namespace/schema/registration are
+          // deterministic and must not register a partially accepted catalog twice.
+          if (!catalogRead && !recovery && live()) { retry.push(spec); return; }
           if (status) status.state = "error";
           options.report(statuses);
-          ctx.ui.notify(`${spec.name}: ${SAFE_ERROR}`, "warning");
+          ctx.ui.notify(`${spec.name}: ${catalogRead ? "Сервис вернул несовместимый список инструментов. Проверьте настройки MCP." : MCP_STARTUP_ERROR}`, "warning");
         }
+      };
+      for (const spec of specs) {
+        if (!live()) break;
+        await discover(spec, false);
+      }
+      for (const spec of retry) {
+        if (!live()) break;
+        await discover(spec, true);
       }
     } catch {
-      if (current()) ctx.ui.notify(SAFE_ERROR, "warning");
+      if (current()) ctx.ui.notify("Не удалось прочитать каталог инструментов MCP. Проверьте его настройки.", "warning");
     } finally {
       clearTimeout(timer);
       if (generation === epoch && statuses.some((s) => s.state === "checking")) {
-        for (const status of statuses) if (status.state === "checking") status.state = "error";
+        for (const status of statuses) if (status.state === "checking") {
+          status.state = "error";
+          const name = labels.get(status.id) ?? status.id;
+          ctx.ui.notify(`${name}: подключение инструментов не завершилось за отведённое время. Проверьте подключение в каталоге инструментов.`, "warning");
+        }
         options.report(statuses);
       }
     }
