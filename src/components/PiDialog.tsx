@@ -73,7 +73,7 @@ export function PiDialog() {
             ) : (
               <input ref={(node) => { field.current = node; }} aria-label={title} placeholder={dialog.placeholder} value={value} onChange={(e) => setValue(e.target.value)} />
             )}
-            <VoiceInput key={dialog.id} draftTarget={inputKey} disabled={sending} onActiveChange={setRecording}/>
+            <VoiceInput key={dialog.id} draftTarget={inputKey} holdForRecovery disabled={sending} onActiveChange={setRecording}/>
           </div>
         )}
 

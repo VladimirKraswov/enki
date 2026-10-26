@@ -25,6 +25,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 sha2 = "0.10"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+unicode-normalization = "0.1"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
@@ -51,6 +53,9 @@ getrandom = "0.3"
 # Unix only, and only for process-*group* signalling: the agent runtime spawns
 # language servers and tools, and killing just the direct child would orphan them.
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(unix)'.build-dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]

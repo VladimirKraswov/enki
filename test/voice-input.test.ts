@@ -150,6 +150,13 @@ it('recovery delivers to an explicit question draft rather than the ordinary pro
  await act(async()=>{[...document.querySelectorAll('button')].find(b=>b.textContent==='Восстановить диктовку')!.click();});
  expect(fake.appendDictation).toHaveBeenCalledWith(workspace,draft,'Ответ голосом','question-audio');expect(fake.transcribe).not.toHaveBeenCalled();
 });
+it('a question keeps its send fence while unsent audio awaits recovery',async()=>{
+ const {dictationScope}=await import('../src/voice/journal');const workspace=fake.state.prefs.workspaceKey??fake.state.prefs.endpoint,draft='question-recovery';
+ fake.records.set('pending-question',{id:'pending-question',group:'q',scope:dictationScope(workspace,draft),workspace,draft,settings:fake.state.prefs.asr,created:1,sequence:0,overlap:false,mime:'audio/webm',parts:[new Blob(['saved'])],complete:true,text:'ответ'});
+ const changed=vi.fn();await act(async()=>root.render(createElement(VoiceInput,{disabled:false,draftTarget:draft,holdForRecovery:true,onActiveChange:changed})));
+ expect(changed).toHaveBeenLastCalledWith(true);await act(async()=>{[...document.querySelectorAll('button')].find(b=>b.textContent==='Восстановить диктовку')!.click();});
+ expect(changed).toHaveBeenLastCalledWith(false);
+});
 
 it('does not invite speech until a real audio checkpoint arrives, and cleans up after cancellation',async()=>{
  const stop=vi.fn();fake.transcribe.mockResolvedValue('текст');capture.mockResolvedValue({getTracks:()=>[{stop}]});

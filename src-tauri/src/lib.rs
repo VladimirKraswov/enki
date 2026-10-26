@@ -2,6 +2,9 @@ mod asr;
 mod attachments;
 pub mod browser;
 mod build_job;
+#[cfg(test)]
+#[path = "../build_runtime_resources.rs"]
+mod build_runtime_resources;
 pub mod capabilities;
 pub mod computer;
 mod config;

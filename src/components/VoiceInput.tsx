@@ -9,11 +9,13 @@ import { TranscriptionQueue } from '../voice/transcriptionQueue';
 import { VoiceWaveform } from './VoiceWaveform';
 import { Icon } from './Icon';
 type Phase = 'idle' | 'requesting' | 'preparing' | 'recording' | 'transcribing';
-export function VoiceInput({ disabled, onActiveChange, draftTarget }: {
+export function VoiceInput({ disabled, onActiveChange, draftTarget, holdForRecovery = false }: {
     disabled: boolean;
     onActiveChange?: (active: boolean) => void;
     /** Durable scoped input other than the main prompt (e.g. a question answer). */
     draftTarget?: string;
+    /** A question must not close while its unsent audio still needs recovery. */
+    holdForRecovery?: boolean;
 }) {
     const [phase, setPhase] = useState<Phase>('idle');
     const [error, setError] = useState('');
@@ -31,7 +33,7 @@ export function VoiceInput({ disabled, onActiveChange, draftTarget }: {
     const scope = dictationScope(workspace, key);
     const currentScope = useRef(scope);
     currentScope.current = scope;
-    useEffect(() => onActiveChange?.(phase !== 'idle'), [phase, onActiveChange]);
+    useEffect(() => onActiveChange?.(phase !== 'idle' || (holdForRecovery && pending.length > 0)), [phase, holdForRecovery, pending.length, onActiveChange]);
     const refresh = async () => {
         const records = await dictationJournal.list(scope);
         if (alive.current && currentScope.current === scope)

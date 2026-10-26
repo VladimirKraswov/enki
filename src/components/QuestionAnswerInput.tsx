@@ -29,7 +29,7 @@ export function QuestionAnswerInput({id, index, value, disabled, onChange, onFil
       <input ref={input} type="file" multiple hidden disabled={disabled} onChange={event => { onFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }}/>
       <button className="icon-btn" type="button" aria-label="Прикрепить файлы к ответу" title="Прикрепить файл или изображение" disabled={disabled} onClick={() => openFileInput(input.current)}><Icon name="plus" size={18}/></button>
       <span className="question-answer-hint">Можно вставить скриншот</span>
-      <VoiceInput draftTarget={questionInputKey(id, index)} disabled={disabled && !active} onActiveChange={value => { setActive(value); onActiveChange(value); }}/>
+      <VoiceInput draftTarget={questionInputKey(id, index)} holdForRecovery disabled={disabled && !active} onActiveChange={value => { setActive(value); onActiveChange(value); }}/>
     </div>
   </div>;
 }

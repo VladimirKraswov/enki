@@ -328,7 +328,7 @@ fn ready_identity(ready: &Value, artifact: &Artifact) -> Result<(u16, String), S
 ///   agent-runtime/runtime-manifest.json
 ///   agent-runtime/node/bin/node | node/node.exe
 ///   agent-runtime/app/dist/main.js, app/node_modules/...
-mod artifact;
+pub(crate) mod artifact;
 mod config_commit;
 mod config_fs;
 mod control;
