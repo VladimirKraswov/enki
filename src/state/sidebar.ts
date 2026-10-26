@@ -10,6 +10,13 @@ export function liveStatusConfirmed(connection: Pick<ConnectionState, "phase" | 
     && (connection.globalStreamState ?? connection.streamState) === "open";
 }
 
+/** A tool waiting for its user still keeps the SDK busy. Attention wins. */
+export function sessionWorkMark(pending: boolean, status: string | undefined, confirmed: boolean): "waiting" | "working" | "unconfirmed" | "none" {
+  if (pending) return "waiting";
+  if (status === "busy" || status === "retry" || status === "waiting") return confirmed ? "working" : "unconfirmed";
+  return "none";
+}
+
 export interface SidebarList {
   sessions: Session[];
   loading: boolean;

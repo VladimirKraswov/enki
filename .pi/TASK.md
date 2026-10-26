@@ -35,7 +35,12 @@ UI: компактная карточка уточнения, честный ACK
 До исправления regression реально падал на corrections=undefined (integration
 с настоящим Pi SDK). Первая версия: 29 runtime tests passed; 48 UI focused passed.
 Финальные focused: 42 runtime tests; 15 UI tests после последнего review;
-предыдущие 48 UI также прошли. UI/runtime typecheck, архитектура, 65 docs/192 links
+предыдущие 48 UI также прошли. Первая каноническая попытка: все1137UI прошли,
+395/396runtime; строгий тест списка policy blocks требовал включить новое правило.
+Ожидание оформлено scoped block, точное ожидание теста расширено без ослабления
+проверки; 9 профильныхruntime прошли. Дополнительно исправлен приоритет значка
+в Sidebar: реальный вопрос вышеbusy; машинное ожидание не требует внимания.
+6 UI проверок sidebar/ожидания прошли. Первая попытка сохранена, НЕ опубликована. UI/runtime typecheck, архитектура, 65 docs/192 links
 прошли. Изолированная UI QA: светлая/тёмная/узкая компоновка, offline и delivery;
 снимок в stabilize-v30/qa-narrow-dark.png. Review завершён. Далее оригинальный
 release:local stable,

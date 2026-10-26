@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { browserAccess, enkiExtensions, type ExtensionDeps } from "../src/extensions/enki.ts";
 import type { SdkExtension } from "../src/sdk/adapter.ts";
-import { languageReminder, scheduleReminder, sessionPolicyBlocks } from "../src/policy/prompt.ts";
+import { languageReminder, scheduleReminder, sessionPolicyBlocks, userWaitReminder } from "../src/policy/prompt.ts";
 import { toolWorkflowReminder } from "../src/policy/toolWorkflow.ts";
 import { workshopReminder } from "../src/policy/workshop.ts";
 
@@ -27,7 +27,9 @@ describe("turn policy", () => {
   it("appends the session's language, tool workflow and timer blocks to every turn without touching the base prompt", () => {
     const out = turnPolicy(() => false)({ systemPrompt: "BASE" }).systemPrompt;
     expect(out.startsWith("BASE\n\n")).toBe(true);
-    for (const block of [languageReminder("ses/1"), toolWorkflowReminder("ses/1"), scheduleReminder("ses/1", "/work")]) expect(out).toContain(block);
+    for (const block of [languageReminder("ses/1"), toolWorkflowReminder("ses/1"), userWaitReminder("ses/1"), scheduleReminder("ses/1", "/work")]) expect(out).toContain(block);
+    expect(out).toContain("инструмент question");
+    expect(out).toContain("согласованные действия не требуют нового вопроса");
     expect(out).not.toContain(workshopReminder("ses/1"));
   });
 
@@ -41,7 +43,8 @@ describe("turn policy", () => {
 
   it("blocks are scoped to their own session id and directory", () => {
     const blocks = sessionPolicyBlocks("a", "/one", true);
-    expect(blocks).toEqual([languageReminder("a"), toolWorkflowReminder("a"), scheduleReminder("a", "/one"), workshopReminder("a")]);
+    expect(blocks).toEqual([languageReminder("a"), toolWorkflowReminder("a"), userWaitReminder("a"), scheduleReminder("a", "/one"), workshopReminder("a")]);
+    for (const block of blocks) expect(block).toContain('session="a"');
     expect(blocks.join("")).not.toContain('session="b"');
     expect(scheduleReminder("a", '/a"b')).toContain(JSON.stringify('/a"b'));
   });

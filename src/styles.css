@@ -655,8 +655,9 @@ select {
   0%, 100% { box-shadow: 0 0 2px color-mix(in srgb, var(--warn) 10%, transparent); }
   50% { box-shadow: 0 0 14px color-mix(in srgb, var(--warn) 32%, transparent); }
 }
+.pending-dot.waiting-for-user { color: var(--warn); animation: waiting-user-glow 2.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .status-line.waiting-for-user { animation: none; box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 18%, transparent); }
+  .status-line.waiting-for-user, .pending-dot.waiting-for-user { animation: none; box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 18%, transparent); }
 }
 .tool-spinner {
   width: 10px;

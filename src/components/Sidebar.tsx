@@ -17,7 +17,7 @@ import { Icon } from "./Icon";
 import { pathBasename } from "../util/paths";
 import { isNative } from "../native/platform";
 import { WORKSHOP_TITLE } from "../workshop/workspace";
-import { liveStatusConfirmed } from "../state/sidebar";
+import { liveStatusConfirmed, sessionWorkMark } from "../state/sidebar";
 export const pickFolder = pickProjectFolder;
 
 function ActivityMark({ id, directory, pending = false }: { id: string; directory: string; pending?: boolean }) {
@@ -25,13 +25,11 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   const tasks=useSyncExternalStore(scheduler.subscribe,scheduler.snapshot);
   const timers=activeTimers(tasks,id);
   const status = store.activityStatus(id);
-  if (status?.type === "busy" || status?.type === "retry") {
-    // Same rule as the project mark: while the stream is down, "running" is not confirmed.
-    if (!liveStatusConfirmed(store.state.connection, directory, store.state.directory))
-      return <span className="pending-dot" role="status" aria-label="Нет свежего статуса задачи" title="Нет связи: выполнение пока не подтверждено">?</span>;
-    return <SessionSpinner/>;
-  }
-  if (pending || status?.type === "waiting" || store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.sessionID===id&&t.state==="error"))
+  const mark = sessionWorkMark(pending, status?.type, liveStatusConfirmed(store.state.connection, directory, store.state.directory));
+  if (mark === "waiting") return <span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>;
+  if (mark === "unconfirmed") return <span className="pending-dot" role="status" aria-label="Нет свежего статуса задачи" title="Нет связи: выполнение пока не подтверждено">?</span>;
+  if (mark === "working") return <SessionSpinner/>;
+  if (store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.sessionID===id&&t.state==="error"))
     return <span className="pending-dot" aria-label="Требуется внимание" title="Проверьте ответ, ошибку или расписание чата">!</span>;
   return <>{store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />}
     <TimerBadge tasks={timers} label="Запланировано пробуждение"/></>;
