@@ -24,6 +24,7 @@ function request(method,route,body,limit=65536){return new Promise((resolve,reje
 });}
 run(process.execPath,['node_modules/typescript/bin/tsc']);run(process.execPath,['node_modules/vite/bin/vite.js','build']);
 const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'))).version;
+const commit=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 validateVersions(root,version);
 const fp=nativeFingerprint(path.join(root,'src-tauri'));
 const sourceNames=execFileSync('git',['ls-files','-z'],{cwd:root,encoding:'utf8'}).split('\0').filter(n=>n&&!n.startsWith('.pi/')&&!n.startsWith('.local/'));
@@ -42,11 +43,10 @@ try{
   assertSignedForClients(envelopes,{version,nativeFingerprint:fp},fs.readFileSync(path.join(root,'src-tauri/updater.pub'),'utf8'));
   const current=await request('GET',`/api/updates/enki/${channel}`);
   const receipt=await publishAndVerify(
-    ()=>request('POST','/api/updates',{channel,expectedRevision:current.revision,...envelopes}),
+    ()=>request('POST','/api/updates',{channel,expectedRevision:current.revision,sourceCommit:commit,...envelopes}),
     ()=>request('GET',`/api/updates/enki/${channel}`),
     {version,nativeFingerprint:fp},envelopes,
     digest=>request('GET',`/api/updates/artifacts/${digest}`,undefined,40*1048576));
-  const commit=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
   const receipts=path.join(root,'.local','releases');fs.mkdirSync(receipts,{recursive:true,mode:0o700});
   const file=path.join(receipts,`${version}-${channel}.json`);
   fs.writeFileSync(file,JSON.stringify({...receipt,channel,commit,verifiedAt:new Date().toISOString()},null,2)+'\n',{mode:0o600});

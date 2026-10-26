@@ -2,12 +2,14 @@
 import argparse,base64,json,os,socket,struct,subprocess,tempfile
 from pathlib import Path
 import device_updates
+from native_updates import validate_manifest
 from releases import Releases
 
 class Rejected(Exception):
     def __init__(self,status,message):super().__init__(message)
 
 def sign_candidate(data,key,public):
+    if data.get('type') == 'native': return sign_native(data,key,public)
     checker=object.__new__(Releases);checker.fault=Rejected
     checker.head=lambda channel: {'revision':data.get('expectedRevision'),'available':False} if channel in ('stable','preview') else checker.error('Invalid channel')
     packets=device_updates.validate(checker,data)
@@ -27,6 +29,21 @@ def sign_candidate(data,key,public):
             subprocess.run(['minisign','-V','-p',public,'-m',str(file),'-q'],capture_output=True,check=True,timeout=15)
             result[kind]=dict(payload=data[kind],signature=base64.b64encode(Path(str(file)+'.minisig').read_bytes()).decode())
     return result
+
+def sign_native(data,key,public):
+    if set(data) != {'type','source','payload'} or len(data['payload']) > 32768:
+        raise Rejected(400,'Invalid native manifest')
+    checker=object.__new__(Releases);checker.fault=Rejected
+    raw,source=checker.validate(data['source'],'source')
+    manifest=validate_manifest(json.loads(base64.b64decode(data['payload'],validate=True)),source['version'],source['nativeFingerprint'])
+    with tempfile.TemporaryDirectory(prefix='native-',dir=Path(key).parent if os.environ.get('ENKI_SIGNER_TEST') else '/run/enki-release-signer') as tmp:
+        original=Path(tmp)/'source.json';original.write_bytes(raw)
+        Path(str(original)+'.minisig').write_bytes(base64.b64decode(data['source']['signature'],validate=True))
+        subprocess.run(['minisign','-V','-p',public,'-m',str(original),'-q'],capture_output=True,check=True,timeout=15)
+        file=Path(tmp)/'native.json';file.write_bytes(base64.b64decode(data['payload'],validate=True));file.chmod(0o600)
+        subprocess.run(['minisign','-S','-s',key,'-m',str(file),'-t','file:native.json\tversion:'+manifest['version'],'-q'],input=b'\n',capture_output=True,check=True,timeout=30)
+        subprocess.run(['minisign','-V','-p',public,'-m',str(file),'-q'],capture_output=True,check=True,timeout=15)
+        return {'native':dict(payload=data['payload'],signature=base64.b64encode(Path(str(file)+'.minisig').read_bytes()).decode())}
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--key',required=True);ap.add_argument('--public',required=True);ap.add_argument('--hub-uid',type=int,required=True);ap.add_argument('--socket',default='/run/enki-release-signer/socket');a=ap.parse_args()

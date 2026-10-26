@@ -224,6 +224,9 @@ class Releases:
                 head = {'available': True, 'version': hot['version'], 'nativeFingerprint': hot['nativeFingerprint'],
                         'notes': str(hot.get('notes', ''))[:4000], 'artifacts': artifacts}
                 if data.get('_devicePublication'):head['publication']=data['_devicePublication']
+                elif data.get('sourceCommit'):
+                    if not isinstance(data['sourceCommit'],str) or not re.fullmatch(r'[0-9a-f]{40}',data['sourceCommit']):self.error('Некорректный коммит исходников.')
+                    head['publication']={'commit':data['sourceCommit'],'checks':'operator-attested'}
                 head['revision'] = hashlib.sha256(json.dumps(head, sort_keys=True).encode()).hexdigest()
                 if shutil.disk_usage(self.root).free < 256 * 1024 * 1024 + sum(a['bytes'] * 2 for a in artifacts.values()):
                     self.error('На сервере недостаточно места для обновления.', 507)

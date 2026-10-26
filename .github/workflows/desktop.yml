@@ -4,6 +4,11 @@ on:
     branches: [main, 'codex/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      published_commit:
+        description: 'Exact main commit already published and verified on Hub; empty means build only'
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -151,4 +156,28 @@ jobs:
           include-hidden-files: true # only the explicitly listed .local receipt, not its directory
           if-no-files-found: error
           retention-days: 14
-# No production installation, model requests, credentials, owner services or auto-release.
+  packages:
+    name: Publish qualified packages after Hub
+    needs: desktop
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.published_commit == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.22.1
+      - name: Download only this workflow's qualified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh run download "$RUN_ID" --pattern 'enki-*' --dir .local/packages
+      - name: Publish immutable release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENKI_PUBLISHED_COMMIT: ${{ inputs.published_commit }}
+        run: node scripts/releases/github-packages.mjs
+# No production installation, model requests, Hub/signing secrets or owner services.

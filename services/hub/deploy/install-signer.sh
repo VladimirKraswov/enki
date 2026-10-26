@@ -21,6 +21,6 @@ fi
 printf 'ENKI_HUB_UID=%s\n' "$(id -u "$hub_user")" > /etc/enki-release-signer/service.env
 chmod 600 /etc/enki-release-signer/service.env
 sed "s/^Group=enki-hub$/Group=$hub_group/" /opt/enki-hub/deploy/enki-release-signer.service > /etc/systemd/system/enki-release-signer.service
-chown root:root /opt/enki-hub /opt/enki-hub/release_signer.py /opt/enki-hub/device_updates.py /opt/enki-hub/releases.py /opt/enki-hub/durable.py
+chown root:root /opt/enki-hub /opt/enki-hub/release_signer.py /opt/enki-hub/device_updates.py /opt/enki-hub/releases.py /opt/enki-hub/durable.py /opt/enki-hub/native_updates.py
 systemctl daemon-reload
 systemctl enable --now enki-release-signer

@@ -66,7 +66,7 @@ def validate(releases,data):
     except (KeyError,ValueError,TypeError,IndexError,UnicodeError):releases.error('Версии, идентичность или нативный отпечаток исходников не совпадают.')
     return packets
 
-def sign(data,fault):
+def sign(data,fault,expected=None):
     path=os.environ.get('ENKI_RELEASE_SIGNER_SOCKET','/run/enki-release-signer/socket')
     raw=json.dumps(data,separators=(',',':')).encode()
     if len(raw)>LIMIT:raise fault(413,'Пакет слишком велик.')
@@ -83,7 +83,7 @@ def sign(data,fault):
             size=int.from_bytes(read(4),'big')
             if not 0<size<=LIMIT:raise OSError('oversized signer response')
             result=json.loads(read(size))
-        if set(result)!={'source','hot'}:raise OSError('signer refused candidate')
+        if set(result)!=(expected or {'source','hot'}):raise OSError('signer refused candidate')
         return result
     except (OSError,ValueError,TypeError):raise fault(503,'Служба подписи обновлений недоступна. Релиз не опубликован.') from None
 

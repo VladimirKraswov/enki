@@ -119,8 +119,10 @@ pub(crate) fn release_identity() -> Result<String, String> {
     ))
 }
 pub(crate) fn release_get(path: &str, identity: &str) -> Result<Value, String> {
-    if !matches!(path, "stable" | "preview")
-        && !path.strip_prefix("artifacts/").is_some_and(hash_ok)
+    if !matches!(
+        path,
+        "stable" | "preview" | "native/stable" | "native/preview"
+    ) && !path.strip_prefix("artifacts/").is_some_and(hash_ok)
     {
         return Err("Invalid release path".into());
     }

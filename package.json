@@ -29,7 +29,8 @@
     "test:releases": "node --test scripts/releases/*.test.mjs",
     "build:release:macos": "npm run runtime:prepare -- --platform darwin-arm64 && tauri build --bundles app,dmg --config src-tauri/tauri.runtime.conf.json --config '{\"bundle\":{\"createUpdaterArtifacts\":true,\"macOS\":{\"signingIdentity\":\"-\"}}}'",
     "release:local": "node scripts/releases/operator.mjs",
-    "check:docs": "node scripts/check-docs.mjs"
+    "check:docs": "node scripts/check-docs.mjs",
+    "release:packages": "node scripts/releases/dispatch-packages.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

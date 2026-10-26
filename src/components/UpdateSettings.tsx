@@ -9,11 +9,12 @@ import {BUILD_STAGE_TEXT as stages} from '../updates/controller';
 import {version} from '../../package.json';
 export function UpdateSettings(){
   useAppState();const u=useUpdates(),running=agentsRunning(),compiling=updates.compiling();
+  const [prerequisites,setPrerequisites]=useState<{available:boolean;reason?:string}|null>(null);
   const [busy,setBusy]=useState(''),[notice,setNotice]=useState('');
   const [backups,setBackups]=useState<{id:string;version:string}[]>([]),[selected,setSelected]=useState('');
   const call=<T,>(action:string,extra:Record<string,unknown>={})=>invoke<T>('app_update',{action,channel:null,data:null,backupId:null,...extra});
   const refresh=()=>call<typeof backups>('backups').then(setBackups);
-  useEffect(()=>{void refresh().catch(e=>setNotice(String(e)));void updates.refresh().catch(()=>{});},[]);
+  useEffect(()=>{void invoke<{available:boolean;reason?:string}>('hub_update',{action:'prerequisites',channel:null,data:null,digest:null}).then(setPrerequisites).catch(()=>setPrerequisites({available:false,reason:'Не удалось проверить инструменты сборки.'}));void refresh().catch(e=>setNotice(String(e)));void updates.refresh().catch(()=>{});},[]);
   const maintain=async(action:'backup'|'restore')=>{
     setBusy(action);setNotice('');try{await maintenance.run(async()=>{
       if(agentsRunning())throw Error('Дождитесь завершения агентов.');
@@ -28,20 +29,22 @@ export function UpdateSettings(){
     {u.status&&u.status.nativeVersion!==u.status.hot.uiVersion&&<p className="muted">Нативная версия {u.status.nativeVersion}</p>}
     <SettingField label="Канал"><select value={u.channel} disabled={disabled||u.waiting||compiling} onChange={e=>{const channel=e.target.value==='preview'?'preview':'stable';updates.setChannel(channel);localStorage.setItem('arvela.update.channel',channel);}}><option value="stable">Стабильный</option><option value="preview">Предварительный</option></select></SettingField>
     <div className="btn-row"><button className="btn" disabled={disabled||compiling||u.waiting} onClick={()=>void updates.check()}>{u.busy==='check'?'Проверяю…':'Проверить обновления'}</button>
-      {u.release?.available&&!u.downloaded&&<button className="btn" disabled={disabled} onClick={()=>void updates.download()}>{u.busy==='download'?'Загрузка…':`Скачать ${u.release.version}`}</button>}
-      {u.downloaded&&!hot&&!compiling&&!built&&<button className="btn" disabled={disabled} onClick={()=>void updates.build()}>{u.busy==='build'?'Запускаю сборку…':stage==='error'?'Повторить сборку':'Собрать на этом компьютере'}</button>}
-      {u.downloaded&&(hot||built)&&<button className="btn primary" disabled={disabled||u.waiting} onClick={()=>void updates.install(running)}>{u.waiting?'Ожидаем завершения агентов':hot?'Обновить интерфейс':running?'Установить после завершения задач':'Установить и перезапустить'}</button>}
-      {compiling&&<button className="btn" disabled={disabled} onClick={()=>void updates.cancel()}>Отменить сборку</button>}
+      {u.release?.available&&!compiling&&!built&&(hot?!u.downloaded:u.release.binary?.state==='ready')&&<button className="btn primary" disabled={disabled} onClick={()=>void updates.download()}>{u.busy==='download'?'Загрузка…':`Скачать ${u.release.version}`}</button>}
+      {(hot&&u.downloaded||built)&&<button className="btn primary" disabled={disabled||u.waiting} onClick={()=>void updates.install(running)}>{u.waiting?'Ожидаем завершения агентов':hot?'Обновить интерфейс':running?'Установить после завершения задач':'Установить и перезапустить'}</button>}
+      {compiling&&<button className="btn" disabled={disabled} onClick={()=>void updates.cancel()}>Отменить подготовку</button>}
       {u.waiting&&<button className="btn" onClick={()=>updates.stopWaiting()}>Отменить ожидание</button>}
-      {(stage==='error'||stage==='ready')&&<button className="btn" disabled={disabled} onClick={()=>void updates.clear()}>Очистить сборку</button>}
+      {(stage==='error'||stage==='ready')&&<button className="btn" disabled={disabled} onClick={()=>void updates.clear()}>Очистить подготовленные файлы</button>}
     </div>
-    {u.release?.available&&<p className={`update-kind ${hot?'hot':''}`}>{hot?'Обновление интерфейса без остановки агентов':'Обновление нативной части — требуется локальная сборка'}</p>}
-    {u.release?.available&&!hot&&<p className="muted">На этом компьютере нужны Node.js/npm, Rust/Cargo и зависимости Tauri для вашей ОС. Сборка выполняется в отдельной папке; установка ждёт завершения агентов.</p>}
+    {u.release?.available&&<p className={`update-kind ${hot?'hot':''}`}>{hot?'Обновление интерфейса без остановки агентов':u.release.binary?.state==='ready'?'Готовое приложение с GitHub. Скачайте пакет, затем обновите и перезапустите Enki.':u.release.binary?.message??'Проверяем готовность пакета GitHub.'}</p>}
+    {u.release?.available&&!hot&&!built&&!compiling&&<details><summary>Собрать из исходников</summary>
+      <p className="muted">Дополнительный вариант, если хотите установить выпуск до готовности пакета. Сборка занимает время и выполняется в отдельной папке. Чаты остаются доступны.</p>
+      {prerequisites?.available?<button className="btn" disabled={disabled} onClick={()=>void updates.build()}>{u.busy==='build'?'Подготавливаю исходники…':'Собрать на этом компьютере'}</button>:<p className="muted">{prerequisites?.reason??'Проверяем Node.js/npm, Rust и системные инструменты…'}</p>}
+    </details>}
     {!hot&&stage&&(stage!=='ready'||built)&&stages[stage]&&<p role="status">{stages[stage]}</p>}
-    {!hot&&compiling&&<progress aria-label="Сборка обновления" />}
-    {!hot&&u.status?.build.elapsedSeconds!==undefined&&<p className="muted">Время сборки: {Math.floor(u.status.build.elapsedSeconds/60)} мин {u.status.build.elapsedSeconds%60} с. {compiling?'Можно продолжать работу в чатах.':''}</p>}
-    {!hot&&u.status?.build.logPath&&<details><summary>Журнал сборки{u.status.build.logBytes?` · ${Math.ceil(u.status.build.logBytes/1024)} КБ`:''}</summary><p style={{overflowWrap:'anywhere'}}>{u.status.build.logPath}</p></details>}
-    {!hot&&stage==='error'&&<p className="muted">Обновление не установлено; чаты и настройки сохранены. После устранения причины нажмите «Повторить сборку».</p>}
+    {!hot&&compiling&&<progress aria-label="Подготовка обновления" max={u.status?.build.totalBytes} value={u.status?.build.totalBytes?u.status.build.receivedBytes:undefined} />}
+    {!hot&&u.status?.build.elapsedSeconds!==undefined&&<p className="muted">Время подготовки: {Math.floor(u.status.build.elapsedSeconds/60)} мин {u.status.build.elapsedSeconds%60} с. {compiling?'Можно продолжать работу в чатах.':''}</p>}
+    {!hot&&u.status?.build.logPath&&<details><summary>Журнал подготовки{u.status.build.logBytes?` · ${Math.ceil(u.status.build.logBytes/1024)} КБ`:''}</summary><p style={{overflowWrap:'anywhere'}}>{u.status.build.logPath}</p></details>}
+    {!hot&&stage==='error'&&<p className="muted">Обновление не установлено; чаты и настройки сохранены. Можно повторить загрузку или сборку.</p>}
     {!hot&&u.status?.build.error&&<p role="alert">{u.status.build.error}</p>}
     {u.status?.hot.lastError&&<p role="alert">{u.status.hot.lastError}</p>}
     {u.status?.installation?.error&&<p role="alert">{u.status.installation.error}</p>}

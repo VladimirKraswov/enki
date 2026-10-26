@@ -90,7 +90,18 @@ uses the existing pinned key through a Unix socket restricted to the Hub UID.
 The HTTP user cannot read that key; uploaded code is never executed. Recheck
 revocation/CAS before exposing head. Keys grant app release authority, not other
 admin APIs. Signatures remain verified by clients; private key is now held by a
-trusted online signer. Deploy device_updates.py/release_signer.py with server.py
+trusted online signer. Deploy device_updates.py/release_signer.py/native_updates.py with server.py
 and releases.py, model_catalog.py and durable.py (crash-durable file publication
 used by releases and the model catalog: POSIX directory fsync, Windows
 MoveFileExW write-through), plus deploy/enki-release-signer.service/install-signer.sh.
+
+## Готовые пакеты приложения
+
+`GET /api/updates/native/stable` (или preview) требует ключ устройства. Ответ:
+`pending`/`unavailable` с понятным сообщением или `ready` с подписанным envelope
+и digest. Файлы загружаются клиентом с GitHub; Hub хранит только описание.
+Проверка GitHub выполняется вне общей блокировки каталога, в один запрос за раз,
+с кешем и ограниченным backoff. Нужен исходящий HTTPS к GitHub API и CDN.
+Развёртывайте `native_updates.py` вместе с сервером и signer, затем перезапускайте
+оба сервиса. Подпись, TLS и существующие ключи не заменяются.
+[Полный порядок выпуска](../../docs/HUB-UPDATES.md).

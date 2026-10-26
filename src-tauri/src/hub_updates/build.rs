@@ -98,7 +98,7 @@ impl Build {
         }
         self.cancel.store(false, Ordering::Release);
         *self.prepared.lock().map_err(|e| e.to_string())? = None;
-        self.set(json!({"stage":"preparing","version":v.packet.version}));
+        self.set(json!({"stage":"preparing","version":v.packet.version,"mode":"source"}));
         let this = self.clone();
         std::thread::spawn(move || {
             let _lease = lease;
@@ -114,7 +114,45 @@ impl Build {
         });
         Ok(())
     }
-    fn set(&self, value: Value) {
+    pub(super) fn start_binary(
+        self: &Arc<Self>,
+        package: super::native::Package,
+        version: String,
+        digest: String,
+    ) -> Result<(), String> {
+        let lease = super::lease()?;
+        if self.running.swap(true, Ordering::AcqRel) {
+            return Err("Обновление уже подготавливается".into());
+        }
+        self.cancel.store(false, Ordering::Release);
+        *self.prepared.lock().map_err(|e| e.to_string())? = None;
+        self.set(json!({"stage":"preparing","version":version,"mode":"binary"}));
+        let this = self.clone();
+        std::thread::spawn(move || {
+            let _lease = lease;
+            let result = (|| {
+                let directory = fresh_attempt(&root()?, &digest)?;
+                super::native::prepare(&this, &package, &version, &directory)
+            })();
+            match result {
+                Ok(plan) => {
+                    *this.prepared.lock().unwrap_or_else(|e| e.into_inner()) = Some((digest, plan));
+                    this.set(json!({"stage":"ready"}));
+                }
+                Err(e) => this.set(json!({"stage":"error","error":e})),
+            }
+            this.running.store(false, Ordering::Release);
+        });
+        Ok(())
+    }
+    pub(super) fn check_cancel(&self) -> Result<(), String> {
+        if self.cancel.load(Ordering::Acquire) {
+            Err("Подготовка обновления отменена".into())
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn set(&self, value: Value) {
         if let Ok(mut s) = self.state.lock() {
             if value["stage"] == "preparing" || value["stage"] == "idle" {
                 *s = value;
@@ -198,7 +236,7 @@ impl Build {
         super::atomic(&directory.join("install-plan.json"), &plan)?;
         Ok(plan)
     }
-    fn run(&self, cmd: &mut Command, log: &Path, limit: Duration) -> Result<(), String> {
+    pub(super) fn run(&self, cmd: &mut Command, log: &Path, limit: Duration) -> Result<(), String> {
         let out = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -274,6 +312,60 @@ impl Build {
         *self.prepared.lock().map_err(|e| e.to_string())? = None;
         self.set(json!({"stage":"idle"}));
         Ok(())
+    }
+}
+
+/// Read-only, bounded prerequisite probe. The UI only offers an explicit source
+/// build when this passes; a download failure can never trigger compilation.
+pub(super) fn prerequisites() -> Value {
+    let result = (|| -> Result<(), String> {
+        let tools = Tools::find()?;
+        let mut cmd;
+        #[cfg(target_os = "macos")]
+        {
+            cmd = Command::new("/usr/bin/xcrun");
+            cmd.args(["--find", "clang"]);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            cmd = Command::new("pkg-config");
+            cmd.args([
+                "--exists",
+                "gtk+-3.0",
+                "webkit2gtk-4.1",
+                "libsoup-3.0",
+                "openssl",
+                "ayatana-appindicator3-0.1",
+            ]);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let base = std::env::var_os("ProgramFiles(x86)")
+                .ok_or("Не найдены Visual Studio Build Tools")?;
+            cmd = Command::new(
+                PathBuf::from(base).join("Microsoft Visual Studio/Installer/vswhere.exe"),
+            );
+            cmd.args([
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property",
+                "installationPath",
+            ]);
+        }
+        cmd.env("PATH", tools.path);
+        let out = crate::process::output_with_timeout(&mut cmd, Duration::from_secs(10), 4096)
+            .map_err(|_| "Не найдены системные инструменты сборки Tauri")?;
+        if !out.status.success() || (cfg!(windows) && out.stdout.is_empty()) {
+            return Err("Не установлены системные зависимости Tauri. Можно дождаться готового пакета GitHub.".into());
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => json!({"available":true}),
+        Err(e) => json!({"available":false,"reason":e}),
     }
 }
 fn now_ms() -> u64 {

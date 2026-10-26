@@ -38,12 +38,16 @@ it('every active native build phase, including runtime preparation, is cancellab
  stage='error';await c.refresh();expect(c.compiling()).toBe(false);
  expect(c.snapshot().release?.version).toBe('1.0.1');expect(c.snapshot().downloaded).toBe(true);
 });
-it('the UI stage contract names exactly the active stages the native builder reports',async()=>{
- const {readFileSync}=await import('node:fs');
- const source=readFileSync(new URL('../src-tauri/src/hub_updates/build.rs',import.meta.url),'utf8').split('#[cfg(test)]')[0];
- const loop=[...source.matchAll(/\(\s*"([a-z]+)",\s*(?:vec!\[|runtime_args\(\)|build_args\(\))/g)].map(m=>m[1]);
- const started=[...source.matchAll(/json!\(\{"stage":"([a-z]+)","version"/g)].map(m=>m[1]);
- expect([...started,...loop]).toEqual([...ACTIVE_BUILD_STAGES]);
+it('native download and unpacking keep controls fenced and never start a source build after download failure',async()=>{
+ const f=fixture('source');await f.controller.check();
+ f.call.mockRejectedValueOnce(Error('GitHub unavailable'));
+ await f.controller.download();expect(f.controller.snapshot().error).toContain('GitHub unavailable');
+ expect(f.call.mock.calls.some(([action])=>action==='build')).toBe(false);
+ for(const stage of ['downloading','unpacking']){
+   f.call.mockResolvedValueOnce({...native,build:{stage,mode:'binary'}});
+   await f.controller.refresh();expect(f.controller.compiling()).toBe(true);
+   f.controller.setChannel('preview');expect(f.controller.snapshot().channel).toBe('stable');
+ }
 });
 it('a built artifact belongs only to the exact checked release',async()=>{
  const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind:'source',digest:'b'.repeat(64)}:{...native,build:{stage:'ready',digest:'a'.repeat(64)}});

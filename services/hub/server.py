@@ -17,6 +17,9 @@ _device_spec.loader.exec_module(_device_module)
 _release_spec = importlib.util.spec_from_file_location('enki_releases', Path(__file__).with_name('releases.py'))
 _release_module = importlib.util.module_from_spec(_release_spec)
 _release_spec.loader.exec_module(_release_module)
+_native_spec = importlib.util.spec_from_file_location('enki_native_updates', Path(__file__).with_name('native_updates.py'))
+_native_module = importlib.util.module_from_spec(_native_spec)
+_native_spec.loader.exec_module(_native_module)
 _catalog_spec = importlib.util.spec_from_file_location('enki_model_catalog', Path(__file__).with_name('model_catalog.py'))
 _catalog_module = importlib.util.module_from_spec(_catalog_spec)
 _catalog_spec.loader.exec_module(_catalog_module)
@@ -196,6 +199,7 @@ class Hub:
         os.chmod(self.db, 0o600)
         self.memory = _memory_module.Memory(self.connection, self.lock, scrub, Fault)
         self.releases = _release_module.Releases(root, self.lock, Fault)
+        self.native_updates = _native_module.NativeUpdates(self.releases, _device_module.sign)
         self.model_catalog = _catalog_module.ModelCatalog(root, self.lock, Fault)
         self.model_services = _services_module.ModelServices(root, self.model_catalog, Fault)
 
@@ -442,6 +446,8 @@ class Hub:
                     if not c.execute('SELECT id FROM devices WHERE id=? AND revoked=0',(actor['id'],)).fetchone():
                         raise Fault(401,'Ключ устройства отозван. Публикация отменена.')
             return _device_module.publish(self.releases, actor, data, authorize)
+        if method == 'GET' and path in ('/api/updates/native/stable', '/api/updates/native/preview'):
+            return self.native_updates.status(path.rsplit('/',1)[1])
         if path == '/api/updates' or path.startswith('/api/updates/'):
             return self.releases.api(method, path, actor, data)
         if path == '/api/memory/retrieve' and method == 'POST':

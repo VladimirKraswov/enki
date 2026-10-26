@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { assertDebianPayload } from './artifact-policy.mjs';
+import { nativeFingerprint } from './releases/packet.mjs';
 const platform = process.argv[2];
 const kinds = { macos: ['dmg', '.dmg'], linux: ['deb', '.deb'], windows: ['nsis', '-setup.exe'] };
 if (!Object.hasOwn(kinds, platform)) throw Error('Expected macos, linux or windows');
@@ -30,6 +31,7 @@ if (platform === 'linux') {
 }
 if (platform === 'macos') execFileSync('hdiutil', ['verify', file], { stdio: 'inherit' });
 const receipt = { schema: 1, version, platform, arch: process.arch, commit: process.env.GITHUB_SHA ?? null,
+  nativeFingerprint: nativeFingerprint('src-tauri'), runId: Number(process.env.GITHUB_RUN_ID),
   artifact: candidates[0], bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'),
   node: process.version, rust: execFileSync('rustc', ['--version'], { encoding: 'utf8' }).trim(),
   liveAcceptance: 'not-run' };

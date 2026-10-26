@@ -2,6 +2,7 @@
 pub mod assets;
 mod build;
 pub mod install;
+mod native;
 mod packet;
 use assets::HotAssets;
 pub(crate) use build::WITHHELD_ENV as PUBLISHER_SECRET_ENV;
@@ -33,6 +34,7 @@ struct Checked {
     version: String,
     fingerprint: String,
     notes: String,
+    binary: Value,
 }
 /// A checked release is only worth reporting while it is newer than the UI
 /// that is actually running. A hot activation reloads only the webview, so the
@@ -214,7 +216,7 @@ pub async fn hub_update(
             .as_ref()
             .is_some_and(|c| root().is_ok_and(|p| p.join(format!("{}.json", c.digest)).is_file()));
         return Ok(
-            json!({"nativeVersion":env!("CARGO_PKG_VERSION"),"nativeFingerprint":FINGERPRINT,"hot":hot,"build":state.build.status(),"installation":read_json::<Value>(&root()?.join("last-install.json")).ok(),"release":cached.as_ref().map(|c|json!({"available":true,"version":c.version,"kind":c.kind,"channel":c.channel,"digest":c.digest,"notes":c.notes})),"downloaded":downloaded}),
+            json!({"nativeVersion":env!("CARGO_PKG_VERSION"),"nativeFingerprint":FINGERPRINT,"hot":hot,"build":state.build.status(),"installation":read_json::<Value>(&root()?.join("last-install.json")).ok(),"release":cached.as_ref().map(|c|json!({"available":true,"version":c.version,"kind":c.kind,"channel":c.channel,"digest":c.digest,"notes":c.notes,"binary":{"state":c.binary["state"],"message":c.binary["message"]}})),"downloaded":downloaded}),
         );
     }
     if action == "ready" {
@@ -225,17 +227,30 @@ pub async fn hub_update(
         state.build.cancel();
         return Ok(json!({"ok":true}));
     }
+    if action == "prerequisites" {
+        return tauri::async_runtime::spawn_blocking(build::prerequisites)
+            .await
+            .map_err(|e| e.to_string());
+    }
     if state.busy.swap(true, Ordering::AcqRel) {
         return Err("Обновление уже обрабатывается".into());
     }
     let _gate = Gate(&state.busy);
-    if tauri::is_dev() && matches!(action.as_str(), "activate" | "build" | "install") {
+    if matches!(action.as_str(), "build" | "download") {
+        crate::updates::ensure_writable()?;
+    }
+    if tauri::is_dev()
+        && matches!(
+            action.as_str(),
+            "activate" | "build" | "install" | "download"
+        )
+    {
         return Err(
             "Обновления устанавливаются только в собранной версии Enki, не в режиме разработки."
                 .into(),
         );
     }
-    let _lease = if matches!(action.as_str(), "check" | "build") {
+    let _lease = if matches!(action.as_str(), "check" | "build" | "download") {
         None
     } else {
         crate::updates::ensure_writable()?;
@@ -295,7 +310,20 @@ pub async fn hub_update(
                 .chars()
                 .take(4000)
                 .collect();
-            let reply = json!({"available":true,"version":version,"kind":kind,"digest":digest,"notes":notes,"revision":head["revision"].as_str()});
+            let binary = if kind == "source" {
+                let (id, ch, v, f) = (
+                    identity.clone(),
+                    checked_channel.clone(),
+                    version.clone(),
+                    fp.clone(),
+                );
+                tauri::async_runtime::spawn_blocking(move || native::available(&id, &ch, &v, &f))
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                Value::Null
+            };
+            let reply = json!({"available":true,"version":version,"kind":kind,"digest":digest,"notes":notes,"revision":head["revision"].as_str(),"binary":{"state":binary["state"],"message":binary["message"]}});
             *state.checked.lock().map_err(|e| e.to_string())? = Some(Checked {
                 channel: checked_channel,
                 identity,
@@ -304,11 +332,21 @@ pub async fn hub_update(
                 version,
                 fingerprint: fp,
                 notes,
+                binary,
             });
             Ok(reply)
         }
         "download" => {
             let c = checked(&app, channel.as_deref())?;
+            if c.kind == "source" {
+                if c.binary["state"] != "ready" {
+                    return Err("Готовый пакет пока недоступен. Повторите проверку позже или явно выберите локальную сборку.".into());
+                }
+                let package = native::verify(&c.binary, &c.version, &c.fingerprint)?;
+                state.build.start_binary(package, c.version, c.digest)?;
+                return Ok(json!({"started":true,"mode":"binary"}));
+            }
+            let _lease = lease()?;
             let cc = c.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 let value =
@@ -359,7 +397,27 @@ pub async fn hub_update(
             if c.kind != "source" {
                 return Err("Этому обновлению сборка не нужна".into());
             }
-            let v = verified(&c)?;
+            let cc = c.clone();
+            let v = tauri::async_runtime::spawn_blocking(move || {
+                let prereq = build::prerequisites();
+                if prereq["available"] != true {
+                    return Err(prereq["reason"]
+                        .as_str()
+                        .unwrap_or("Нет инструментов сборки")
+                        .to_owned());
+                }
+                let e: Envelope = serde_json::from_value(crate::hub::release_get(
+                    &format!("artifacts/{}", cc.digest),
+                    &cc.identity,
+                )?)
+                .map_err(|_| "Некорректный пакет исходников")?;
+                let verified =
+                    packet::verify(&e, &cc.digest, &cc.version, &cc.kind, &cc.fingerprint)?;
+                atomic(&root()?.join(format!("{}.json", cc.digest)), &e)?;
+                Ok::<_, String>(verified)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
             state.build.start(v, c.digest.clone())?;
             Ok(json!({"started":true}))
         }
@@ -439,6 +497,7 @@ mod checked_freshness_tests {
             version: version.into(),
             fingerprint: "f".repeat(64),
             notes: String::new(),
+            binary: serde_json::Value::Null,
         }
     }
     #[test]

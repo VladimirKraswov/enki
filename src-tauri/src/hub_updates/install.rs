@@ -1,4 +1,4 @@
-//! A copy of the current executable applies a locally compiled release only
+//! A copy of the current executable applies a verified prepared release only
 //! after the parent exits. The plan is private, bounded and hash-bound.
 use super::{atomic, packet, read_json, root};
 use serde::{Deserialize, Serialize};
@@ -90,7 +90,7 @@ impl Plan {
 }
 pub fn launch(plan: Plan) -> Result<(), String> {
     if tree_hash(&plan.artifact)? != plan.hash {
-        return Err("Собранный пакет изменился. Повторите сборку.".into());
+        return Err("Подготовленный пакет изменился. Повторите подготовку.".into());
     }
     let dir = root()?.join(format!("apply-{}", std::process::id()));
     fs::create_dir(&dir).map_err(|e| e.to_string())?;
