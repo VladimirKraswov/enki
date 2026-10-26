@@ -74,7 +74,16 @@ impl Build {
             state["elapsedSeconds"] = json!(end.saturating_sub(started) / 1000);
         }
         if let Some(log) = state["logPath"].as_str() {
+            let status = Path::new(log).with_file_name(".enki-build-cache-status.json");
+            let cache = fs::metadata(&status)
+                .ok()
+                .filter(|m| m.len() < 4096)
+                .and_then(|_| fs::read(&status).ok())
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
             state["logBytes"] = json!(fs::metadata(log).map(|m| m.len()).unwrap_or(0));
+            if let Some(cache) = cache {
+                state["cache"] = cache;
+            }
         }
         state
     }
@@ -190,6 +199,19 @@ impl Build {
         }
         let log = directory.join("build.log");
         self.set(json!({"logPath":log}));
+        // Best-effort acceleration. Missing Hub support never blocks compilation.
+        let cache_file = directory.join(".enki-build-cache.json");
+        let cache = crate::hub::build_cache_lease()
+            .ok()
+            .filter(|value| super::atomic(&cache_file, value).is_ok());
+        struct SecretFile(PathBuf);
+        impl Drop for SecretFile {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+        let _cache_file_guard = SecretFile(cache_file.clone());
+        self.set(json!({"cache": {"state":if cache.is_some() {"preparing"} else {"unavailable"}}}));
         for (stage, args, limit) in [
             (
                 "dependencies",
@@ -215,6 +237,10 @@ impl Build {
                 .env_remove("TAURI_CONFIG")
                 .env_remove("CARGO_BUILD_TARGET")
                 .env_remove("ENKI_BUILD_JOB_RUNNER");
+            cmd.env_remove("ENKI_BUILD_CACHE_CONFIG");
+            if stage == "compiling" && cache.is_some() {
+                cmd.env("ENKI_BUILD_CACHE_CONFIG", &cache_file);
+            }
             // Windows runtime preparation compiles its own native Job runner
             // from this authenticated packet (scripts/runtime/build-runner.mjs)
             // before any job; no installed or packet-supplied executable is

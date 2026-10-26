@@ -57,7 +57,10 @@ export function publishPackages(root,env=process.env,run=execFileSync){
   if(previous&&!previous.draft){missingAssets(previous,expected,env.GITHUB_SHA,true);return manifest;}
   if(previous){const missing=missingAssets(previous,expected,env.GITHUB_SHA);if(missing.length)gh(['release','upload',`v${version}`,...missing.map(name=>paths.get(name)),'--repo',REPO]);}
   else gh(['release','create',`v${version}`,...paths.values(),'--repo',REPO,'--target',env.GITHUB_SHA,'--title',`Enki ${version}`,'--notes','Готовые пакеты Enki. Контракты и сборка проверены CI на macOS, Windows и Linux. Живая приёмка на устройствах выполняется отдельно.','--draft']);
-  const uploaded=JSON.parse(gh(['api',`repos/${REPO}/releases/tags/v${version}`]));
+  // GitHub's tag endpoint can return 404 for a draft. The authenticated list
+  // includes drafts; re-read it after upload and identify the exact tag.
+  const uploaded=JSON.parse(gh(['api',`repos/${REPO}/releases?per_page=100`])).find(r=>r.tag_name===`v${version}`);
+  if(!uploaded)throw Error('Uploaded release draft not found');
   if(missingAssets(uploaded,expected,env.GITHUB_SHA).length)throw Error('Upload incomplete; draft retained');
   // Create as draft, upload all, then expose atomically. Hub still waits for this
   // workflow to finish successfully and independently checks GitHub digests.

@@ -1,7 +1,7 @@
 {
   "name": "enki",
   "private": true,
-  "version": "2.0.6",
+  "version": "2.0.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -30,7 +30,8 @@
     "build:release:macos": "npm run runtime:prepare -- --platform darwin-arm64 && tauri build --bundles app,dmg --config src-tauri/tauri.runtime.conf.json --config '{\"bundle\":{\"createUpdaterArtifacts\":true,\"macOS\":{\"signingIdentity\":\"-\"}}}'",
     "release:local": "node scripts/releases/operator.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "release:packages": "node scripts/releases/dispatch-packages.mjs"
+    "release:packages": "node scripts/releases/dispatch-packages.mjs",
+    "test:build-cache": "node --test scripts/build-cache/*.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

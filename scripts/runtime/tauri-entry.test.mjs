@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { RUNTIME_CONFIG, hostNodeProblem, main, normalizedBin, planTauriInvocation, resolveTauriCli, runTauriInvocation } from './tauri-entry.mjs';
+import { RUNTIME_CONFIG, compilerArguments, hostNodeProblem, main, normalizedBin, planTauriInvocation, resolveTauriCli, runTauriInvocation } from './tauri-entry.mjs';
 import { preparationDigest, preparedRuntimeProblems } from './prepare.mjs';
 import { MANIFEST, buildManifest, sha256File } from './artifact.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -25,6 +25,15 @@ const OLD_VECTORS = {
   'linux-rpm': ['build', '--bundles', 'rpm', '--ci', '--', '--locked'],
 };
 const withRuntime = argv => { const at = argv.indexOf('--'); return [...argv.slice(0, at), '--config', RUNTIME_CONFIG, ...argv.slice(at)]; };
+
+test('cache keeps the isolated target through Cargo arguments, including paths with spaces', () => {
+  const env = {CARGO_TARGET_DIR:'/private/build attempt/target'};
+  for(const args of [['build','--','--locked'],['build','--ci']]) {
+    const got = compilerArguments(args,env,{});
+    assert.deepEqual(got.slice(got.indexOf('--')+1),[...(args.includes('--')?['--locked']:[]),'--target-dir',env.CARGO_TARGET_DIR]);
+    assert.equal(compilerArguments(args,env,env),args,'ordinary and fallback builds keep original argv');
+  }
+});
 
 // Fixture CLI: records argv/cwd, then exits FIXTURE_EXIT or hangs (FIXTURE_HANG, optionally ignoring SIGTERM).
 function fixtureCli(root) {

@@ -43,6 +43,7 @@ export function UpdateSettings(){
     {!hot&&stage&&(stage!=='ready'||built)&&stages[stage]&&<p role="status">{stages[stage]}</p>}
     {!hot&&compiling&&<progress aria-label="Подготовка обновления" max={u.status?.build.totalBytes} value={u.status?.build.totalBytes?u.status.build.receivedBytes:undefined} />}
     {!hot&&u.status?.build.elapsedSeconds!==undefined&&<p className="muted">Время подготовки: {Math.floor(u.status.build.elapsedSeconds/60)} мин {u.status.build.elapsedSeconds%60} с. {compiling?'Можно продолжать работу в чатах.':''}</p>}
+    {!hot&&u.status?.build.mode==='source'&&u.status.build.cache&&<p className="muted">{u.status.build.cache.state==='active'?`Кэш Hub: использовано ${u.status.build.cache.hits??0} библиотек, сохранено ${u.status.build.cache.writes??0}.`:u.status.build.cache.state==='preparing'?'Подключаем кэш компилятора на Hub…':'Кэш Hub недоступен — выполняется обычная сборка.'}</p>}
     {!hot&&u.status?.build.logPath&&<details><summary>Журнал подготовки{u.status.build.logBytes?` · ${Math.ceil(u.status.build.logBytes/1024)} КБ`:''}</summary><p style={{overflowWrap:'anywhere'}}>{u.status.build.logPath}</p></details>}
     {!hot&&stage==='error'&&<p className="muted">Обновление не установлено; чаты и настройки сохранены. Можно повторить загрузку или сборку.</p>}
     {!hot&&u.status?.build.error&&<p role="alert">{u.status.build.error}</p>}

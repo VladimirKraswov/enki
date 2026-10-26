@@ -58,6 +58,11 @@ export function planTauriInvocation(argv, { platform = process.platform, arch = 
   return Object.freeze({ command, prepare, platform: `${platform}-${arch}`, original, args });
 }
 
+export function compilerArguments(args, env, buildEnv) {
+  if (buildEnv === env || !env.CARGO_TARGET_DIR || buildEnv.CARGO_TARGET_DIR) return args;
+  return [...args, ...(args.includes('--') ? [] : ['--']), '--target-dir', env.CARGO_TARGET_DIR];
+}
+
 /** npm-equivalent bin map, or null when any entry is not a plain contained
  * relative path. npm-ci writes the lock in normalized form: a string bin names
  * the unscoped package, and `./tauri.js` (official package metadata) is the same
@@ -168,7 +173,17 @@ export async function runTauriInvocation(plan, options = {}) {
     const problems = port.preparedRuntimeProblems(repo, identity);
     if (problems.length) throw typed('ENKI_RUNTIME_UNVERIFIED', `Prepared runtime does not verify for this source (${problems.slice(0, 3).join('; ')}); refusing to build an app without it`);
   }
-  return spawnCli(cli || resolveTauriCli(repo), plan.args, { repo, env, signal, timeoutMs, graceMs, spawnImpl });
+  const compile = buildEnv => {
+    // Keep the native builder's isolated output directory explicit while avoiding
+    // CARGO_TARGET_DIR in rustc's hashed environment (it changes every attempt).
+    const args = compilerArguments(plan.args, env, buildEnv);
+    return spawnCli(cli || resolveTauriCli(repo), args, { repo, env: buildEnv, signal, timeoutMs, graceMs, spawnImpl });
+  };
+  if (plan.command === 'build' && plan.prepare && env.ENKI_BUILD_CACHE_CONFIG) {
+    const { withBuildCache } = await import('../build-cache/client.mjs');
+    return withBuildCache({ repo, env, signal, log }, compile);
+  }
+  return compile(env);
 }
 
 /** CLI semantics: exit code of the Tauri CLI, 1 on refusal/failure, 130 on cancel. */

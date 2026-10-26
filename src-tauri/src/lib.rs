@@ -12,6 +12,7 @@ pub mod hub;
 pub mod hub_updates;
 mod image_context;
 mod images;
+mod instance_guard;
 mod journal;
 mod lifecycle;
 mod lsp;
@@ -55,6 +56,15 @@ pub fn run() {
             eprintln!("Обновление стандартных инструкций Enki: {error}");
         }
     }
+    // The installer takes the exclusive side after the old process exits.
+    // A launch during replacement exits; the installer reopens the final bundle.
+    let _installation_guard = match instance_guard::desktop() {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
+    };
     let hot = hub_updates::assets::HotAssets::load();
     let mut context = tauri::generate_context!();
     let mut profile_windows = Vec::new();
@@ -84,6 +94,9 @@ pub fn run() {
         embedded,
     }));
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show(app);
+        }))
         .manage(hosts::Hosts::default())
         .manage(runtime::RuntimeSupervisor::default())
         .manage(runtime_ui::UiAuthority::default())
@@ -95,6 +108,10 @@ pub fn run() {
         .manage(browser::BrowserRuntime::default())
         .manage(control::AgentControl::default())
         .setup(move |app| {
+            // Backstop for simultaneous starts or unavailable OS activation IPC.
+            // No runtime/controller is started without exclusive profile ownership.
+            let ownership = instance_guard::profile().map_err(std::io::Error::other)?;
+            app.manage(ownership);
             if let Some(profile) = &webview_profile {
                 for window in &profile_windows {
                     profile

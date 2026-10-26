@@ -27,6 +27,10 @@ _services_spec = importlib.util.spec_from_file_location('enki_model_services', P
 _services_module = importlib.util.module_from_spec(_services_spec)
 _services_spec.loader.exec_module(_services_module)
 
+_cache_spec = importlib.util.spec_from_file_location('enki_build_cache', Path(__file__).with_name('build_cache.py'))
+_cache_module = importlib.util.module_from_spec(_cache_spec)
+_cache_spec.loader.exec_module(_cache_module)
+
 MAX_BODY = 2 * 1024 * 1024
 KINDS = {'skill', 'prompt', 'tool', 'template', 'runbook'}
 KEY = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
@@ -200,6 +204,7 @@ class Hub:
         self.memory = _memory_module.Memory(self.connection, self.lock, scrub, Fault)
         self.releases = _release_module.Releases(root, self.lock, Fault)
         self.native_updates = _native_module.NativeUpdates(self.releases, _device_module.sign)
+        self.build_cache = _cache_module.BuildCache(root / 'build-cache')
         self.model_catalog = _catalog_module.ModelCatalog(root, self.lock, Fault)
         self.model_services = _services_module.ModelServices(root, self.model_catalog, Fault)
 
@@ -234,6 +239,10 @@ class Hub:
     def admin(actor):
         if not actor['admin']:
             raise Fault(403, 'Нужен ключ администратора.')
+
+    def cache_device_active(self, device):
+        with self.connection() as c:
+            return c.execute('SELECT 1 FROM devices WHERE id=? AND revoked=0', (device,)).fetchone() is not None
 
     def item(self, data):
         id_, kind = data.get('id', ''), data.get('kind', '')
@@ -553,6 +562,7 @@ class Hub:
         raise Fault(404,'Неизвестный метод API.')
 
     def maintain(self):
+        self.build_cache.maintain()
         now=int(time.time()*1000)
         with self.lock, self.connection() as c:
             keep=json.loads(c.execute('SELECT value FROM settings WHERE id="retention"').fetchone()[0])
@@ -635,6 +645,14 @@ class Handler(BaseHTTPRequestHandler):
             if origin and urlsplit(origin).netloc != self.headers.get('Host'):
                 raise Fault(403,'Запрос с другого сайта отклонён.')
             if self.command=='GET' and path=='/health':return self.respond(200,{'service':'enki-hub','apiVersion':1})
+            if self.command=='POST' and path=='/api/build-cache/release':
+                auth=self.headers.get('Authorization','')
+                self.server.hub.build_cache.release(auth[7:] if auth.startswith('Bearer ') else '')
+                self.close_connection=True
+                return self.respond(200,{'ok':True})
+            if path.startswith('/api/build-cache/objects/'):
+                if parsed.query:raise Fault(400,'Параметры кэша не поддерживаются.')
+                return self.server.hub.build_cache.handle(self,path,self.server.hub.cache_device_active)
             if path.startswith('/downloads/'):
                 self.close_connection=True
                 if self.command!='GET':raise Fault(405,'Скачивание доступно только через GET.')
@@ -663,6 +681,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.headers.get('Content-Type','').startswith('application/json'):raise Fault(415,'Нужен JSON.')
                 data=json.loads(self.rfile.read(size))
                 if not isinstance(data,dict):raise Fault(400,'Нужен JSON-объект.')
+            if self.command=='POST' and path=='/api/build-cache/lease':
+                # Browser cookies cannot authorize a compiler cache lease.
+                auth=self.headers.get('Authorization','')
+                actor=self.server.hub.authenticate(auth[7:] if auth.startswith('Bearer ') else '')
+                return self.respond(200,self.server.hub.build_cache.lease(actor,data.get('platform')))
             if self.command=='POST' and path=='/api/login':
                 actor=self.server.hub.authenticate(data.get('token'))
                 sid=secrets.token_urlsafe(32)
@@ -684,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
                 kind={'/':'text/html; charset=utf-8','/app.js':'text/javascript; charset=utf-8','/style.css':'text/css; charset=utf-8'}[path]
                 return self.respond(200,file.read_bytes(),kind)
             raise Fault(404,'Страница не найдена.')
-        except Fault as e:
+        except (Fault, _cache_module.CacheError) as e:
             if e.status>=400:self.close_connection=True
             self.respond(e.status,{'error':e.message})
         except (ValueError,TypeError,KeyError):self.respond(400,{'error':'Некорректный запрос.'})
@@ -697,6 +720,8 @@ class Handler(BaseHTTPRequestHandler):
             if download_slot:self.server.release_download.release()
     do_GET=dispatch
     do_POST=dispatch
+    do_PUT=dispatch
+    do_HEAD=dispatch
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()

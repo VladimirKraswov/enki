@@ -16,6 +16,7 @@ try {
   env.ENKI_TEST_NATIVE_RUNNER=receipt.path;env.ENKI_TEST_NATIVE_RUNNER_SHA256=receipt.sha256;
  }
  const tests=fs.readdirSync(path.join(repo,'scripts/runtime')).filter(n=>n.endsWith('.test.mjs')).sort().map(n=>path.join(repo,'scripts/runtime',n));
+ tests.push(path.join(repo,'scripts/build-cache/client.test.mjs'));
  const code=await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--experimental-transform-types','--test',...tests],{cwd:repo,env,stdio:'inherit',windowsHide:true});child.once('error',reject);child.once('close',(code,signal)=>resolve(signal?1:code??1));});
  process.exitCode=code;
 } finally {if(owned&&process.exitCode===0)fs.rmSync(owned,{recursive:true,force:true,maxRetries:5,retryDelay:50});}

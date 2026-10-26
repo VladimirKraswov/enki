@@ -19,6 +19,7 @@
 
 - [Разработка](DEVELOPMENT.md), [платформы](PLATFORMS.md), [проверки](VERIFICATION.md), [живая приёмка](PLATFORM-ACCEPTANCE.md).
 - [Архитектура](ARCHITECTURE.md), [runtime](RUNTIME.md), [слой клиента](AGENT-BACKENDS.md), [API](API.md).
+- [Кэш сборки на Hub](BUILD-CACHE.md).
 - [Обновление SDK](SDK-UPGRADE.md), [удалённый runtime](REMOTE-RUNTIME.md).
 - [Мастерская и выпуск](SELF-DEVELOPMENT.md), [Windows bootstrap](WINDOWS-BOOTSTRAP.md), [задание Windows-агенту](WINDOWS-AGENT-PROMPT.md).
 - [Внешнее управление приложением](AGENT-CONTROL.md), [длительные задачи](AGENT-FACTORY.md).

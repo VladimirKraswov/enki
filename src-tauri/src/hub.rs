@@ -168,6 +168,57 @@ pub(crate) fn release_get(path: &str, identity: &str) -> Result<Value, String> {
     }
     serde_json::from_slice(&bytes).map_err(|_| "Некорректный ответ сервера обновлений".into())
 }
+/// A source build receives only an expiring compiler-cache capability, never
+/// the paired Hub key. The configured certificate/origin remain authoritative.
+pub(crate) fn build_cache_lease() -> Result<Value, String> {
+    let c = load()?;
+    let endpoint = origin(&c.endpoint)?;
+    let key = vault(&c.endpoint)?
+        .get_password()
+        .map_err(|_| "Нет ключа Hub")?;
+    let platform = format!(
+        "{}-{}",
+        match std::env::consts::OS {
+            "macos" => "darwin",
+            "windows" => "win32",
+            value => value,
+        },
+        match std::env::consts::ARCH {
+            "aarch64" => "arm64",
+            "x86_64" => "x64",
+            value => value,
+        }
+    );
+    let response = client(&c)?
+        .post(format!("{endpoint}/api/build-cache/lease"))
+        .timeout(Duration::from_secs(5))
+        .bearer_auth(key)
+        .json(&json!({"platform":platform}))
+        .send()
+        .map_err(|_| "Кэш Hub недоступен; сборка без кэша")?;
+    if !response.status().is_success() {
+        return Err("Hub пока не предоставляет кэш сборки".into());
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Ошибка доступа к кэшу")?;
+    if bytes.len() > 4096 {
+        return Err("Некорректный ответ кэша".into());
+    }
+    let grant: Value = serde_json::from_slice(&bytes).map_err(|_| "Некорректный ответ кэша")?;
+    let token = grant["token"]
+        .as_str()
+        .filter(|s| {
+            (32..=128).contains(&s.len())
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+        })
+        .ok_or("Некорректный доступ к кэшу")?;
+    Ok(json!({"endpoint":endpoint,"certificate":c.certificate,"platform":platform,"token":token}))
+}
+
 fn origin(value: &str) -> Result<String, String> {
     let u = url::Url::parse(value.trim()).map_err(|_| "Нужен HTTPS-адрес библиотеки")?;
     if u.scheme() != "https"

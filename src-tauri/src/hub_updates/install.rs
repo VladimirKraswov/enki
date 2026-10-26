@@ -289,7 +289,7 @@ fn destination(p: &Plan) -> PathBuf {
     p.target.clone()
 }
 fn apply(p: &Plan) -> Applied {
-    let checked = (|| -> Result<fs::File, String> {
+    let checked = (|| -> Result<(fs::File, fs::File), String> {
         semver::Version::parse(&p.version).map_err(|e| e.to_string())?;
         if p.parent == 0 || p.parent == std::process::id() {
             return Err("Invalid parent process".into());
@@ -303,10 +303,11 @@ fn apply(p: &Plan) -> Applied {
         }
         wait_parent(p.parent)?;
         let lease = super::lease()?;
+        let desktop_guard = crate::instance_guard::installer()?;
         if tree_hash(&p.artifact)? != p.hash {
             return Err("Пакет изменён после завершения приложения".into());
         }
-        Ok(lease)
+        Ok((lease, desktop_guard))
     })();
     let _lease = match checked {
         Ok(lease) => lease,
@@ -459,7 +460,7 @@ fn reopen(target: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut c = Command::new("/usr/bin/open");
-        c.arg("-n").arg(target);
+        c.arg(target);
         c
     };
     #[cfg(not(target_os = "macos"))]

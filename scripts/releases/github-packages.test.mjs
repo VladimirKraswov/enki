@@ -24,3 +24,22 @@ test('an exact interrupted draft resumes only missing assets; published or chang
  assert.throws(()=>missingAssets({...release,draft:false},expected,identity.commit,true));
  assert.deepEqual(missingAssets({...release,draft:false},new Map([['one',expected.get('one')]]),identity.commit,true),[]);
 });
+
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {nativeFingerprint} from './packet.mjs';
+test('publication verifies the uploaded draft through the authenticated list before exposing it',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'enki-draft-'));const version=JSON.parse(fs.readFileSync('package.json')).version;
+ const commit='a'.repeat(40),fp=nativeFingerprint('src-tauri');let created=false,published=false,assets=[];
+ try {
+  for(const [i,item] of fixture().entries()){
+   const dir=path.join(root,String(i));fs.mkdirSync(dir);item.receipt.version=version;item.receipt.artifact=item.receipt.artifact.replace('2.0.6',version);item.receipt.nativeFingerprint=fp;
+   fs.writeFileSync(path.join(dir,item.receipt.artifact),item.bytes);fs.writeFileSync(path.join(dir,'ci-artifacts.json'),JSON.stringify(item.receipt));
+  }
+  const env={GITHUB_REPOSITORY:'VladimirKraswov/enki',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',ENKI_PUBLISHED_COMMIT:commit,GITHUB_SHA:commit,GITHUB_RUN_ID:'71'};
+  publishPackages(root,env,(_command,args)=>{
+   if(args[0]==='api'){assert.ok(args[1].endsWith('/releases?per_page=100'),'tag endpoint returns 404 for drafts');return JSON.stringify(created?[{tag_name:'v'+version,draft:true,target_commitish:commit,assets}]:[]);}
+   if(args[1]==='create'){created=true;assets=args.slice(3,args.indexOf('--repo')).map(file=>{const bytes=fs.readFileSync(file);return {name:path.basename(file),size:bytes.length,digest:'sha256:'+hash(bytes),state:'uploaded'};});return '';}
+   assert.equal(args[1],'edit');assert.ok(created);published=true;return '';
+  });
+  assert.ok(published);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
