@@ -21,6 +21,9 @@ struct Pointer {
     pending: bool,
     last_error: Option<String>,
 }
+const LEGACY_CACHE_ERROR: &str =
+    "Сохранённое обновление несовместимо или повреждено. Загружен встроенный интерфейс.";
+const CACHE_ERROR: &str = "Не удалось проверить сохранённое обновление: оно повреждено или требует другой версии приложения. Enki запущена со встроенным интерфейсом; загрузите обновление заново.";
 struct Bundle {
     digest: String,
     version: String,
@@ -63,7 +66,7 @@ impl HotAssets {
             .map(|p| p.as_path())
             .ok_or("Хранилище обновлений недоступно".into())
     }
-    fn cached(root: &std::path::Path, digest: &str) -> Result<Bundle, String> {
+    fn cached(root: &std::path::Path, digest: &str) -> Result<Option<Bundle>, String> {
         if !packet::hash_ok(digest) {
             return Err("Invalid cached release".into());
         }
@@ -77,17 +80,26 @@ impl HotAssets {
             .decode(&e.payload)
             .map_err(|_| "Invalid cache")?;
         let p: packet::Packet = serde_json::from_slice(&raw).map_err(|_| "Invalid cache")?;
-        let v = packet::verify(&e, digest, &p.version, "hot", FINGERPRINT)?;
-        if semver::Version::parse(&p.version).map_err(|e| e.to_string())?
-            < semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?
-        {
-            return Err("Cached UI predates native version".into());
+        // Authenticate the original packet before deciding whether a native
+        // update has superseded it. A different fingerprint is never executed.
+        let v = packet::verify(&e, digest, &p.version, "hot", &p.native_fingerprint)?;
+        Self::compatible_cached(digest, v)
+    }
+    fn compatible_cached(digest: &str, v: Verified) -> Result<Option<Bundle>, String> {
+        let version = semver::Version::parse(&v.packet.version).map_err(|e| e.to_string())?;
+        let native =
+            semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
+        if version <= native {
+            return Ok(None);
         }
-        Ok(Bundle {
+        if v.packet.native_fingerprint != FINGERPRINT {
+            return Err("Cached UI requires another native version".into());
+        }
+        Ok(Some(Bundle {
             digest: digest.into(),
-            version: p.version,
+            version: v.packet.version,
             files: v.files,
-        })
+        }))
     }
     fn restore(&self) -> Result<(), String> {
         let path = self.cache()?.join("active.json");
@@ -95,6 +107,22 @@ impl HotAssets {
             return Ok(());
         }
         let mut p: Pointer = read_json(&path)?;
+        // Older versions persisted this generic error after a normal native
+        // upgrade. Retire it only when a NEW successful installation of this
+        // exact version has replaced the affected embedded interface.
+        if p.current.is_none() && !p.pending && p.last_error.as_deref() == Some(LEGACY_CACHE_ERROR)
+        {
+            let installed =
+                read_json::<serde_json::Value>(&self.cache()?.join("last-install.json"));
+            if installed.is_ok_and(|v| {
+                v["installed"] == true
+                    && v["phase"] == "committed"
+                    && v["version"] == env!("CARGO_PKG_VERSION")
+            }) {
+                p.last_error = None;
+                atomic(&path, &p)?;
+            }
+        }
         if p.pending {
             p.current = p.previous.take();
             p.pending = false;
@@ -109,17 +137,25 @@ impl HotAssets {
             .transpose();
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         match current {
-            Ok(b) => s.current = b,
+            Ok(b) => {
+                s.current = b.flatten();
+                if p.current.is_some() && s.current.is_none() {
+                    p.current = None;
+                    p.previous = None;
+                    p.last_error = None;
+                    atomic(&path, &p)?;
+                }
+            }
             Err(_) => {
                 p.current = None;
-                p.last_error=Some("Сохранённое обновление несовместимо или повреждено. Загружен встроенный интерфейс.".into());
+                p.last_error = Some(CACHE_ERROR.into());
                 atomic(&path, &p)?;
             }
         }
         s.previous = p.previous.as_deref().and_then(|d| {
             self.cache()
                 .ok()
-                .and_then(|root| Self::cached(root, d).ok())
+                .and_then(|root| Self::cached(root, d).ok().flatten())
         });
         s.pointer = p;
         Ok(())
@@ -333,6 +369,51 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("повреждено"));
+        atomic(&p.join("last-install.json"), &serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "installed": true, "phase": "committed"})).unwrap();
+        hot.restore().unwrap();
+        assert_eq!(hot.status()["lastError"], CACHE_ERROR);
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn native_upgrade_retires_authenticated_older_ui_without_loading_it() {
+        for version in ["0.1.0", env!("CARGO_PKG_VERSION")] {
+            let mut v = bundle(version, "obsolete");
+            v.packet.native_fingerprint = "b".repeat(64);
+            assert!(HotAssets::compatible_cached(&"a".repeat(64), v)
+                .unwrap()
+                .is_none());
+        }
+        let mut future = bundle("99.0.0", "wrong native");
+        future.packet.native_fingerprint = "b".repeat(64);
+        assert!(HotAssets::compatible_cached(&"a".repeat(64), future).is_err());
+        let valid = HotAssets::compatible_cached(&"a".repeat(64), bundle("99.0.0", "valid"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(valid.files["index.html"], b"valid");
+    }
+    #[test]
+    fn successful_new_native_install_clears_only_legacy_cache_warning() {
+        let (hot, p) = fixture();
+        atomic(
+            &p.join("active.json"),
+            &Pointer {
+                last_error: Some(LEGACY_CACHE_ERROR.into()),
+                ..Pointer::default()
+            },
+        )
+        .unwrap();
+        hot.restore().unwrap();
+        assert_eq!(hot.status()["lastError"], LEGACY_CACHE_ERROR);
+        atomic(
+            &p.join("last-install.json"),
+            &serde_json::json!({"version": "0.1.0", "installed": true, "phase": "committed"}),
+        )
+        .unwrap();
+        hot.restore().unwrap();
+        assert_eq!(hot.status()["lastError"], LEGACY_CACHE_ERROR);
+        atomic(&p.join("last-install.json"), &serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "installed": true, "phase": "committed"})).unwrap();
+        hot.restore().unwrap();
+        assert!(hot.status()["lastError"].is_null());
         std::fs::remove_dir_all(p).unwrap();
     }
 }

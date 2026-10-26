@@ -3,6 +3,7 @@
 - [x] Explicit failed-build retry extracts a fresh signed snapshot, keeps diagnostics and displays progress/time/log location; transient component downloads retry twice without weakening authentication.
 - [x] Interrupted shard moves validate ownership and checksums before cleanup; missing targets recover from a verified source, conflicts preserve both files. UI selections, project bindings and drafts follow committed moves within their host.
 - [x] Continuation seeds estimate their actual content instead of inheriting the archived context's token totals; immutable archive accounting remains available.
+- [x] Native upgrades retire authenticated superseded hot UI without a false corruption warning; genuine tampering and incompatible newer bundles remain errors.
 - [ ] Canonical gates, exact CI, signed Hub publication, native installation and owner-history acceptance.
 
 ## Archive acceptance follow-up (2.0.1)
