@@ -1,13 +1,13 @@
 import type { Session } from "../api/types";
 import type { ConnectionState } from "./types";
 
-/** The runtime event stream is the only live status source: a "running" chat or
- * project is confirmed only while the runtime-wide stream is open and the
- * project's status could be read. Otherwise the UI shows "?" (not confirmed). */
+/** Background work needs the runtime-wide stream. The selected folder can
+ * also confirm its own chats through its directory-scoped stream. A failed
+ * status read remains unconfirmed; the icon then describes the connection. */
 export function liveStatusConfirmed(connection: Pick<ConnectionState, "phase" | "streamState" | "globalStreamState" | "statusError">,
   directory: string, currentDirectory: string | null): boolean {
   return connection.phase === "connected" && !(directory === currentDirectory && connection.statusError)
-    && (connection.globalStreamState ?? connection.streamState) === "open";
+    && (connection.globalStreamState === "open" || (directory === currentDirectory && connection.streamState === "open"));
 }
 
 /** A tool waiting for its user still keeps the SDK busy. Attention wins. */

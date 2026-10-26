@@ -719,7 +719,7 @@ async function execute(method: string, raw: unknown): Promise<unknown> {
       if (!request) throw new Error(`permission request ${requestId} is not pending`);
       if (request.sessionID !== store.state.activeSessionId)
         throw new Error("open the permission request's session before replying");
-      await store.replyPermission(request, reply);
+      if (!await store.replyPermission(request, reply)) throw new Error("Ответ на разрешение не подтверждён. Запрос мог уже завершиться; проверьте его статус.");
       return { replied: true, requestId, reply };
     }
     case "answer_question": {

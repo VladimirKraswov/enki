@@ -106,3 +106,23 @@ it("plugin tools pass the same gate; Stop denies a pending request", async () =>
   expect(ran).toBe(0);
   expect(h.runtime.interactions.pendingPermissions()).toEqual([]);
 });
+
+
+it("Bash always runs the next different command through the actual SDK without asking again", async () => {
+  h=await harness();const dir=h.project("bash-always"),sid=await newSession(h,dir,{permission:ASK});
+  const client=stream(h,`directory=${encodeURIComponent(dir)}`);await client.hello;
+  h.scripted.setResponses([
+    fauxAssistantMessage([fauxToolCall("bash",{command:"printf one > one.txt"},{id:"bash-one"})],{stopReason:"toolUse"}),
+    fauxAssistantMessage([fauxToolCall("bash",{command:"printf two > two.txt"},{id:"bash-two"})],{stopReason:"toolUse"}),
+    fauxAssistantMessage("done"),
+  ]);
+  await h.command(promptCommand(h,"bash-always",sid,dir,"fixture commands"));
+  const asked=await client.waitFor(e=>e.event.type==="permission.asked");
+  expect(asked.event.properties.metadata).toMatchObject({alwaysScope:"tool",alwaysTool:"bash"});
+  expect((await h.request("POST",`/permissions/${String(asked.event.properties.id)}/reply`,{reply:"always"})).status).toBe(204);
+  await h.waitReceipt("bash-always",["completed"]);
+  expect(fs.readFileSync(path.join(dir,"one.txt"),"utf8")).toBe("one");
+  expect(fs.readFileSync(path.join(dir,"two.txt"),"utf8")).toBe("two");
+  expect(client.events.filter(e=>e.event.type==="permission.asked")).toHaveLength(1);
+  expect(h.runtime.interactions.pendingPermissions()).toEqual([]);client.close();
+});

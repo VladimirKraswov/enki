@@ -206,7 +206,7 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
           ? 'Выполняется команда. Агент ждёт её результат.' : activeTool ? `Выполняется инструмент: ${activeTool.tool ?? 'инструмент'}` : 'Агент работает…'}</div>}
         {!unconfirmed && !question && !permission && slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
         {!unconfirmed && !question && !permission && slot?.status.type === 'waiting' && <div className="status-line" role="status">{slot.status.message ?? 'Ожидание следующего шага'}</div>}
-        {permission && <PermissionCard req={permission} onReply={r => void store.replyPermission(permission, r)} />}
+        {permission && <PermissionCard key={permission.id} req={permission} onReply={r => store.replyPermission(permission, r)} />}
         {question && <QuestionCard key={question.id} req={question} onReply={(a, files) => store.replyQuestion(question, a, files)} onReject={() => void store.rejectQuestion(question)} />}
         {unconfirmed && <div className="status-line" role="alert">
           {s.connection.statusError ? `Не удалось проверить состояние чата: ${s.connection.statusError}` : "Нет свежих событий. Выполнение не подтверждено; история сохранена."}

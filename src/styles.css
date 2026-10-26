@@ -1490,6 +1490,7 @@ kbd {
 .pending-dot {
   color: var(--warn);
 }
+.pending-dot.connection-pending { display: inline-flex; color: var(--muted); }
 .sidebar-footer {
   border: 0;
   padding: 10px;

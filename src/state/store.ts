@@ -508,17 +508,29 @@ class Store {
 
   /** Runtime snapshot: queues and dialogs that may have changed while the stream was away. */
   async restorePiRuntime(directory: string | null = this.state.directory): Promise<void> {
-    const runtime = this.runtime, generation = this.connectionGeneration;
+    const runtime = this.runtime, generation = this.connectionGeneration, dirGeneration = this.directoryGeneration;
     if (!runtime || this.state.connection.phase !== "connected") return;
-    const snapshot = await runtime.client.snapshot(directory);
-    if (runtime !== this.runtime || generation !== this.connectionGeneration) return;
-    const owns = (id: string) => directory !== null && Object.values(this.state.queues[id]?.items ?? []).some(item => item.directory === directory);
-    applySnapshot(snapshot, directory, owns, this.runtimeSync, this.agentDialogs);
-    // Questions asked/answered while the stream was away: the snapshot is authoritative.
-    const questions = snapshot.questions;
-    if (questions && directory !== null && directory === this.state.directory)
-      this.mutate(s => ({ chat: { ...s.chat, questions: Object.fromEntries(questions.map(q => [q.id, q])) } }));
+    const version = directory !== null && directory === this.state.directory ? ++this.interactionSnapshotVersion : null;
+    const journal = version === null ? null : new HistoryJournal();
+    if (journal) this.historyJournals.add(journal);
+    try {
+      const snapshot = await runtime.client.snapshot(directory);
+      if (runtime !== this.runtime || generation !== this.connectionGeneration) return;
+      const owns = (id: string) => directory !== null && Object.values(this.state.queues[id]?.items ?? []).some(item => item.directory === directory);
+      applySnapshot(snapshot, directory, owns, this.runtimeSync, this.agentDialogs);
+      // Both interaction kinds are authoritative. A completed answer and newer
+      // stream events must never be revived by an earlier in-flight snapshot.
+      if (version !== null && version === this.interactionSnapshotVersion && dirGeneration === this.directoryGeneration
+          && directory === this.state.directory && journal && !journal.overflowed) {
+        const chat = { ...this.state.chat,
+          permissions: Array.isArray(snapshot.permissions) ? Object.fromEntries(snapshot.permissions.map(req => [req.id, req])) : { ...this.state.chat.permissions },
+          questions: Array.isArray(snapshot.questions) ? Object.fromEntries(snapshot.questions.map(req => [req.id, req])) : { ...this.state.chat.questions } };
+        for (const event of journal.events) if (event.type.startsWith("permission.") || event.type.startsWith("question.")) reduceEvent(chat, { ...event, id: undefined });
+        this.mutate({ chat });
+      }
+    } finally { if (journal) this.historyJournals.delete(journal); }
   }
+
   /** Fallback refresh used only while the runtime-wide stream is not open. */
   async refreshPiActivity(): Promise<void> {
     if ((this.state.connection.globalStreamState ?? "idle") === "open") return;
@@ -2871,6 +2883,7 @@ class Store {
         this.mutate((s) => ({
           sessions: s.sessions.map((x) => (x.id === id ? updated : x)),
         }));
+        if (directory) await this.refreshPermissionSnapshot(backend, generation, directory);
       }
     } catch (e) {
       this.patchUi({ toast: `Не удалось изменить доступ: ${errText(e)}` });
@@ -3054,22 +3067,56 @@ class Store {
 
   // ---------- interaction ----------
 
-  async replyPermission(
-    req: PermissionRequest,
-    reply: "once" | "always" | "reject",
-  ): Promise<void> {
-    const directory = this.state.directory;
-    if (!directory) return;
+  private readonly permissionReplies = new Map<string, Promise<boolean>>();
+  private interactionSnapshotVersion = 0;
+  /** Reconcile policy-settled/answered cards without replaying a reply. Events
+   * arriving during the read win over its snapshot; old host/folder reads lose. */
+  private async refreshPermissionSnapshot(backend: AgentBackend, generation: number, directory: string, settled?: string): Promise<PermissionRequest[] | null> {
+    if (backend !== this.runtime || generation !== this.connectionGeneration || directory !== this.state.directory) return null;
+    const dirGeneration = this.directoryGeneration, version = ++this.interactionSnapshotVersion;
+    const current = () => generation === this.connectionGeneration && backend === this.runtime
+      && dirGeneration === this.directoryGeneration && directory === this.state.directory && version === this.interactionSnapshotVersion;
+    const journal = new HistoryJournal();
+    this.historyJournals.add(journal);
     try {
-      await this.backend.replyPermission(req.id, reply);
-      this.mutate((s) => {
-        const permissions = { ...s.chat.permissions };
-        delete permissions[req.id];
-        return { chat: { ...s.chat, permissions } };
-      });
-    } catch (e) {
-      this.patchUi({ toast: `Не удалось ответить на запрос разрешения: ${errText(e)}` });
-    }
+      const pending = await backend.pendingPermissions(directory);
+      if (!current() || journal.overflowed) return null;
+      const chat = { ...this.state.chat, permissions: Object.fromEntries(pending.filter(req => req.id !== settled).map(req => [req.id, req])) };
+      for (const event of journal.events) if (event.type.startsWith("permission.")) reduceEvent(chat, { ...event, id: undefined });
+      if (settled) delete chat.permissions[settled];
+      this.mutate({ chat });
+      return Object.values(chat.permissions);
+    } catch { return null; }
+    finally { this.historyJournals.delete(journal); }
+  }
+
+  async replyPermission(req: PermissionRequest, reply: "once" | "always" | "reject"): Promise<boolean> {
+    const directory = this.state.directory, backend = this.runtime, generation = this.connectionGeneration;
+    if (!directory || !backend) return false;
+    const key = `${generation}:${req.id}`, existing = this.permissionReplies.get(key);
+    if (existing) return existing;
+    const current = () => generation === this.connectionGeneration && backend === this.runtime;
+    const run = (async () => {
+      try {
+        await backend.replyPermission(req.id, reply);
+        if (current()) {
+          this.mutate(s => { const permissions = { ...s.chat.permissions }; delete permissions[req.id]; return { chat: { ...s.chat, permissions } }; });
+          await this.refreshPermissionSnapshot(backend, generation, directory, req.id);
+        }
+        return true;
+      } catch (e) {
+        if (!current()) return false;
+        // A lost ACK or a policy change can finish it before this reply arrives.
+        // Read the authority; never POST a second approval automatically.
+        const pending = await this.refreshPermissionSnapshot(backend, generation, directory);
+        if (pending && !pending.some(item => item.id === req.id)) return false;
+        if (current()) this.patchUi({ toast: `Не удалось ответить на запрос разрешения: ${errText(e)}` });
+        return false;
+      }
+    })();
+    this.permissionReplies.set(key, run);
+    try { return await run; }
+    finally { if (this.permissionReplies.get(key) === run) this.permissionReplies.delete(key); }
   }
 
   async replyQuestion(
@@ -3102,6 +3149,7 @@ class Store {
       // Runtime `question` tool → POST /questions/:id/reply (400 for an invalid answer, 404 once closed).
       await backend.replyQuestion(req.id, answers, directory, parts);
       if (generation !== this.connectionGeneration || directory !== this.state.directory) return true;
+      ++this.interactionSnapshotVersion;
       this.mutate((s) => {
         const questions = { ...s.chat.questions };
         delete questions[req.id];
@@ -3115,17 +3163,19 @@ class Store {
   }
 
   async rejectQuestion(req: QuestionRequest): Promise<void> {
-    const directory = this.state.directory;
-    if (!directory) return;
+    const directory = this.state.directory, backend = this.runtime, generation = this.connectionGeneration;
+    if (!directory || !backend) return;
     try {
-      await this.backend.rejectQuestion(req.id, directory);
+      await backend.rejectQuestion(req.id, directory);
+      if (backend !== this.runtime || generation !== this.connectionGeneration || directory !== this.state.directory) return;
+      ++this.interactionSnapshotVersion;
       this.mutate((s) => {
         const questions = { ...s.chat.questions };
         delete questions[req.id];
         return { chat: { ...s.chat, questions } };
       });
     } catch (e) {
-      this.patchUi({ toast: `Не удалось отклонить вопрос: ${errText(e)}` });
+      if (backend === this.runtime && generation === this.connectionGeneration) this.patchUi({ toast: `Не удалось отклонить вопрос: ${errText(e)}` });
     }
   }
 

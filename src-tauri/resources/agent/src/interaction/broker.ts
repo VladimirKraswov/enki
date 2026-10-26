@@ -5,7 +5,7 @@ import type { DialogRequestDTO, PermissionRequestDTO, QuestionRequestDTO, Server
 import {QUESTION_ANSWER_TEXT_LIMIT} from '../protocol.ts';
 import { text, type Database } from "../store/db.ts";
 import type { EventJournal } from "../store/events.ts";
-import { permissionPreview, readGrant, storedGrant, type ObservedGrant } from "./grants.ts";
+import { permissionPreview, readGrant, storedGrant, storedBashGrant, type ObservedGrant } from "./grants.ts";
 import { questionParts, type AnswerContent } from './answer-parts.ts';
 import type { AttachmentStore, StoredAttachment } from '../store/attachments.ts';
 
@@ -178,7 +178,7 @@ export class InteractionBroker {
     const request: PermissionRequestDTO = {
       id: `perm_${randomUUID()}`, sessionID: ask.sessionID, permission: ask.permission,
       patterns: [preview], always: [preview],
-      metadata: { tool: ask.tool, title: ask.title, summary: permissionPreview(ask.summary).slice(0, 2000), matching: "exact" },
+      metadata: { tool: ask.tool, title: ask.title, summary: permissionPreview(ask.summary).slice(0, 2000), matching: "exact", ...(ask.permission === "bash" && ask.tool === "bash" ? { alwaysScope: "tool", alwaysTool: "bash" } : {}) },
       tool: { callID: ask.callID },
     };
     if (ask.reevaluate) this.rechecks.set(request.id, ask.reevaluate);
@@ -190,7 +190,8 @@ export class InteractionBroker {
       replied: (reply, by) => ({ type: "permission.replied", properties: { sessionID: ask.sessionID, requestID: request.id, reply, by } }),
       commit: reply => {
         if (reply !== "always") return;
-        const row = storedGrant({ permission: ask.permission, identity: ask.identity ?? "" });
+        const row = ask.permission === "bash" && ask.tool === "bash" ? storedBashGrant()
+          : storedGrant({ permission: ask.permission, identity: ask.identity ?? "" });
         this.db.run("INSERT OR IGNORE INTO permission_grants(session_id,permission,pattern,created) VALUES(?,?,?,?)", ask.sessionID, row.permission, row.pattern, Date.now());
       },
     }).finally(() => { this.rechecks.delete(request.id); });
@@ -214,7 +215,13 @@ export class InteractionBroker {
   }
   replyPermission(id: string, reply: PermissionReply): boolean {
     if (reply !== "once" && reply !== "always" && reply !== "reject") throw new Error("Некорректный ответ на запрос разрешения.");
-    return this.permissions.get(id)?.finish(reply, "user", true) ?? false;
+    const pending = this.permissions.get(id);
+    if (!pending) return false;
+    const accepted = pending.finish(reply, "user", true);
+    // A newly remembered grant also releases matching parallel calls. Publish
+    // that decision only after the grant commits, never from a rolled-back row.
+    if (accepted && reply === "always") this.db.afterCommit(() => this.reevaluatePermissions(pending.request.sessionID));
+    return accepted;
   }
 
   askDialog(sessionID: string, directory: string, spec: Omit<DialogRequestDTO, "id" | "sessionID" | "directory" | "deadline">,

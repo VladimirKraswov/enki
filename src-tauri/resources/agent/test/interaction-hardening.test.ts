@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { decide, outsideDirectory } from "../src/interaction/access.ts";
-import { exactIdentity, permissionPreview } from "../src/interaction/grants.ts";
+import { exactIdentity, permissionPreview, storedGrant } from "../src/interaction/grants.ts";
 import { prepareToolPaths, normalizeToolPath } from "../src/interaction/access-paths.ts";
 import { InteractionBroker } from "../src/interaction/broker.ts";
 import { Database } from "../src/store/db.ts";
@@ -187,4 +187,46 @@ it("canonical target preparation preserves Unicode spaces inherited from the SDK
   expect(input.path).toBe("new.txt");
   const verdict = decide({ rules: [], grants: [], fallback: "ask", cwd, tool: "write", input });
   expect(verdict.permission).toBe("edit"); expect(verdict.pattern).toBe(path.join(cwd, "new.txt"));
+});
+
+
+it("an explicit Bash always grant covers new commands only in that chat, respecting deny and read-only", async () => {
+  const f=fixture();
+  const q={rules:[],grants:[],fallback:"ask" as const,cwd:f.project,tool:"bash",input:{command:"echo first",timeout:10}};
+  const verdict=decide(q);
+  const pending=f.broker.askPermission({sessionID:"fixture-session",directory:f.project,permission:verdict.permission,pattern:verdict.pattern,identity:verdict.identity,tool:"bash",callID:"bash-first",title:"Bash",summary:"echo first"});
+  f.broker.replyPermission(f.broker.pendingPermissions()[0].id,"always");await pending;
+  const grants=f.broker.grants("fixture-session"),next={...q,grants,input:{command:"echo second",timeout:20}};
+  expect(decide(next).decision).toBe("allow");
+  expect(decide({...next,grants:f.broker.grants("other-session")}).decision).toBe("ask");
+  expect(decide({...next,tool:"plugin_mutate"}).decision).toBe("ask");
+  expect(decide({...next,tool:"write",input:{path:"file.txt"}}).decision).toBe("ask");
+  expect(decide({...next,fallback:"read"}).decision).toBe("deny");
+  expect(decide({...next,rules:[{permission:"bash",pattern:"*",action:"deny"}]}).decision).toBe("deny");
+});
+
+it("Bash always settles another already waiting Bash call after its grant commits", async () => {
+  const f=fixture();
+  const query=(command:string)=>decide({rules:[],grants:f.broker.grants("fixture-session"),fallback:"ask",cwd:f.project,tool:"bash",input:{command}});
+  const ask=(command:string)=>{const v=query(command);return f.broker.askPermission({sessionID:"fixture-session",directory:f.project,permission:v.permission,pattern:v.pattern,identity:v.identity,tool:"bash",callID:command,title:"Bash",summary:command,reevaluate:()=>query(command).decision});};
+  const first=ask("echo first"),second=ask("echo second");
+  const ids=f.broker.pendingPermissions().map(p=>p.id);
+  f.broker.replyPermission(ids[0],"always");
+  expect(await first).toBe("always");
+  expect(f.broker.pendingPermissions()).toEqual([]);
+  expect(await second).toBe("once");
+});
+
+
+it("new Bash scope survives a fresh database reader without widening old exact approvals", async () => {
+  const f=fixture(),q={rules:[],grants:[],fallback:"ask" as const,cwd:f.project,tool:"bash",input:{command:"echo first"}};
+  const initial=decide(q),old=storedGrant({permission:"bash",identity:initial.identity});
+  f.db.run("INSERT INTO permission_grants VALUES(?,?,?,?)","old-chat",old.permission,old.pattern,Date.now());
+  expect(decide({...q,grants:f.broker.grants("old-chat")}).decision).toBe("allow");
+  expect(decide({...q,grants:f.broker.grants("old-chat"),input:{command:"echo changed"}}).decision).toBe("ask");
+  const pending=f.broker.askPermission({sessionID:"new-chat",directory:f.project,permission:"bash",pattern:initial.pattern,identity:initial.identity,tool:"bash",callID:"remember-bash",title:"Bash",summary:"fixture"});
+  f.broker.replyPermission(f.broker.pendingPermissions()[0].id,"always");await pending;
+  const reader=new Database(path.join(f.root,"metadata.sqlite"));
+  try {const broker=new InteractionBroker(reader,new EventJournal(reader));expect(decide({...q,grants:broker.grants("new-chat"),input:{command:"echo changed"}}).decision).toBe("allow");}
+  finally {reader.close();}
 });

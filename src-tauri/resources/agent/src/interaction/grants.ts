@@ -1,11 +1,12 @@
 // Authored PermissionRule glob patterns and observed grants are different
-// authorities. Only this namespaced/versioned row format is an observed grant;
+// authorities. Only recognised namespaced/versioned rows are observed grants;
 // old untyped rows are deliberately NOT guessed to be exact or glob grants.
 import { createHash } from "node:crypto";
 import { canonicalJson } from "../protocol.ts";
 
-export interface ObservedGrant { permission: string; pattern: string; identity: string }
+export interface ObservedGrant { permission: string; pattern: string; identity: string; tool?: "bash" }
 const PREFIX = "\u0000enki:observed-exact:v1:";
+const BASH = "\u0000enki:observed-bash-tool:v1";
 const HASH = /^[a-f0-9]{64}$/;
 export function exactIdentity(permission: string, value: unknown): string {
   return createHash("sha256").update("enki-observed-action-v1\0").update(permission).update("\0").update(canonicalJson(value)).digest("hex");
@@ -15,7 +16,12 @@ export function storedGrant(grant: Pick<ObservedGrant, "permission" | "identity"
     throw new Error("Не удалось безопасно запомнить разрешение действия.");
   return { permission: PREFIX + grant.permission, pattern: grant.identity };
 }
+/** Explicit new approval only; old exact/untyped rows are never widened. */
+export function storedBashGrant(): { permission: string; pattern: string } {
+  return { permission: BASH, pattern: "bash" };
+}
 export function readGrant(permission: string, pattern: string): ObservedGrant | null {
+  if (permission === BASH) return pattern === "bash" ? { permission: "bash", pattern: "", identity: "", tool: "bash" } : null;
   if (!permission.startsWith(PREFIX) || !HASH.test(pattern)) return null;
   const name = permission.slice(PREFIX.length);
   if (!name || name.length > 256 || /[\u0000-\u001f]/.test(name)) return null;

@@ -188,3 +188,78 @@ it("a background projectless chat keeps its spinner and unread result across the
   expect(store.state.directory).toBeNull();
   expect(store.chatSessions()[0].id).toBe(chat.id);
 });
+
+const permissionRequest=(id:string)=>({id,sessionID:'ses_a',permission:'bash',patterns:['echo fixture'],metadata:{tool:'bash'},tool:{callID:id}});
+it('reconciles other permissions closed by always even when their reply event was missed',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');
+  const first=permissionRequest('first'),second=permissionRequest('second');
+  local.emit({type:'permission.asked',properties:first} as never);local.emit({type:'permission.asked',properties:second} as never);
+  local.on('POST','/permissions/:id/reply',()=>undefined);local.on('GET','/permissions',()=>[]);
+  await store.replyPermission(first,'always');
+  expect(store.pendingInteraction('ses_a').permissions).toEqual([]);
+});
+it('deduplicates a double click while the same permission reply is pending',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');const req=permissionRequest('double');
+  local.emit({type:'permission.asked',properties:req} as never);
+  let finish!:(v:unknown)=>void;const gate=new Promise(resolve=>{finish=resolve;});
+  local.on('POST','/permissions/:id/reply',()=>gate);
+  const first=store.replyPermission(req,'always'),second=store.replyPermission(req,'always');
+  finish(undefined);await Promise.all([first,second]);
+  expect(local.made('POST','/permissions/:id/reply')).toHaveLength(1);
+});
+it('a delayed permission ACK cannot clear a same-id request in another workspace',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');const req=permissionRequest('same-id');
+  local.emit({type:'permission.asked',properties:req} as never);
+  let finish!:(v:unknown)=>void;const gate=new Promise(resolve=>{finish=resolve;});local.on('POST','/permissions/:id/reply',()=>gate);
+  const reply=store.replyPermission(req,'always');await store.connectHost('other');await store.setDirectory('/work/a');await store.selectSession('ses_a');
+  other.emit({type:'permission.asked',properties:req} as never);
+  finish(undefined);await reply;
+  expect(store.pendingInteraction('ses_a').permissions.map((p:{id:string})=>p.id)).toEqual(['same-id']);
+});
+it('refreshes policy-settled permission cards after explicitly selecting full access',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');const req=permissionRequest('policy');
+  local.emit({type:'permission.asked',properties:req} as never);
+  local.on('PATCH','/sessions/:id',call=>({...session('ses_a','/work/a'),permission:(call.body as {permission:unknown}).permission}));
+  local.on('GET','/permissions',()=>[]);
+  await store.setAccessMode('full');expect(store.pendingInteraction('ses_a').permissions).toEqual([]);
+});
+it('a reply event during reconciliation wins over an older permissions snapshot',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');const first=permissionRequest('race-first'),second=permissionRequest('race-second');
+  local.emit({type:'permission.asked',properties:first} as never);local.emit({type:'permission.asked',properties:second} as never);
+  local.on('POST','/permissions/:id/reply',()=>undefined);
+  let finish!:(value:unknown)=>void,readStarted=false;const read=new Promise(resolve=>{finish=resolve;});local.on('GET','/permissions',()=>{readStarted=true;return read;});
+  const answer=store.replyPermission(first,'always');await vi.waitFor(()=>expect(readStarted).toBe(true));
+  local.emit({type:'permission.replied',properties:{sessionID:'ses_a',requestID:second.id,reply:'once'}} as never);
+  const newer={...permissionRequest('newer'),permission:'edit'};local.emit({type:'permission.asked',properties:newer} as never);
+  finish([first,second]);await answer;expect(store.pendingInteraction('ses_a').permissions.map((p:{id:string})=>p.id)).toEqual(['newer']);
+});
+
+it('a lost ACK is reconciled by reading pending requests without replay or a false approval claim',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');const req=permissionRequest('lost-ack');
+  local.emit({type:'permission.asked',properties:req} as never);
+  local.on('POST','/permissions/:id/reply',()=>{throw new TypeError('lost response');});local.on('GET','/permissions',()=>[]);
+  expect(await store.replyPermission(req,'always')).toBe(false);
+  expect(local.made('POST','/permissions/:id/reply')).toHaveLength(1);expect(store.pendingInteraction('ses_a').permissions).toEqual([]);
+});
+it('fallback snapshots remove permissions answered while the event stream was away',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');const req=permissionRequest('snapshot-stale');
+  local.emit({type:'permission.asked',properties:req} as never);
+  const {emptySnapshot}=await import('./helpers/runtime-fixture');local.on('GET','/snapshot',()=>emptySnapshot());
+  await store.restorePiRuntime('/work/a');expect(store.pendingInteraction('ses_a').permissions).toEqual([]);
+});
+it('question replies arriving during a fallback snapshot cannot reappear from its old result',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');
+  const req={id:'question-race',sessionID:'ses_a',questions:[{question:'Fixture?'}]};local.emit({type:'question.asked',properties:req} as never);
+  const {emptySnapshot}=await import('./helpers/runtime-fixture');let finish!:(v:unknown)=>void,started=false;const snapshot=new Promise(resolve=>{finish=resolve;});
+  local.on('GET','/snapshot',()=>{started=true;return snapshot;});const restoring=store.restorePiRuntime('/work/a');await vi.waitFor(()=>expect(started).toBe(true));
+  local.emit({type:'question.replied',properties:{sessionID:'ses_a',requestID:req.id,answers:[['yes']]}} as never);
+  finish({...emptySnapshot(),questions:[req]});await restoring;expect(store.pendingInteraction('ses_a').questions).toEqual([]);
+});
+it('a confirmed question answer invalidates older snapshots even if its event was lost',async()=>{
+  await store.setDirectory('/work/a');await store.selectSession('ses_a');
+  const req={id:'question-ack',sessionID:'ses_a',questions:[{question:'Fixture?'}]};local.emit({type:'question.asked',properties:req} as never);
+  const {emptySnapshot}=await import('./helpers/runtime-fixture');let finish!:(v:unknown)=>void,started=false;const snapshot=new Promise(resolve=>{finish=resolve;});
+  local.on('GET','/snapshot',()=>{started=true;return snapshot;});const restoring=store.restorePiRuntime('/work/a');await vi.waitFor(()=>expect(started).toBe(true));
+  local.on('POST','/questions/:id/reply',()=>undefined);expect(await store.replyQuestion(req,[['yes']])).toBe(true);
+  finish({...emptySnapshot(),questions:[req]});await restoring;expect(store.pendingInteraction('ses_a').questions).toEqual([]);
+});

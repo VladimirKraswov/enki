@@ -347,12 +347,23 @@ export function PermissionCard({
   onReply,
 }: {
   req: PermissionRequest;
-  onReply: (r: "once" | "always" | "reject") => void;
+  onReply: (r: "once" | "always" | "reject") => void | boolean | Promise<void | boolean>;
 }) {
+  const [sending, setSending] = useState(false), [error, setError] = useState(""), flight = useRef(false), alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const bashScope = req.permission === "bash" && req.metadata?.alwaysScope === "tool" && req.metadata?.alwaysTool === "bash";
+  const answer = async (reply: "once" | "always" | "reject") => {
+    if (flight.current) return;
+    flight.current = true; setSending(true); setError("");
+    try { if (await onReply(reply) === false && alive.current) setError("Ответ не отправлен. Запрос сохранён; проверьте подключение."); }
+    catch { if (alive.current) setError("Ответ не отправлен. Запрос сохранён; проверьте подключение."); }
+    finally { flight.current = false; if (alive.current) setSending(false); }
+  };
   return (
     <div
       className="action-card"
       role="alertdialog"
+      aria-busy={sending}
       aria-label="Запрос разрешения"
     >
       <div className="caption">Нужно разрешение</div>
@@ -364,22 +375,25 @@ export function PermissionCard({
         <div className="patterns">{req.patterns.join("\n")}</div>
       )}
       {req.metadata && Object.keys(req.metadata).length > 0 && (
-        <div className="patterns">
+        <details className="permission-details"><summary>Сведения о запросе</summary><div className="patterns">
           {truncate(JSON.stringify(req.metadata, null, 2), 1500)}
-        </div>
+        </div></details>
       )}
+      {error && <div className="composer-error" role="alert">{error}</div>}
+      {bashScope && <p className="muted small">Можно разрешить все Bash-команды только в этом чате. Другие инструменты сохранят свои разрешения.</p>}
       <div className="btn-row">
-        <button className="btn small danger" onClick={() => onReply("reject")}>
+        <button className="btn small danger" disabled={sending} onClick={() => void answer("reject")}>
           Отклонить
         </button>
         <button
           className="btn small"
-          onClick={() => onReply("always")}
-          title="Разрешать это действие до конца сессии"
+          disabled={sending}
+          onClick={() => void answer("always")}
+          title={bashScope ? "Разрешать все Bash-команды в этом чате, включая после перезапуска Enki" : "Запомнить разрешение только для этого действия в этом чате"}
         >
-          Разрешать всегда
+          {bashScope ? "Разрешать Bash в этом чате" : "Запомнить это действие"}
         </button>
-        <button className="btn small primary" onClick={() => onReply("once")}>
+        <button className="btn small primary" disabled={sending} onClick={() => void answer("once")}>
           Разрешить один раз
         </button>
       </div>

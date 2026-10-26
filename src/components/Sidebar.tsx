@@ -27,7 +27,7 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   const status = store.activityStatus(id);
   const mark = sessionWorkMark(pending, status?.type, liveStatusConfirmed(store.state.connection, directory, store.state.directory));
   if (mark === "waiting") return <span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>;
-  if (mark === "unconfirmed") return <span className="pending-dot" role="status" aria-label="Нет свежего статуса задачи" title="Нет связи: выполнение пока не подтверждено">?</span>;
+  if (mark === "unconfirmed") return <span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>;
   if (mark === "working") return <SessionSpinner/>;
   if (store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.sessionID===id&&t.state==="error"))
     return <span className="pending-dot" aria-label="Требуется внимание" title="Проверьте ответ, ошибку или расписание чата">!</span>;

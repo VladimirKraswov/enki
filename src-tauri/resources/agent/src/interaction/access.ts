@@ -69,7 +69,7 @@ export function outsideDirectory(cwd: string, input: Record<string, unknown>): s
 
 export interface AccessQuery {
   rules: readonly PermissionRule[];
-  grants: readonly { permission: string; pattern: string; identity?: string }[];
+  grants: readonly { permission: string; pattern: string; identity?: string; tool?: "bash" }[];
   fallback: DefaultPolicy;
   cwd: string;
   tool: string;
@@ -118,5 +118,7 @@ export function decide(query: AccessQuery): AccessVerdict {
     if (rule === "deny") return { decision: "deny", permission: "external_directory", pattern: external, identity: externalIdentity, reason: "Доступ вне папки проекта запрещён правилами чата." };
     if (rule === "ask" && !granted("external_directory", externalIdentity)) return { decision: "ask", permission: "external_directory", pattern: external, identity: externalIdentity };
   }
-  return { decision: toolDecision === "allow" || granted(permission, identity) ? "allow" : "ask", permission, pattern, identity };
+  const bashGranted = permission === "bash" && query.tool === "bash"
+    && query.grants.some(grant => grant.permission === "bash" && grant.tool === "bash");
+  return { decision: toolDecision === "allow" || granted(permission, identity) || bashGranted ? "allow" : "ask", permission, pattern, identity };
 }

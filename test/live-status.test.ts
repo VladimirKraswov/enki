@@ -6,10 +6,10 @@ const open = { phase: 'connected' as const, streamState: 'open' as const, global
 
 // Regression: the chat-row rule was gated on a constant `isPiSession() === true`,
 // so a busy spinner stayed "confirmed" while the runtime event stream was down.
-it('a running chat or project is confirmed only while the runtime-wide stream is open', () => {
+it('background work requires a global stream and the selected folder can confirm itself', () => {
   expect(liveStatusConfirmed(open, '/p', '/p')).toBe(true);
   for (const state of ['idle', 'connecting', 'reconnecting', 'closed', 'error'] as const)
-    expect(liveStatusConfirmed({ ...open, globalStreamState: state }, '/p', '/p')).toBe(false);
+    expect(liveStatusConfirmed({ ...open, globalStreamState: state, streamState: 'closed' }, '/p', '/p')).toBe(false);
   // Before the global stream reports, the project stream state is used.
   expect(liveStatusConfirmed({ ...open, globalStreamState: undefined, streamState: 'reconnecting' }, '/p', '/p')).toBe(false);
   expect(liveStatusConfirmed({ ...open, phase: 'disconnected' }, '/p', '/p')).toBe(false);
@@ -23,4 +23,11 @@ it('an unfinished tool shows as running only with a busy server AND a live strea
   expect(executionEvidence(false, true, false)).toBe('unconfirmed');
   expect(executionEvidence(false, false, true)).toBe('inactive');
   expect(executionEvidence(true, true, false)).toBe('inactive');
+});
+
+
+it('keeps an open chat confirmed by its directory stream while the global stream reconnects',()=>{
+  expect(liveStatusConfirmed({...open,globalStreamState:'reconnecting'},'/p','/p')).toBe(true);
+  expect(liveStatusConfirmed({...open,globalStreamState:'reconnecting'},'/other','/p')).toBe(false);
+  expect(liveStatusConfirmed({...open,globalStreamState:'reconnecting',streamState:'closed'},'/p','/p')).toBe(false);
 });
