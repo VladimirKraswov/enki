@@ -35,7 +35,7 @@ HTTP concerns and schema normalization out of presentation components.
 - `src/hub/collection.ts` and `identity.ts`: pure collection from one state snapshot and stable Hub identity. Unknown background session metadata is deferred rather than assigned the foreground directory. Native `hub/outbox.rs` validates numeric diagnostics, applies text-sharing policy and rejects enqueue/ack against a different Hub. Package installation also checks the source Hub after asynchronous steps.
 - `src-tauri/src/capabilities/skills.rs`: bounded skill discovery/metadata validation; MCP installation stays in the capabilities facade. Filesystem limits and symlink rejection remain unchanged.
 - `src/capabilities/` and native `capabilities.rs` / `shared_mcp.rs`: explicit shared catalog/adapters, independent agent capability boundaries and bounded MCP proxy. Native auth/paths never become privileged APIs in web pages.
-- `src/outcomes/`, `src/memory/`, `src/hub/` plus native `hub.rs`/`hub/retrieval.rs`: accepted task records, explicit project bindings and approved memory, durable scrubbed telemetry, optional read-only shared memory MCP with per-folder grants. Native Hub/vault credentials never enter MCP arguments; search is off by default and automatic context preparation is not enabled. See `PROJECT-MEMORY.md` and M41 evidence.
+- `src/outcomes/`, `src/memory/`, `src/hub/` plus native `hub.rs`/`hub/retrieval.rs`: accepted task records, explicit project bindings and approved memory, durable scrubbed telemetry, optional read-only shared memory MCP with per-folder grants. Native Hub/vault credentials never enter MCP arguments; search is off by default and automatic context preparation is not enabled. See `PROJECT-MEMORY.md`.
 - `src/components/` and feature folders: workspace chrome, projects/sessions, conversation/composer, review/files, terminal, settings.
 - `src/native/`: the thin Tauri bridges (SSH tunnels, chime, chat workspaces) plus host-platform detection. Platform detection drives presentation only — window-chrome insets, the modifier-key label and OS-specific help text. Feature availability is decided by `AgentBackend.capabilities`, never by the host OS.
 - `src-tauri/src/runtime.rs` (+ `runtime/artifact.rs`, `control.rs`, `vault.rs`, `config_fs.rs`, `config_commit.rs`): the supervisor of the bundled Enki Runtime — verified artifact and pinned Node, a single-flight start (`start_once`), generation-gated restarts and maintenance fences, loopback endpoint with a rotating in-memory bearer, profile-scoped vault namespace, and an owned process tree killed on app exit. `hosts.rs` runs the remote `enki-runtime ensure` and owns only its SSH tunnel.
@@ -80,8 +80,9 @@ Record the app version and the runtime contract version separately. A remote run
 macOS, Windows and Linux are separate build overlays on one codebase. Shared
 configuration has no macOS window chrome or entitlements; each overlay supplies
 its own bundle target and platform settings. Stable app identity, binary name and
-paths survive product renames. Windows is an implemented variant; Unix Agent
-Control/Factory and macOS-only Cua Driver remain honestly unavailable there.
+paths survive product renames. Native integrations advertise their actual availability. Agent Control uses
+a private Unix socket or authenticated Windows loopback transport; Cua Driver
+has its own separately checked OS requirements.
 Native process ownership is centralized; no external server is killed on shutdown.
 
 The three-platform CI builds and verifies packages with toolchain/commit/hash

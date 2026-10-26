@@ -79,7 +79,7 @@
      которой встречен такой файл, не загружается с диагностикой (точные файлы
      в манифесте не затронуты).
    При обновлении SDK сверить эти три места с новой реализацией и прогнать
-   `test/integration/pi-resources.test.ts` (реальная активация навыков,
+   `src-tauri/resources/agent/test/integration/pi-resources.test.ts` (реальная активация навыков,
    шаблонов, пакета и приоритеты через раскрытие `/шаблон` и `/skill:имя`).
 4. Перенести `package.json`/`package-lock.json` из staging, обновить
    `runtime-lock.json`, `SDK_VERSION`, дескриптор `sdk-ui-compat.ts` и
@@ -148,5 +148,4 @@
 `install-remote-entry.mjs`) проверяют его до загрузки модулей с `node:sqlite`
 и отказывают с понятным сообщением, ничего не меняя.
 
-Статус: исходный код; проверки этой редакции не запускались (см.
-FINAL-OPUS-REVIEW-RESULT.md). Статус и гейты 2.0 — [VERIFICATION.md](VERIFICATION.md).
+Каждое изменение закрепления требует новых проверок по [VERIFICATION.md](VERIFICATION.md); успешный прогон другой версии SDK не переносится автоматически.

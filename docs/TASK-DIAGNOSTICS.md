@@ -1,4 +1,4 @@
-# Task timing (M43)
+# Диагностика времени задачи
 
 Chat details → **Время и выполнение задачи** shows one already-loaded user
 request of an Enki chat (or a read-only archive). It performs no history search, agent requests or

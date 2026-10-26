@@ -1,8 +1,6 @@
 # Browser profile customization
 
-Packaged, published through Hub and installed on macOS in 0.2.57.
-See [release acceptance](RELEASE-0.2.57.md).
-Settings → Browser → Profile and privacy applies to every Enki chat (in 0.2.x it was shared by OpenCode and Pi). The existing
+Settings → Browser → Profile and privacy applies to every Enki chat. The existing
 fast / human interaction selector remains independent of the environment profile.
 
 Three editable presets are available: standard (the existing embedded Chromium),
@@ -60,29 +58,7 @@ No CAPTCHA solving, login workaround or access restriction bypass is added.
 DNT requests cooperation from a site; it is not a tracker blocker. WebRTC policy
 may affect calls, and blocking Service Workers may affect offline applications.
 
-## Acceptance
-
-- Frontend: 839 tests passed, 6 existing skips; production TypeScript/Vite build,
-  architecture dependency checks and bundle budgets passed.
-- Native: 123 tests passed, 3 existing opt-in skips; strict all-target Clippy passed.
-- Isolated real Chromium and installed Chrome (headless): retained open context,
-  rejected arbitrary settings without changing the saved configuration, actual
-  language/timezone/media/DNT, native webdriver marker reduction, blocked worker
-  registration with an allowed-worker control, paced real keyboard input,
-  temporary-profile cleanup/non-reuse, persistent-profile recovery and preference
-  reload across daemon restart passed. No owner profiles or model calls used.
-- Actual Chromium rendering: presets, save, invalid locale, reset and no horizontal
-  overflow at 390 and 1100 px passed; fixture IPC never reaches owner services.
-- Live headed/native-window acceptance, site-specific login/WAF behavior,
-  end-to-end WebRTC ICE leak testing and Windows/Linux OS runs are not claimed.
-
-## Automation-signal upgrade (0.2.65, repackaged in 0.2.66)
-
-0.2.65 shipped the new `stealth.mjs` module without adding it to the embedded
-Desktop script list that materializes the packaged browser runtime, so the
-released daemon could not start its stealth import. 0.2.66 embeds the module and
-adds a Rust regression that every relative import of the embedded daemon is
-present in the shipped script list.
+## Implementation details
 
 With the reduction enabled the hidden surface launches the full Chromium
 binary in its new headless mode (the "chromium" channel) instead of the

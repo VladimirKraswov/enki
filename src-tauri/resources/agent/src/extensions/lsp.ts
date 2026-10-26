@@ -13,7 +13,7 @@
  * importantly — spawns a **detached daemon** per workspace that outlives the Pi
  * session and talks over a Unix socket it manages itself. This app promises that
  * no agent child outlives the window that started it, so a daemon it does not
- * own is the wrong shape. See docs/PI-ENGINE.md for the full audit.
+ * own is the wrong shape. See docs/RUNTIME.md for the full audit.
  *
  * This file is deliberately small and auditable:
  *   - Language servers run as **direct children of the Enki Runtime** over

@@ -63,7 +63,7 @@ All coordinator routes require the usual device authentication:
 
 | Route | Request / result |
 |---|---|
-| `GET /api/model-services/catalog` | Public explicit routes for both engines |
+| `GET /api/model-services/catalog` | Public explicit routes for registered clients |
 | `POST /api/model-services/inspect` | `{providerID,modelID,agent}`; read-only status |
 | `POST /api/model-services/prepare` | Same IDs + opaque `requestKey`, `mode: select/run`; status with a ticket in `operation_id` |
 | `POST /api/model-services/status` | `{ticket}`; observe progress and renew the reservation |
@@ -278,38 +278,16 @@ edit as a branch, compaction, images, prepared attachments, questions, file and
 shell approvals, LSP, extensions and their UI, the terminal, files and Git, the
 per-chat changes panel and remote SSH execution are all provided by the same
 Enki Runtime — on this computer or on the selected SSH host. There is no
-per-engine matrix any more: an archived OpenCode or Pi CLI chat is read-only and
-continues in a new Enki chat. In 0.2.x these surfaces differed between OpenCode
-(server APIs) and Pi CLI (JSONL RPC); that comparison is kept only in the release
-history.
-
-## Product rename
-
-Version 0.2.24 uses **Enki** in the window, bundle, installers and UI;
-the public repository is `VladimirKraswov/enki`. The native identifier
-`dev.local.opencodedesktop`, compatibility executable `opencode-desktop`, data
-paths, MCP command names and preference keys remain stable. No separate history
-or credential store is created. Existing integrations keep their reserved IDs.
-On Mac install the new bundle in `/Applications/Enki.app`, back up the prior
-bundle and retain the prior application path as a compatibility symlink so loaded
-MCP clients still resolve it. Never run both bundles against the same profile.
-Windows/Linux installation migration still requires platform acceptance before
-claiming it verified. Historical test reports/releases keep their original names.
+per-engine matrix: all writable chats use the same core. Archive import and
+continuation follow [DATA-RECOVERY](DATA-RECOVERY.md).
 
 Control keys use the OS credential store (macOS Keychain, Windows Credential
 Manager, Linux Secret Service), separate from preferences and provider API keys.
 The stable vault namespace survives the product rename. A locked/unavailable store
 is a visible error, with no plaintext-file fallback. «Забыть ключ» removes the
-shared endpoint credential; both agent bindings lose authenticated discovery.
+shared endpoint credential; all bindings lose authenticated discovery.
 Browser-only development keeps credentials in memory. Linux requires an unlocked
 Secret Service session; Windows/Linux vault acceptance has not been run on Mac.
-
-## Local model comparison
-
-The historical Pi RPC comparison (0.2.x) of the two V100 checkpoints,
-Medium/XHigh, independent checks and timing limitations are recorded in
-[the comparison report](PI-MODEL-COMPARISON-20261007.md). It is a checkpoint
-comparison, not a general speedup claim.
 
 ## RTX5090: Strata — 2026-10-19
 

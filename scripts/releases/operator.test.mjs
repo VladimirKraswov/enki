@@ -43,6 +43,7 @@ const workers=process.env.ENKI_RELEASE_TEST_WORKERS;
 const AGENT='src-tauri/resources/agent',RUNNER='src-tauri/build-runner/Cargo.toml';
 const GATES=[
  ['git',['diff','--exit-code']],
+ ['npm',['run','check:docs']],
  ['npm',workers?['test','--','--maxWorkers='+workers]:['test']],['npm',['run','build']],['npm',['run','check:architecture']],['npm',['run','check:bundle']],['npm',['run','test:releases']],
  ['npm',['run','sdk:check']],['npm',['ci','--prefix',AGENT,'--ignore-scripts']],['npm',['rebuild','--prefix',AGENT,'node-pty']],
  ['npm',['--prefix',AGENT,'run','typecheck']],['npm',['run','test:runtime']],['npm',['run','test:runtime-artifact']],

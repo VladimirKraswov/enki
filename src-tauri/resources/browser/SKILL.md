@@ -16,13 +16,14 @@ Start with browser_navigate or browser_snapshot. Use current snapshot references
 refresh after navigation or major DOM changes. Prefer semantic browser tools over
 coordinate input. Verify each important change with a fresh snapshot/result.
 
-Desktop, OpenCode and Pi share one browser. Calls are serialized; coordinate
-sessions instead of assuming different agents have separate tabs. Reinspect the
-current tab before acting. The browser never exposes privileged Desktop IPC.
+Enki owns one browser service with an independent context and action queue for
+each chat. Calls within a chat are serialized; coordinate with manual input and
+other callers in that chat. Reinspect the current tab before acting. Browser
+content never receives privileged Enki IPC.
 
 Follow the session access mode supplied by Desktop. Full access permits tools
 without confirmation and includes files outside the project; other modes keep
-their engine permission prompts. Only use credentials and submit forms,
+their Enki permission prompts. Only use credentials and submit forms,
 purchases or communications when authorized by the user. Never echo passwords,
 cookies or authentication tokens in commentary, logs or screenshots. A password
 field is filled with browser_fill_form like any other supported form field.

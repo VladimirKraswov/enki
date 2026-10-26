@@ -271,6 +271,8 @@ pub fn bundled_defaults(root: &Path) -> Result<(), String> {
     refresh_text(
         &root.join("computer/skill/SKILL.md"),
         &[
+            // Published Enki runtime instructions before the documentation refresh.
+            "805d103e48f88b10b713bc67fe27085d31c8ed336845feae575961248d89415a",
             "a5f1e54c3e5c519eee9e4cb47b57b65b2453576aff9ae30bf7e6dff338b217c4",
             "cc664d8b2c32418aa4a39cd50f76b8f06fed5d73e2f6520e711424954973060d",
             "d6ff3c009f580e8d73ee152f227a382e8e185b5d1ddba2b05e03decfb5731551",
@@ -281,6 +283,8 @@ pub fn bundled_defaults(root: &Path) -> Result<(), String> {
     refresh_text(
         &root.join("workshop/AGENTS.md"),
         &[
+            // Published Enki runtime instructions before the documentation refresh.
+            "ff620661ef4cc5e76acb980c3c0275a7523f733bba55a3a8cdf056b5e691acc8",
             "035cddd80f11e1fb046ea03481fe367b2301cb401e3c0f8d874c6ad689bdbcbe",
             "d0ad8129c61e6093e94ee9bb94693b13caf51c1d284e98e8d5dc7837d2c2d9d3",
             // Pre-2.0 default (OpenCode/Pi dual-engine wording).

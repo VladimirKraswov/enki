@@ -30,7 +30,7 @@ The runtime preserves the reference in the prompt and its JSONL transcript and r
 
 Queued prompts are stored by the runtime with their own copies of the prepared attachments. The file-count button opens a removable file list. Removing a queued file is an edit of that runtime item; failure keeps the original item. Composer removal updates the visible draft immediately, and sends wait for pending storage changes before selecting current attachment IDs. A removed file from an older render is excluded.
 
-**Now** applies an entry's active edit first, including removed attachments, then sends exactly one correction as an SDK steering message, delivered at the next model/tool boundary. Stop during preparation prevents a late correction from restarting the agent. Preparation failures retain editable files; ambiguous outcomes are never retried automatically. Blocked operations explain the reason and retain the queued request.
+**Скорректировать** applies an entry's active edit first, including removed attachments, then sends exactly one correction as an SDK steering message, delivered at the next model/tool boundary. Stop during preparation prevents a late correction from restarting the agent. Preparation failures retain editable files; ambiguous outcomes are never retried automatically. Blocked operations explain the reason and retain the queued request.
 
 Validation covers queued removal/edit/Now in the actual Composer and isolated Chromium, ZIP byte preservation and bounded stdin transfer, and live/durable references in the runtime transcript. Native Windows/Linux and live SSH qualification are separate from the Mac checks.
 

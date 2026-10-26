@@ -1,25 +1,30 @@
-# Shared skill authoring — 0.2.38
+# Создание общего навыка
 
-Enki supplies `create-shared-skill` as a versioned common source of the shared registry, loaded by the Enki Runtime like every enabled registry source (in 0.2.x it was consumed through OpenCode `skills.paths` and the Pi `--skill` adapter). It appears in shared settings, can be disabled, and preserves that choice across updates. It does not run an agent, capture private history, override approvals or force a model to select the skill. After a confirmed registry change the runtime refreshes open chats (idle ones at once, busy ones after their current work). Its read-only helper `scripts/catalog.py` honours an explicit `ENKI_PROFILE_DIR` exactly like the native profile policy: only `<profile>/capabilities`, no owner HOME, links in the profile path refused, an inherited `MESH_CAPABILITIES_ROOT` ignored (a caller that owns another registry passes `--registry`).
+Встроенный `create-shared-skill` подключается через общий реестр и может быть
+выключен пользователем. Он помогает разобрать цель, подтверждённые успехи,
+ошибки и восстановление, затем оформить повторяемый workflow. Навык не запускает
+нового агента, не получает скрытую историю и не отменяет разрешения инструментов.
 
-The chat Context panel offers **Подготовить создание навыка**. It appends a request to that selected chat's existing draft; it does not send, replay old tools or replace the draft. The skill tells the agent to analyse goals, verified successes, errors and recovery, obtain earlier history through supported interfaces where available, and disclose inaccessible history. The Desktop does not fabricate a complete transcript or claim an engine history API is available when it is not.
+Действие «Подготовить создание навыка» в контексте задачи дописывает запрос
+в черновик выбранного чата. Оно не отправляет его и не заменяет уже набранный текст.
+Если прежняя история недоступна, агент сообщает об этом, не придумывает её содержание.
 
-User skills belong in global `~/.agents/skills/<name>/` or project `.agents/skills/<name>/`, or an explicitly connected shared source. `SKILL.md` includes `name` and a concrete trigger description; scripts and references use relative paths. These sources are shared; engine-only skill directories remain supported for intentionally engine-specific configuration. Built-in versioned directories and Hub caches are not editing targets.
+Пользовательские навыки живут в `~/.agents/skills/<name>/`, проектных
+`.agents/skills/<name>/` или явно подключённом общем источнике. В `SKILL.md`
+нужны `name`, конкретный trigger и последовательные действия; scripts/references
+используют относительные пути. Версионные встроенные каталоги и Hub cache
+не являются местом редактирования. Исполняемый код просматривают до подключения.
 
-## Reviewed migration
+После подтверждённого изменения реестра свободные чаты обновляют ресурсы сразу,
+занятые — после текущей работы. Helper `src-tauri/resources/skills/create-shared-skill/scripts/catalog.py` в явном проверочном
+профиле читает только его реестр; профиль не подменяется домашним каталогом.
 
-The requested session was identified by its exact title, «Смотри, задача — проанализировать вот этот текст и найти в И». Read-only history inspection found repeated search403s, guessed download filenames, incompatible browser APIs, timeouts, and incomplete/wrong-edition books reported as completed. The created `web-file-download` was useful but tied to OpenCode and overgeneralised temporary errors. Bibliographic full-text links were incorrectly treated as proof of open access.
+Перед публикацией проверьте переносимость, отсутствие секретов и частных данных,
+границы разрешений, ограниченный retry и поведение при недоступном инструменте.
+Не обобщайте разовую ошибку сайта в постоянный запрет. Для документов различайте
+успешную передачу, структурную валидность и полноту/правильное издание.
 
-The reviewed common package preserves archive metadata lookup, encoded filenames, PDF verification and bounded recovery. It removes fixed engine/browser APIs and provider availability claims. PDF inspection reports hash/pages/structural status separately from completeness; missing/corrupt/unverified files fail. Restricted archive candidates do not receive suggested download URLs. Covers, partial sets and alternative editions cannot be counted as requested complete books. The original package is privately backed up outside skill discovery; owner downloaded books and original jobs are untouched.
-
-The portable download skill is editable in the user's common library and published in the private LAN Hub catalogue for explicit installation on other devices. Hub publication is separate from Git publication. Local histories, credentials and machine-specific task data are excluded from distributed packages. Secret scrubbing is imperfect, so authoring requires manual review before sharing.
-
-## Verification
-
-Run `python3 scripts/test-shared-skills.py` for offline document helper failures, exact filenames/restrictions and valid single-page ambiguity. A preinstalled `pypdf` or `pdfinfo` is required for the positive PDF structural test; production helpers report unverified when neither exists, without installing dependencies. Run Context panel frontend tests and Rust authoring tests for draft preservation, Pi availability, idempotent source installation, disabled choice, owner source preservation and symlink refusal. Model selection/usefulness still needs real future tasks; discovery alone is not performance or quality evidence.
-
-Acceptance on Mac: 678 frontend tests passed (6 existing opt-in skips), 96 Rust tests passed (1 existing vault opt-in ignored), five offline Python helper checks, frontmatter validation, type/build/fmt/locked all-targets checks. Real isolated Chromium verified the panel/draft with no send; actual OpenCode and Pi loaders discovered both installed common skills without inference. The 0.2.38 app and DMG were built and signature/CRC checked. After the owner's explicit reinstall request, 0.2.38 was installed and opened. The installed binary matches the verified build; native application control responds and reports connected with no API error. The previous app is privately retained for rollback and the external OpenCode server remains healthy. The common sources and new Context action are now installed.
-
-## Interrupted document transfers
-
-The common `web-file-download` now includes a bounded HTTP transfer helper with persistent partial files, checked Range/entity resumption and exclusive publication. Run `python3 scripts/test-download-transfer.py` for seven synthetic stream cases (truncation/resume, budgets, ignored Range, changed entity, owner files/locks, fake/oversized data and absent validators). The tests make no external requests. See the skill’s `references/interrupted-transfers.md` for limits. A complete transfer remains distinct from PDF validation and book identity/completeness. No actual download speed or ability to fix a particular origin is claimed.
+Проверки: `python3 scripts/test-shared-skills.py` и
+`python3 scripts/test-download-transfer.py`; UI проверяет сохранение черновика,
+реестр — владение, выключенное состояние и отказ по symlink. Доступность навыка
+не доказывает, что модель правильно выберет его в будущей задаче.

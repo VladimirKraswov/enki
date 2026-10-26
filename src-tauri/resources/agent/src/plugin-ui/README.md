@@ -43,14 +43,10 @@ using upstream non-root exports for explicit extension and Theme loading. They
 do not patch/fork SDK sources. Inline Enki gate/policy initialization failure is
 fatal; optional user-extension file errors remain diagnostics.
 
-The private guarded qualification receipt is
-`.local/pi-sdk-migration-20261024/plugin-ui-qualification-harness/evidence/review-integration-seven/`:
-14 real SDK/SQLite/worker/UI tests passed, zero unexpected owner/network attempts,
-Node 24.22.1, no SDK source modification. A separate frozen 43-test component
-proof predates integration. Failed intermediate receipts remain preserved.
+## Verification
 
-Limits: this receipt does not prove native macOS/Windows UI permissions, React /
-xterm routes, real model/provider calls, remote authentication, full app release,
-or production ADC/bootstrap environment isolation. Those require the real host
-integration. Do not run SDK tests outside the pre-import isolation guard. Any
-source change after the recorded SHA inventory needs fresh qualification.
+Run the guarded real-SDK suites through `npm run test:runtime` and the UI tests
+for the affected route. Keep the pre-import profile guard; SDK tests must not
+read owner configuration or call a real provider. Native permissions, React/xterm,
+remote authentication and release installation require separate host acceptance.
+A result from another source inventory does not qualify changed code.

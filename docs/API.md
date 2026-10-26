@@ -1,38 +1,45 @@
-# API contract reference
+# Контракт Enki Runtime
 
-Baseline observed on 2026-09-22: server `/global/health` reports **OpenCode 1.18.18**, while the OpenAPI info version is `1.0.0` (schema metadata, not binary version). A snapshot is in `docs/api/openapi-1.18.18.json`. Search/extract only relevant paths and referenced schemas; do not load the whole large file into model context.
+Источник истины — [protocol.ts](../src-tauri/resources/agent/src/protocol.ts):
+`API_PREFIX`, `CONTRACT_VERSION`, `SCHEMA_VERSION`, DTO и события. Клиент —
+[src/agent/runtime](../src/agent/runtime/), сервер —
+[src-tauri/resources/agent/src](../src-tauri/resources/agent/src/).
+Не используйте API отдельно установленных агентов для управления Enki.
 
-Official reference: https://opencode.ai/docs/server/ . The running `/doc` is authoritative when generic/current docs differ. Fetching this read-only schema is safe; never persist provider auth/config responses in the repository.
+## Подключение
 
-Useful verified paths (schemas must be checked before use):
+Нативный супервизор возвращает проверенный loopback endpoint и временный bearer.
+Для SSH-хоста endpoint разрешается через его собственный защищённый туннель.
+Ключ не записывается в URL, настройки WebView, историю или диагностический отчёт.
+Клиент согласует версию контракта; несовместимое ядро не заменяется другим хостом.
 
-| Area | Endpoints |
-| --- | --- |
-| Health and events | `GET /global/health`, `/global/event`, `/event` |
-| Projects | `GET /project`, `/project/current`, `/path`, `/vcs`, `/vcs/status` |
-| Sessions | `GET/POST /session`, `GET /session/status`, `GET/PATCH /session/{sessionID}` |
-| Global recent/archive | `GET /experimental/session?roots=true&archived=false&limit=20`; `x-next-cursor` header → `cursor` query |
-| History | `GET /session/{sessionID}/message` with optional `limit`/`before` |
-| Execution | `POST /session/{sessionID}/prompt_async`, `/abort`, `/summarize` |
-| Model and agent choices | `GET /provider`, `/agent` |
-| User interaction | `GET /permission`, `/question`; request-specific reply/reject routes |
-| Changes/files | `GET /session/{sessionID}/diff`, `/file`, `/file/content`, `/file/status`, `/vcs/diff` |
-| PTY | `GET/POST /pty`, `GET/PUT/DELETE /pty/{ptyID}`, connect-token and connect routes |
-| Tools/skills | `GET /skill`, `/lsp`, `/formatter`, `/mcp` |
+## Команды и события
 
-Project-specific routes support the `directory` query parameter in this version; use it consistently and URL-encode paths. Check event envelope shapes and PTY authentication against the schema and actual observed responses. Do not assume ordinary HTTP fetch can stand in for SSE/WebSocket behavior.
+UI вызывает типизированный `AgentBackend`, а не собирает HTTP-запросы в компонентах.
+Каждая операция над чатом несёт его ID и каталог. Команда имеет долговечный ID:
+подтверждение приёма не означает завершение. После потери подтверждения клиент
+сверяет эту команду, историю и статус; новый промпт по догадке не отправляется.
+SSE передаёт изменения сообщений, инструментов, очереди, статусов и взаимодействий.
+Переподключение восстанавливает авторитетное состояние до обработки новых событий.
 
-A tested async prompt shape is:
+Основные контракты покрывают сессии и историю, промпты/остановку/сжатие,
+переходы моделей, очередь, таймеры, разрешения/вопросы, расширения, файлы и PTY.
+Точные методы и схемы ищите в текущем клиенте и обработчиках сервера; отдельная
+копия чужого OpenAPI больше не используется.
 
-```json
-{
-  "agent": "qwen-build",
-  "model": {"providerID": "local-qwen-next", "modelID": "qwen38-flash-next"},
-  "variant": "medium",
-  "parts": [{"type": "text", "text": "A task in the selected project"}]
-}
-```
+## Внешнее управление
 
-The API returns 204 for acceptance. Follow events/history/status to determine completion. Session creation uses a different model field (`model.id` instead of `modelID`); keep that distinction in typed adapters. Runtime selection should be discovered, not fixed to this example.
+Для автоматизации установленного приложения используйте
+[Agent Control](AGENT-CONTROL.md). Он работает с тем же видимым состоянием и
+проверяет возможности текущего приложения. Не подменяйте его изменением SQLite,
+localStorage или посылкой привилегированных команд через браузерную страницу.
 
-Session archival is a patch to `time.archived` where supported. Deleting a session is a separate destructive operation and must not be the default way to hide it. Permission options and question answer array shapes must come from the contract.
+## Правила совместимости
+
+- Несовместимое изменение wire-контракта повышает его версию; новые необязательные
+  поля должны оставаться понятны совместимому клиенту.
+- ID архивного чата и ID его продолжения различаются; архив только для чтения.
+- Ошибки, отмена, ожидаемый ответ и успешное завершение — разные состояния.
+- Проверки валидируют поведение клиента и реального runtime на изолированных данных.
+
+[Архитектура](ARCHITECTURE.md) · [Обновление SDK](SDK-UPGRADE.md).

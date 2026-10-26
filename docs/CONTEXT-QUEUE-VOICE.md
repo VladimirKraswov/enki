@@ -1,10 +1,8 @@
 # Context, access, queue and dictation
 
-Since 2.0 every chat runs in the single bundled **Enki Runtime** (pinned Pi SDK
+Every chat runs in the single bundled **Enki Runtime** (pinned Pi SDK
 0.85.1). Context, compaction, model transitions, the queue and timers are owned by
 that runtime; the window only displays state and forwards explicit user intent.
-OpenCode-era behaviour (0.2.x) is summarised at the end of each section only
-where older chats or clients still meet it.
 
 ## Context
 

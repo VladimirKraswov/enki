@@ -4,9 +4,7 @@
 
 The user wants **Enki**: a desktop coding workspace with the workflow and density
 of the Codex desktop app, powered by their own models (local Qwen3.8 Flash Next and
-other Hub-coordinated models). The project began as a shell over an installed
-OpenCode (0.2.x) and gained an optional Pi CLI engine. Since **2.0** Enki runs every
-chat in one bundled agent core — the **Enki Runtime** (pinned Pi SDK) — so no
+other Hub-coordinated models). Enki runs every chat in one bundled agent core — the **Enki Runtime** (pinned Pi SDK) — so no
 external agent has to be installed, launched or kept compatible. Former OpenCode
 and Pi CLI histories are imported read-only and can be explicitly continued in a
 new Enki chat with visible provenance; their source files are never modified.

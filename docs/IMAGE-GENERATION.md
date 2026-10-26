@@ -4,7 +4,7 @@ Settings → **Изображения**: enabled switch, provider, base API URL,
 
 The owner device is provisioned for CPU Inference. Other devices set their own API/key; arbitrary HTTPS or private-LAN HTTP APIs are supported. `Enki CPU` offers jobs, progress, cancellation, icon/material bundles. `OpenAI-compatible` uses base`/v1`, `/images/generations`, n1 and b64_json PNG response; default image size1024 for quality (explicit LCM draft512). Use the dimensions actually supported by that provider. Vendor-specific APIs may need an adapter; the generic adapter never fetches untrusted response URLs. Material/icon bundle helpers require the Enki provider; other APIs may be used one image at a time.
 
-Shared MCP **enki-images / «Генерация изображений»**, used by the Enki Runtime (and by 0.2.x OpenCode/Pi clients through their own configuration):
+Shared MCP **enki-images / «Генерация изображений»**, used by the Enki Runtime:
 
 - `image_inputs`: list this session’s attached originals, previous original and last generated result;
 - `edit_image`: actual image-to-image redraw from `attachment:N` or `latest`;
@@ -29,7 +29,7 @@ Materials: ask “Создай текстуру камня с normal map, выс
 
 Native update required for settings commands and shared runtime. A UI-only activation cannot install the native reader, OS vault integration or shared tool files. Publication does not interrupt active agents; install through the normal idle native-update flow. Windows/Linux live qualification remains separate from Mac/browser and CPU API acceptance.
 
-## Reference images and iterative editing (0.2.113)
+## Reference images and iterative editing
 
 Attach a PNG/JPEG/WebP and ask «Перерисуй это в стиле аниме». Enki privately stages original bytes for the actual session/message, while the agent selects `image_inputs` → `edit_image(source=attachment:1)` → status → results. Follow-up «Поменяй волосы на синие» uses `source=latest`, the last completed primary image in this session. «Перерисуй исходник заново» can reuse the retained original; a new attached original replaces it. Source hashes, normalized geometry and actual inference mode/steps are recorded in each manifest. Original input is private, excluded from public result downloads and ZIP.
 

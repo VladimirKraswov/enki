@@ -43,7 +43,7 @@ export function releaseWithOperator(channel,run,credentials,mode='operator') {
   if(workers!==undefined&&!['1','2'].includes(workers))throw Error('Release test workers must be1or2');
   const tests=workers?['test','--','--maxWorkers='+workers]:['test'];
   run('git',['diff','--exit-code']);
-  for(const args of [tests,['run','build'],['run','check:architecture'],['run','check:bundle'],['run','test:releases']])run('npm',args);
+  for(const args of [['run','check:docs'],tests,['run','build'],['run','check:architecture'],['run','check:bundle'],['run','test:releases']])run('npm',args);
   // Bundled Pi runtime: every 2.0 source update ships it, so UI-only releases
   // gate it too. Exact SDK/Node pins, reviewed-lock install, real SDK/legacy
   // suites, artifact/installer/first-update entry/bootstrap tests.

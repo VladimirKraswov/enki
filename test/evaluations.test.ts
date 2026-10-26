@@ -13,7 +13,7 @@ import { startProxy, providerPolicy } from '../scripts/evaluations/proxy.mjs';
 afterEach(() => vi.unstubAllGlobals());
 describe('reproducible evaluation fixtures', () => {
   it('local Qwen receipts retain every attempt and reproduce archived code outcomes', async () => {
-    const base=fileURLToPath(new URL('../docs/evaluations/2026-10-08/qwen/',import.meta.url));
+    const base=fileURLToPath(new URL('./fixtures/evaluation-archive/qwen/',import.meta.url));
     let sources=0,files=0,wrappers=0,replays=0,cancelled=0;const fullProjects:string[]=[];
     for(const [run,count] of [['protocol',2],['projects-initial',19],['projects-continuation',6],['browser',4]] as const){
       const root=join(base,run),report=JSON.parse(await readFile(join(root,'report.json'),'utf8'));
@@ -53,7 +53,7 @@ describe('reproducible evaluation fixtures', () => {
     for (const offset of [-1, 16, 1.5]) expect(() => trialPlan({ ...options, offset })).toThrow();
   });
   it('M44/M45 archived sources and all failed/successful project files match their receipts', async () => {
-    const base=fileURLToPath(new URL('../docs/evaluations/2026-10-08/',import.meta.url));let sources=0,files=0,wrappers=0;
+    const base=fileURLToPath(new URL('./fixtures/evaluation-archive/',import.meta.url));let sources=0,files=0,wrappers=0;
     for(const run of ['projects/initial','projects/request-budget','projects/qualified-browser','navigation']){
       const root=join(base,run),report=JSON.parse(await readFile(join(root,'report.json'),'utf8'));
       for(const [name,sha] of Object.entries(report.revisions)){
@@ -169,7 +169,7 @@ describe('reproducible evaluation fixtures', () => {
     expect(text).toContain('Elapsed seconds through grading');
   });
   it('published synthetic candidates remain byte-identical to each report, including failed trials', async () => {
-    const root = fileURLToPath(new URL('../docs/evaluations/2026-10-08/', import.meta.url));
+    const root = fileURLToPath(new URL('./fixtures/evaluation-archive/', import.meta.url));
     let candidates = 0;
     for (const relative of ['paired.json', 'final-smoke.json', 'budget-stop/report.json']) {
       const path = join(root, relative);

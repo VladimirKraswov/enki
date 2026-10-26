@@ -1,8 +1,7 @@
 # Project tools: `repo_inspect` and `safe_edit`
 
 Two Enki-owned tools registered in every Enki Runtime session through the pinned
-Pi SDK extension API. They replace the retired OpenCode helpers from
-`integrations/opencode-agent/` (see [Retired legacy helpers](#retired-legacy-helpers)).
+Pi SDK extension API. They use the same session and permission authority as the other Enki tools.
 
 | Item | Location |
 | --- | --- |
@@ -10,7 +9,7 @@ Pi SDK extension API. They replace the retired OpenCode helpers from
 | Registration | `enkiExtensions()` in `src-tauri/resources/agent/src/extensions/enki.ts` (inline extension `enki-project-tools`, once per session) |
 | Path scope | `resolveProjectPath()` in `src-tauri/resources/agent/src/interaction/access-paths.ts` |
 | Policy classification | `decide()` in `src-tauri/resources/agent/src/interaction/access.ts` |
-| Tests (real pinned SDK and isolated project fixtures) | `test/project-tools.test.ts`, `test/integration/project-tools-policy.test.ts` |
+| Tests (real pinned SDK and isolated project fixtures) | `src-tauri/resources/agent/test/project-tools.test.ts`, `src-tauri/resources/agent/test/integration/project-tools-policy.test.ts` |
 
 Both tools are plain Node/TypeScript. They run no Python, `rg`, `git` or other
 subprocess, import nothing from OpenCode and add no dependency. They act only
@@ -181,36 +180,3 @@ Limitation: the permission dialog title comes from the general gate
 (`pi/tool-gate.ts`), which lists only built-in mutating tools; a `safe_edit`
 request shows the generic "Агент запрашивает действие" title with the `edit`
 permission and the file path.
-
-## Retired legacy helpers
-
-The fourteen legacy files under `integrations/opencode-agent/` (an OpenCode
-installer, Python implementations, wrappers, role prompts, tests and incident
-replay) were retired from maintained delivery after their SDK replacements and
-permission policy passed. Their exact historical source remains at
-[commit 67e359994031cbdd3eac080924b22f603bc9597b](https://github.com/VladimirKraswov/enki/tree/67e359994031cbdd3eac080924b22f603bc9597b/integrations/opencode-agent)
-and in the coordinator's archived inputs. The interrupted external author pass
-was not treated as a complete result; local changes were reviewed and qualified
-separately. Do not run the historical `install.py`: it writes to an owner's
-OpenCode configuration. Owner-installed OpenCode/Pi CLIs, configurations and data
-are untouched by Enki.
-
-| Legacy behavior | Now |
-| --- | --- |
-| `repo_inspect.py` via `python3` + `rg`, OpenCode wrapper | `repo_inspect` SDK tool, Node walk |
-| `file` argument | `path` (shared with Enki path classification); unknown arguments are rejected |
-| `./src/x` result paths | `src/x` |
-| `git status --short` / `git diff --stat` in the map | **Retired.** Running `git` from an auto-allowed read-only tool can execute programs configured by the repository itself (for example `core.fsmonitor` during `git status`) while the chat is in read mode. Equivalent: the Enki review panel, or `bash` `git status`/`git diff --stat` under the gate. The map keeps the branch from `.git/HEAD`. |
-| ripgrep `.gitignore` semantics | documented subset above |
-| rg searched invalid UTF-8 lossily | skipped and counted |
-| snapshot of any regular file | ignored, generated, private and credential-like files refused |
-| `safe_edit.py` via `python3`, OpenCode `context.ask("edit")`, `qwen-review` agent check | `safe_edit` SDK tool; Enki gate (`edit`, read mode refuses) |
-| Python `str.count` (non-overlapping) | overlapping occurrences count as ambiguous |
-| hardlink refusal, mode preservation, recheck, temp cleanup | kept; plus group/owner check, inode-checked cleanup, path re-resolution, same-process lock |
-| `install.py`, `test_install.py`, `fixtures/repo_inspect.pre.ts` | no installer: the tools ship inside the runtime |
-| `qwen-coding.md`, `qwen-review.md` | tool descriptions and `promptGuidelines`; Enki access modes replace the reviewer agent's permission block |
-| `evals/` incident replay | archived historical evidence ([EVALUATIONS](EVALUATIONS.md)); not replayed or ported |
-
-Historical claims about the 2026-09-27 OpenCode installation in
-[AI-ENVIRONMENT](AI-ENVIRONMENT.md) and [VERIFICATION](VERIFICATION.md) remain
-historical evidence; they do not describe the current runtime.

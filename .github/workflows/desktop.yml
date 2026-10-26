@@ -34,6 +34,8 @@ jobs:
           # Exact pinned runtime interpreter (audited by `npm run sdk:check`).
           node-version: 24.22.1
           cache: npm
+      - name: Documentation links
+        run: npm run check:docs
       - name: Linux native dependencies
         if: matrix.platform == 'linux'
         run: |

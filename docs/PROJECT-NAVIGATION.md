@@ -2,7 +2,7 @@
 
 Open **Chat context → Карта проекта** to preview file paths, heuristic symbol names/line numbers, instruction-file pointers and package script names. Refresh explicitly after edits. The preview is local; it does not invoke a model or execute checks. It requires the existing shared MCP runtime.
 
-**Подключить для агентов** enables the read-only `project_map` MCP tool for this local folder through the same shared registry/adapters for OpenCode and Pi. It is off by default. The selected model receives metadata only when it calls the tool. Agent permissions still apply. No prompt injection, second agent loop, vector database, project instruction rewriting or skill generation is involved. Foreign/inherited registrations using the reserved name are preserved and reported; writes use the existing compare-and-swap registry operation. Disable/re-enable invalidates old connections.
+**Подключить для агентов** enables the read-only `project_map` MCP tool for this local folder through the shared Enki runtime registry. It is off by default. The selected model receives metadata only when it calls the tool. Agent permissions still apply. No prompt injection, second agent loop, vector database, project instruction rewriting or skill generation is involved. Foreign/inherited registrations using the reserved name are preserved and reported; writes use the existing compare-and-swap registry operation. Disable/re-enable invalidates old connections.
 
 Remote projects do not use the Mac filesystem map. Current support is explicitly local. Windows/Linux live acceptance is excluded at the owner's request; source portability and CI are separate from live acceptance.
 
