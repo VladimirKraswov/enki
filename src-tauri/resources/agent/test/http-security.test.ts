@@ -3,6 +3,8 @@
 // allowlist without wildcard.
 import { afterEach, expect, it } from "vitest";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
+import { ConfigurationGate } from "../src/lifecycle.ts";
 import { harness, ORIGIN, type Harness } from "./helpers.ts";
 
 let h: Harness;
@@ -49,6 +51,24 @@ it("accepts the previous token only during the rotation grace period", async () 
   h.credentials.previous = { token: old, until: Date.now() - 1 };
   expect((await raw(port, "/v1/health", { Authorization: `Bearer ${old}` })).status).toBe(401);
   expect((await raw(port, "/v1/health", { Authorization: `Bearer ${"n".repeat(43)}` })).status).toBe(200);
+});
+
+it("settles a lost rotation ACK after expiry without reinstalling or restarting the runtime", async () => {
+  h = await harness();
+  const port = Number(new URL(h.base).port), instance = h.runtime.instance;
+  const gate = new ConfigurationGate();
+  gate.configure({ token: h.token, origins: [ORIGIN], version: "test", generation: "g".repeat(43), requestId: randomUUID() });
+  const request = { requestId: randomUUID(), token: "n".repeat(43), graceMs: 120000 };
+  const install = () => {
+    h.credentials.previous = { token: h.token, until: Date.now() - 1 };
+    h.credentials.current = request.token;
+  };
+  gate.rotate(request, install); // runtime applied it; the supervisor loses this ACK
+  expect((await raw(port, "/v1/health", { Authorization: `Bearer ${h.token}` })).status).toBe(401);
+  expect(gate.rotate(request, () => { throw Error("must only return the stored receipt"); })).toMatchObject({ ok: true, id: request.requestId });
+  expect((await raw(port, "/v1/health", { Authorization: `Bearer ${request.token}` })).status).toBe(200);
+  expect(h.runtime.instance).toBe(instance);
+  expect(() => gate.rotate({ ...request, token: "z".repeat(43) }, install)).toThrow("different authority");
 });
 
 it("a malformed escape in a path parameter is a 400, never an internal 500", async () => {

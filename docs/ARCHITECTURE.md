@@ -92,3 +92,12 @@ boundaries and commands: [PLATFORMS.md](PLATFORMS.md). Live scenarios and result
 [PLATFORM-ACCEPTANCE.md](PLATFORM-ACCEPTANCE.md), [VERIFICATION.md](VERIFICATION.md).
 Historical Windows/Linux reports remain historical, never automatic checkmarks
 for a new release.
+
+### Восстановление доступа к ядру
+
+Смена локального токена подтверждается по идентификатору операции и поколению
+ядра. При потере ответа supervisor сохраняет в памяти тот же идентификатор и
+токен: ограниченный фоновый повтор и обычное переподключение запрашивают ту же
+квитанцию. Только подтверждённый токен передаётся интерфейсу. Завершение срока
+действия прежнего токена не требует остановки агента или повторной отправки
+задания. Незавершённые токены не записываются на диск и не попадают в журналы.

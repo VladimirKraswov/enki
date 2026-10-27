@@ -254,7 +254,25 @@ describe("no blind replay of ambiguous mutations", () => {
     expect(new Headers(calls[1].init.headers).get("Authorization")).toBe(`Bearer ${"r".repeat(43)}`);
     calls = []; n = 0;
     serve(() => new Response(null, { status: 401 }));
-    await expect(c.command({ id: "cmd_2", kind: "prompt" } as never)).rejects.toMatchObject({ status: 401 });
+    await expect(c.command({ id: "cmd_2", kind: "prompt" } as never)).rejects.toMatchObject({
+      status: 401, message: "Не удалось обновить доступ к среде выполнения Enki. Подключитесь снова; история и задания сохранены.",
+    });
     expect(calls).toHaveLength(2);
+  });
+
+  it("recovers the model catalogue and chat status together with one native refresh", async () => {
+    const fresh = { ...connection, token: "n".repeat(43) };
+    let release!: (value: RuntimeConnection) => void;
+    const refresh = vi.fn(() => new Promise<RuntimeConnection>(resolve => { release = resolve; }));
+    serve((_url, init) => new Headers(init.headers).get("Authorization") === `Bearer ${fresh.token}`
+      ? json(200, { recovered: true }) : json(401, { message: "Unauthorized" }));
+    const c = client(refresh);
+    const models = c.request("GET", "/providers");
+    const status = c.request("GET", "/sessions/s1/status");
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    release(fresh);
+    await expect(Promise.all([models, status])).resolves.toEqual([{ recovered: true }, { recovered: true }]);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(calls).toHaveLength(4);
   });
 });

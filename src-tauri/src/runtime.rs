@@ -64,6 +64,7 @@ pub struct Supervised {
     acks: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
     port: u16,
     token: String,
+    pending_rotation: Option<rotation::PendingRotation>,
     instance: String,
     version: String,
     /// Keeps the stderr pipe drained for the child's whole life.
@@ -332,6 +333,7 @@ pub(crate) mod artifact;
 mod config_commit;
 mod config_fs;
 mod control;
+mod rotation;
 mod vault;
 
 pub struct Artifact {
@@ -875,7 +877,10 @@ impl RuntimeSupervisor {
         start_once(
             &self.start,
             until,
-            || self.live(),
+            || {
+                self.reconcile_rotation(app)?;
+                self.live()
+            },
             |start| self.ensure_locked(app, until, start),
         )
     }
@@ -1064,6 +1069,7 @@ impl RuntimeSupervisor {
             acks,
             port,
             token: token.clone(),
+            pending_rotation: None,
             instance: instance.clone(),
             version: artifact.version.clone(),
             _stderr: stderr,
@@ -1093,7 +1099,6 @@ impl RuntimeSupervisor {
         if self.halted() {
             return Err("Ядро завершает работу".into());
         }
-        let token = new_token()?;
         let mut inner = self.inner.lock().map_err(|_| "Состояние ядра недоступно")?;
         let Some(runtime) = inner.as_mut() else {
             return Ok(());
@@ -1101,32 +1106,67 @@ impl RuntimeSupervisor {
         if !runtime.alive() {
             return Err("Связь с ядром недоступна".into());
         }
-        let id = new_request_id()?;
-        let message = json!({"type":"rotate","token":token,"graceMs":120000});
-        let mut outcome = runtime.transact_id("rotate", message.clone(), &id, until);
-        if matches!(outcome, Err(AckError::Uncertain(_))) && runtime.alive() {
-            // The runtime stores rotations by requestId and refuses an id with
-            // other authority, so the SAME id+token is an exact receipt query
-            // (or the identical, idempotent installation), never a new mutation.
-            let settle = Instant::now() + Duration::from_secs(5);
-            outcome = runtime.transact_id("rotate", message, &id, settle);
+        // A failed ACK may already have installed the replacement. Keep its
+        // exact id/token across calls instead of leaving an expired old token
+        // authoritative for another six hours or issuing a different rotation.
+        if runtime.pending_rotation.is_none() {
+            runtime.pending_rotation = Some(rotation::PendingRotation::new(
+                new_request_id()?,
+                new_token()?,
+            ));
         }
-        match outcome {
-            Ok(_) => {}
-            // Nothing applied: the current bearer stays authoritative.
-            Err(AckError::NotSent(error) | AckError::Refused(error)) => return Err(error),
-            // Still unknown: never publish the unconfirmed bearer, and never
-            // kill a possibly healthy runtime for it. If it was applied, the
-            // old bearer stays valid for the grace window; a later rotation
-            // with a fresh id re-establishes certainty.
-            Err(AckError::Uncertain(error)) => return Err(error),
+        Self::settle_rotation(runtime, app)
+    }
+
+    /// Called under the lifecycle start lock before returning credentials to
+    /// any reconnecting WebView. Never restart work to repair authentication.
+    fn reconcile_rotation(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "Состояние ядра недоступно")?;
+        if let Some(runtime) = inner.as_mut() {
+            if runtime.alive() && runtime.pending_rotation.is_some() {
+                Self::settle_rotation(runtime, app)?;
+            }
         }
-        if !runtime.gate.is_active() {
-            return Err("Ядро отключилось во время обновления подключения".into());
-        }
-        runtime.token = token;
-        let _ = app.emit(TOKEN_EVENT, json!({"instance":runtime.instance}));
         Ok(())
+    }
+
+    fn settle_rotation(runtime: &mut Supervised, app: &tauri::AppHandle) -> Result<(), String> {
+        let Some(pending) = runtime.pending_rotation.take() else {
+            return Ok(());
+        };
+        let result = pending.resolve(|id, token| {
+            let message = json!({"type":"rotate","token":token,"graceMs":120000});
+            let mut outcome = runtime.transact_id(
+                "rotate",
+                message.clone(),
+                id,
+                Instant::now() + Duration::from_secs(5),
+            );
+            if matches!(outcome, Err(AckError::Uncertain(_))) && runtime.alive() {
+                outcome = runtime.transact_id(
+                    "rotate",
+                    message,
+                    id,
+                    Instant::now() + Duration::from_secs(5),
+                );
+            }
+            outcome.map_err(AckError::into_message)?;
+            if !runtime.gate.is_active() {
+                return Err("Ядро отключилось во время обновления подключения".into());
+            }
+            Ok(())
+        });
+        match result {
+            Ok(token) => {
+                runtime.token = token;
+                let _ = app.emit(TOKEN_EVENT, json!({"instance":runtime.instance}));
+                Ok(())
+            }
+            Err((pending, _)) => {
+                runtime.pending_rotation = Some(pending);
+                Err("Обновление доступа к ядру пока не подтверждено. Подключение будет повторено; задания сохранены.".into())
+            }
+        }
     }
 
     pub fn activity(&self) -> Value {
@@ -1508,7 +1548,16 @@ pub fn start_rotation(app: tauri::AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(6 * 3600));
         let supervisor = app.state::<RuntimeSupervisor>().inner().clone();
-        let _ = supervisor.rotate(&app);
+        // Short bounded reconciliation after a lost ACK, rather than waiting
+        // six hours with a token which may expire in two minutes.
+        for attempt in 0..3 {
+            if supervisor.rotate(&app).is_ok() {
+                break;
+            }
+            if attempt < 2 {
+                thread::sleep(Duration::from_secs(15));
+            }
+        }
     });
 }
 

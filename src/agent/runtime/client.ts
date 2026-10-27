@@ -195,6 +195,10 @@ export class RuntimeClient {
       if (res.status === 401 && !retried) { unauthorized = true; await res.body?.cancel(); }
       else {
         if (!res.ok) {
+          if (res.status === 401) {
+            await res.body?.cancel();
+            throw new ApiError(401, "Не удалось обновить доступ к среде выполнения Enki. Подключитесь снова; история и задания сохранены.");
+          }
           const text = await res.text();
           let detail = text.slice(0, 400);
           try {
