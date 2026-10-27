@@ -379,8 +379,14 @@ class Store {
     invalidateCapabilities();
     if (!directory || !this.runtime) return;
     const runtime = this.runtime, generation = this.connectionGeneration;
+    const previous = new Map(this.mcpStatuses);
     const report = await runtime.client.extensions(directory);
     if (signal?.aborted || generation !== this.connectionGeneration || runtime !== this.runtime) return;
+    for (const session of report.sessions ?? []) {
+      // Live reports received during the HTTP read always win over its snapshot.
+      if (session.mcp && this.mcpStatuses.get(session.sessionID) === previous.get(session.sessionID))
+        this.runtimeSync.mcp?.(session.sessionID, session.mcp.servers, session.mcp.error);
+    }
     const pool = (Array.isArray(report.mcp) ? report.mcp : []) as { key: string; server: string; state: string }[];
     const issues = pool.filter(entry => entry.state === "closed").map(entry => ({ id: entry.key, name: entry.server }));
     const toast = this.mcpNotices.update(JSON.stringify([runtime.workspace, directory]), issues, this.state.ui.toast);

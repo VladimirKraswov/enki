@@ -571,7 +571,7 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     const directory = str(request.query, "directory");
     const sessions = runtime.catalog.all().filter((s) => !directory || s.directory === directory).flatMap((s) => {
       const worker = runtime.registry.live(s.id);
-      return worker ? [{ sessionID: s.id, errors: worker.extensionErrors, unsupported: [...worker.diagnostics.unsupported] }] : [];
+      return worker ? [{ sessionID: s.id, errors: worker.extensionErrors, unsupported: [...worker.diagnostics.unsupported], mcp: runtime.mcpStatus(s.id) }] : [];
     });
     return { sessions, mcp: runtime.pool.status() };
   });

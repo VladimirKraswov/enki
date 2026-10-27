@@ -12,6 +12,7 @@ import { attachLsp, loadLspConfig } from "./lsp.ts";
 import { isEnkiProjectTool, projectToolsExtension } from "./project-tools.ts";
 import { createToolGate, type GateVerdict } from "../../../pi/tool-gate.ts";
 import { attachShared } from "../../../shared/pi-extension.ts";
+import type { ServerStatus } from "../../../shared/pi-extension.ts";
 import { readRegistry } from "../../../shared/registry.mjs";
 import type { CapabilitiesScope } from "../control/broker.ts";
 import { decide, evaluate, type DefaultPolicy } from "../interaction/access.ts";
@@ -36,6 +37,7 @@ export interface ExtensionDeps {
   pool: McpPool;
   defaultPolicy(): DefaultPolicy;
   capabilities: CapabilitiesScope | null;
+  reportMcp?(servers: ServerStatus[], error?: string): void;
 }
 
 /** Full access in the session rules is the only way the browser leaves project scope. */
@@ -115,8 +117,12 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
   const questions: SdkExtension = { name: "enki-questions", factory: (pi) => { pi.registerTool(questionTool(scope, deps.broker)); } };
   const out: SdkExtension[] = [gate, policy, questions, projectToolsExtension()];
   const caps = deps.capabilities;
+  const reportMcp = (servers: ServerStatus[], error?: string) => {
+    if (deps.reportMcp) deps.reportMcp(servers, error);
+    else deps.journal.append(scope.directory, scope.sessionID, { type: "mcp.status", properties: { sessionID: scope.sessionID, servers, ...(error ? { error } : {}) } });
+  };
   if (caps?.mcpUnavailable) {
-    deps.journal.append(scope.directory, scope.sessionID, { type: "mcp.status", properties: { sessionID: scope.sessionID, servers: [], error: caps.mcpUnavailable } });
+    reportMcp([], caps.mcpUnavailable);
   }
   if (caps?.mcp) {
     out.push({
@@ -125,7 +131,7 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
         registry: () => readRegistry(caps.root, caps.key),
         scope: { registryKey: caps.key, command: caps.executable },
         pool: deps.pool,
-        report: (servers) => deps.journal.append(scope.directory, scope.sessionID, { type: "mcp.status", properties: { sessionID: scope.sessionID, servers } }),
+        report: (servers) => reportMcp(servers),
         reserved: () => pi.getAllTools().map((tool) => tool.name),
       }),
     });

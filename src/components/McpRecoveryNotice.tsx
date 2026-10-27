@@ -9,6 +9,8 @@ const noop = () => () => {};
 const notReady = () => false;
 const EMPTY_NOTICES: readonly { text: string }[] = [];
 const noNotices = () => EMPTY_NOTICES;
+const SERVICE_NAMES: Record<string, string> = { "enki-images": "Генератор изображений", "web-search": "Поиск в интернете",
+  "web-compass": "Web Compass", "cua-desktop": "Управление компьютером", "enki-schedules": "Таймеры", "rea-remote": "Удалённые инструменты" };
 
 /** Discovery recovery only. Never interrupts a turn or repeats a tool action. */
 export function McpRecoveryNotice({ sessionId, directory }: { sessionId: string; directory: string }) {
@@ -52,8 +54,9 @@ export function McpRecoveryNotice({ sessionId, directory }: { sessionId: string;
       ? "Не все инструменты подключились. Можно повторить подключение после текущего ответа."
       : "Не все инструменты подключились. Повторим подключение после текущего ответа."
       : error || "Не удалось подключить инструменты. Проверьте сервис в настройках или повторите подключение.";
+  const label = failed.length ? failed.map(s => SERVICE_NAMES[s.id] ?? s.id).join(", ") : "Подключение инструментов";
   return <div className="mcp-recovery-notice workspace-progress" role="status">
-    <span>{message} Генерация и другие действия не повторяются.</span>
+    <span><strong>{label}: </strong>{message} Генерация и другие действия не повторяются.</span>
     <button className="btn small" type="button" disabled={busy || state.running || state.sending || !canRecover} onClick={() => void run()}>Повторить подключение</button>
   </div>;
 }

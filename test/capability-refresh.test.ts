@@ -128,3 +128,18 @@ it("a selection change while settling a draft cannot refresh a successor's tools
   await expect(store.recoverMcpConnection("same-chat", "/work/a")).rejects.toThrow("изменились");
   expect(open).not.toHaveBeenCalled(); expect(fx.made("POST", "/capabilities/refresh")).toHaveLength(before);
 });
+
+it("restores MCP reports on a UI reload and never overwrites a newer live report", async () => {
+  await store.setDirectory("/work/a");
+  const failed = { id: "enki-images", signature: "s", state: "error", tools: [] };
+  fx.on("GET", "/extensions", () => ({ sessions: [{ sessionID: "same-chat", errors: [], unsupported: [], mcp: { servers: [failed] } }], mcp: [] }));
+  await store.configureSharedTools("/work/a"); expect(store.mcpServerStatuses("same-chat")).toEqual([failed]);
+  let complete!: (value: unknown) => void;
+  fx.on("GET", "/extensions", () => new Promise(resolve => { complete = resolve; }));
+  const pending = store.configureSharedTools("/work/a");
+  await vi.waitFor(() => expect(complete).toBeTypeOf("function"));
+  const connected = { ...failed, state: "connected", tools: ["generate_image"] };
+  fx.emit({ type: "mcp.status", properties: { sessionID: "same-chat", servers: [connected] } }, "/work/a");
+  complete({ sessions: [{ sessionID: "same-chat", errors: [], unsupported: [], mcp: { servers: [failed] } }], mcp: [] });
+  await pending; expect(store.mcpServerStatuses("same-chat")).toEqual([connected]);
+});

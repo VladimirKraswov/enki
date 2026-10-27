@@ -26,11 +26,23 @@ startup warnings заменены одной карточкой, остальн�
 Focused14pass до последних readiness guards; tsc прошёл, затем повтор/полные
 checks. UI-only: проверить nativeFingerprint совпадает с15 cfb456dba14c0e2174e42248b22e09b98c8479e9626c5618bfce14d81a8d4226.
 
+## Дополнительная проверка полного сценария
+
+UI-only недостаточно для reload уже существующего worker: plugin UI notices
+не входят в ui.hello snapshot и старый runtime не возвращал mcp.status в
+GET/extensions. Добавлена текущая bounded проекция MCP per-worker epoch вRuntime,
+копии статусов/массивов; GET/extensions sessions[].mcp (additive); UI читает
+последний отчёт, live event во время HTTP read всегда побеждает snapshot.
+Real pinned-SDK+HTTP integration test mcp-projection прошёл: initial2fail ->
+API error snapshot -> idle refresh -> same session/newworker connected tools,
+commands0/tool calls0. Раньше UI-only план был локально committed639b868,
+НЕ опубликован. Финал16 требует новый нативный пакет из-за runtime change.
+Не утверждать hot compatibility/не пытаться активировать поверх native15.
+
 ## Далее
 
 Diff review + focused tests + commit16. Полный release:local stable (без skips),
-fresh оба подписанных пакета Hub и main; packages CI dispatch. Применить hot16
-через штатный updater без остановки агентов. Actual current worker images8
+fresh оба подписанных пакета Hub и main; packages CI dispatch. Установить native16 через штатный updater на authoritative idle. Actual current worker images8
 connected после завершения текущего ответа; не прерывать/не возобновлять чужую
 работу/не посылать prompts, не запускать генерацию или GPU. Проверить263history.
 Owner AX только emit:false/whitelist, старые titles/commands содержат секреты.

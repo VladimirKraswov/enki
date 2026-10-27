@@ -423,7 +423,8 @@ export class RuntimeClient {
     return this.request<{ path: string; content: string }>("PUT", "/config/models", { body: { expected, content } });
   }
   extensions(directory?: string | null) {
-    return this.request<{ sessions: Array<{ sessionID: string; errors: unknown[]; unsupported: string[] }>; mcp: unknown }>("GET", "/extensions", { query: { directory } });
+    return this.request<{ sessions: Array<{ sessionID: string; errors: unknown[]; unsupported: string[];
+      mcp?: { servers: Array<{ id: string; signature: string; state: "checking" | "connected" | "error"; tools: string[] }>; error?: string } | null }>; mcp: unknown }>("GET", "/extensions", { query: { directory } });
   }
   /**
    * Call ONLY after a confirmed shared-registry/skill/capability commit on this

@@ -11,6 +11,7 @@ import type { Broker, CapabilitiesScope } from "../control/broker.ts";
 import { Dispatcher } from "../execution/dispatcher.ts";
 import { ToolJournal } from "../execution/tools.ts";
 import { enkiExtensions } from "../extensions/enki.ts";
+import type { ServerStatus } from "../../../shared/pi-extension.ts";
 import { InteractionBroker } from "../interaction/broker.ts";
 import type { DefaultPolicy } from "../interaction/access.ts";
 import { continueLegacy, recoverLegacyContinuations } from "../legacy/continue.ts";
@@ -144,6 +145,7 @@ export class Runtime {
   readonly queue: PromptQueue;
   readonly scheduler: Scheduler;
   readonly pool: McpPool;
+  private readonly mcpReports = new Map<string, { epoch: object; servers: ServerStatus[]; error?: string }>();
   readonly pty: PtyService;
   readonly git: GitService;
   readonly importer: OpenCodeImporter;
@@ -408,7 +410,17 @@ export class Runtime {
     return result;
   }
 
+  /** Current worker generation only; no transcript replay on a UI reload. */
+  mcpStatus(sessionID: string): { servers: ServerStatus[]; error?: string } | null {
+    if (!this.registry.live(sessionID)) return null;
+    const report = this.mcpReports.get(sessionID);
+    return report ? { servers: report.servers.map(s => ({ ...s, tools: [...s.tools] })), ...(report.error ? { error: report.error } : {}) } : null;
+  }
+
   private async resources(record: SessionRecord): Promise<ResourceSpec> {
+    const epoch = {};
+    this.mcpReports.delete(record.id); this.mcpReports.set(record.id, { epoch, servers: [] });
+    while (this.mcpReports.size > 256) this.mcpReports.delete(this.mcpReports.keys().next().value!);
     const settings = this.settings();
     const scope = await this.capabilities(record.directory);
     // Persisted switches gate the actual resources (applied when a worker opens).
@@ -429,7 +441,13 @@ export class Runtime {
           sessionID: record.id, directory: record.directory,
           rules: () => this.catalog.get(record.id)?.permission ?? [],
           workshop: () => this.catalog.get(record.id)?.workshop ?? false,
-        }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps }),
+        }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
+          reportMcp: (servers, error) => {
+            if (this.mcpReports.get(record.id)?.epoch !== epoch) return;
+            const snapshot = { epoch, servers: servers.map(s => ({ ...s, tools: [...s.tools] })), ...(error ? { error } : {}) };
+            this.mcpReports.set(record.id, snapshot);
+            this.journal.append(record.directory, record.id, { type: "mcp.status", properties: { sessionID: record.id, servers: snapshot.servers, ...(error ? { error } : {}) } });
+          } }),
         ...(this.config.extraExtensions?.({ sessionID: record.id, directory: record.directory }) ?? []),
       ],
       // Owner-chosen files only; a path that no longer exists is skipped (and
