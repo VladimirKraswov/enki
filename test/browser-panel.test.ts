@@ -373,3 +373,15 @@ it("copies selected page text with Cmd+C through the scoped gateway", async()=>{
   expect(writeText).toHaveBeenCalledWith('Selected fixture');
   delete (navigator as {clipboard?:Clipboard}).clipboard;
 });
+it("keeps an open browser panel through a transient health failure instead of hiding and revealing it", async () => {
+  await mount(BrowserPresence);
+  expect(fake.setUi).toHaveBeenCalledExactlyOnceWith({browserOpen:true});
+  fake.state.ui.browserOpen = true;
+  fake.invoke.mockImplementation(async command => command === "browser_presence" ? { running:false, browserOpen:false } : undefined);
+  await act(async()=>vi.advanceTimersByTimeAsync(4500));
+  expect(fake.setUi).toHaveBeenCalledOnce();
+  fake.invoke.mockImplementation(async command => command === "browser_presence" ? { running:true, browserOpen:true, scope:frame.scope } : undefined);
+  await act(async()=>vi.advanceTimersByTimeAsync(1500));
+  expect(fake.setUi).toHaveBeenCalledOnce();
+  expect(fake.invoke.mock.calls.filter(([name])=>name==="browser_session")).toHaveLength(1);
+});

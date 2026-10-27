@@ -236,13 +236,13 @@ export function Composer() {
           </button>
         </div>
       )}
-      {connected && s.connection.streamState === "reconnecting" && (
+      {connected && ["reconnecting", "error"].includes(s.connection.streamState) && (
         <div
           className="offline-banner"
           style={{ borderColor: "var(--warn)", color: "var(--warn)" }}
           role="status"
         >
-          Восстанавливаю поток событий среды выполнения…
+          Связь с чатом временно прервалась. Восстанавливаем автоматически — повторять запрос не нужно.
         </div>
       )}
       {s.ui.sendError && (

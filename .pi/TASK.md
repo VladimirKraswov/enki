@@ -1,54 +1,33 @@
-# Enki 2.0.16 — восстановление MCP после временного отказа
+# Enki 2.0.17 — связь, фоновое чтение и стабильная панель
 
 W `.local/pi-sdk-migration-20261024/review`, R `/Volumes/Extend/work/Enki`.
-H39 `../stabilize-v39`; H38 завершена: native/UI2.0.15, 263 записи, original
-session/model восстановлены, Hub/main c32cc50, CI40474811011 все4jobs success.
-Old14 bundle и H38 Cargo target удалены; H38/ACCEPTANCE-CHECKPOINT.json complete.
-R/untracked opencode.json сохранить, независимые CLI/истории не трогать.
+H40 `../stabilize-v40`. H39 complete: installed native/UI2.0.16, 263IDs,
+Hub/main4a3a52b, CI40488983247 все4success; собственные target/old15 удалены.
+Native fingerprint16 82a3a88216c41574197292367ae9938b3960dabf0aedf6749aa463b1e44b57b8.
+Не трогать R/untracked opencode.json, истории, ключи, независимые CLI.
+Owner AX только emit:false + whitelist: истории содержат секреты.
+Не автоматизировать Terminal/SecurityAgent, не запускать GPU/генерацию/старые задачи.
 
-## Текущий дефект
+## Дефекты
 
-Screenshot12:22: image MCP startup failure. Installed15 native CLI initialize+
-listTools теперь healthy:8tools,6416ms, H39/IMAGE215-MCP.json. Генерация не шла.
-SQLite latest mcp.status: два прежних чата all6connected, текущий busy чат
-images=error/tools0, остальные5connected. Причина именно исходного handshake
-не восстановима из общего сообщения; не утверждать доказанный timeout.
-При startup error worker не повторял discovery после восстановления сервиса.
+Screenshot23:21 recovering SSE. Сейчас native216 status оба stream open,
+busy, безerror. Исходную причину именно того разрыва не доказали.
+В events.ts отсутствовали deadlines header/hello/read; новая попытка не
+обновляла endpoint после сетевого отказа. Добавлены20s handshake/45s idle,
+сервер15skeepalive сохраняетживость, bounded refresh, seq replay безповторакоманд.
+User Medic->DreamUI сам: control bridge sessions/conversation и managed wait
+вызывали selectDirectory/selectSession. Это подтверждённый focus-stealing путь.
+Read-only проекция через existing scopedAPI; managed continuation исходному
+session/model через existing durable backend.prompt, не visiblecomposer.
+Browser_presence nativefallback running:false трактовался какclosed ->hide/reveal.
+Теперь unknownpresence не меняетпанель; callbackmonitor fenced поhost/dir/chat.
 
-## Изменения UI16
+## Проверки/далее
 
-McpRecoveryNotice + одноразовый бюджет на episode/host/session; ждёт idle,
-готового SDK UI и synced draft. Store.recoverMcpConnection только existing
-refreshCapabilities(directory) + same-session UI.open; guards после await,
-не отправляет commands/prompts, registry не меняет, action не повторяет.
-Учитывает startup notice после reload без mcp.status snapshot. Штатные
-startup warnings заменены одной карточкой, остальные ошибки tools сохранены.
-Focused14pass до последних readiness guards; tsc прошёл, затем повтор/полные
-checks. UI-only: проверить nativeFingerprint совпадает с15 cfb456dba14c0e2174e42248b22e09b98c8479e9626c5618bfce14d81a8d4226.
-
-## Дополнительная проверка полного сценария
-
-UI-only недостаточно для reload уже существующего worker: plugin UI notices
-не входят в ui.hello snapshot и старый runtime не возвращал mcp.status в
-GET/extensions. Добавлена текущая bounded проекция MCP per-worker epoch вRuntime,
-копии статусов/массивов; GET/extensions sessions[].mcp (additive); UI читает
-последний отчёт, live event во время HTTP read всегда побеждает snapshot.
-Real pinned-SDK+HTTP integration test mcp-projection прошёл: initial2fail ->
-API error snapshot -> idle refresh -> same session/newworker connected tools,
-commands0/tool calls0. Раньше UI-only план был локально committed639b868,
-НЕ опубликован. Финал16 требует новый нативный пакет из-за runtime change.
-Текущая16 fingerprint654115d35e5bba89d7a21718aa8556a9b8146b44520992d64dc565c4f65c10ba.
-UI16focused16pass; runtime realSDK1pass; обе tsc pass после добавления недостающих
-полей mcpUnavailable/browserSkillPath в тестовый CapabilitiesScope.
-H39/IMAGE215-API-VERIFIED: actual Settings->Images->Probe API responds,
-SDXL Lightning+FLUX Klein4B resident, генерация НЕ запускалась.
-Не утверждать hot compatibility/не пытаться активировать поверх native15.
-
-## Далее
-
-Diff review + focused tests + commit16. Полный release:local stable (без skips),
-fresh оба подписанных пакета Hub и main; packages CI dispatch. Установить native16 через штатный updater на authoritative idle. Actual current worker images8
-connected после завершения текущего ответа; не прерывать/не возобновлять чужую
-работу/не посылать prompts, не запускать генерацию или GPU. Проверить263history.
-Owner AX только emit:false/whitelist, старые titles/commands содержат секреты.
-SecurityAgent/Terminal UI не автоматизировать. Истории/ключи/backup сохранять.
+Focused65pass (6files): streams, background focus, busy polling, late read, browser.
+Typecheck pass. Native fingerprint совпадает с16.
+Focusfixture сначала использовалтотжеmessageID дляновоготурна ->correcttimeout,
+исправленнаa2. Busy-poll bounded1s и late read guards проверены; diff review выполнен.
+Full release:local stable no skips, Hubобапакетаexact+signatureverify, mainpush.
+Если nativefingerprintтотже16, активироватьштатныйhotUI безостановкиownerjobs;
+не утверждать native17 безпереустановки. Сохранятьlatestвыбор и263истории.

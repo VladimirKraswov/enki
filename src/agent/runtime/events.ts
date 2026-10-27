@@ -24,6 +24,9 @@ export interface RuntimeStreamOptions {
    * `oversized`: one event was too large for the wire and was not applied. */
   onReset(reason: StreamResetReason): void;
   maxBackoffMs?: number;
+  /** Hello must arrive promptly; server keepalive comments count as liveness afterwards. */
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
 }
 
 interface Hello { type: "stream.hello"; instance: string; head: number; contract: number }
@@ -39,38 +42,58 @@ export async function runRuntimeStream(opts: RuntimeStreamOptions): Promise<void
   let attempt = 0;
   let cursor: number | null = null;
   let instance: string | null = null;
+  let refreshConnection = false;
   try {
     while (!opts.signal.aborted) {
       opts.onState(attempt === 0 ? "connecting" : "reconnecting");
       let openedAt: number | undefined;
+      const request = new AbortController();
+      const abort = () => request.abort(opts.signal.reason);
+      opts.signal.addEventListener("abort", abort, { once: true });
+      if (opts.signal.aborted) abort();
+      let timer: ReturnType<typeof setTimeout>;
+      const arm = (ms: number) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => request.abort(new Error("Поток событий не отвечает. Повторяем подключение.")), ms);
+      };
+      // Bound refresh, headers AND reads, even if a transport neglects AbortSignal.
+      const bounded = <T,>(work: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+        const stop = () => { cleanup(); reject(request.signal.reason); };
+        const cleanup = () => request.signal.removeEventListener("abort", stop);
+        work.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+        request.signal.addEventListener("abort", stop, { once: true });
+        if (request.signal.aborted) stop();
+      });
+      arm(opts.connectTimeoutMs ?? 20_000);
       try {
+        if (refreshConnection) { await bounded(opts.client.reconnect()); refreshConnection = false; }
         const query = "all" in opts.scope ? { all: "1" } : { directory: opts.scope.directory };
         const send = () => fetch(opts.client.url("/events", { ...query, after: cursor ?? undefined }), {
           headers: { ...opts.client.authorization(), Accept: "text/event-stream" },
-          signal: opts.signal,
+          signal: request.signal,
           cache: "no-store",
         });
-        let res = await send();
+        let res = await bounded(send());
         if (res.status === 401) {
-          await res.body?.cancel();
-          await opts.client.reconnect();
-          res = await send();
+          void res.body?.cancel().catch(() => {});
+          await bounded(opts.client.reconnect());
+          res = await bounded(send());
         }
         if (!res.ok || !res.body) {
-          await res.body?.cancel();
+          void res.body?.cancel().catch(() => {});
           throw new Error(`event stream HTTP ${res.status}`);
         }
         const reader = res.body.getReader();
         const cancel = () => { void reader.cancel().catch(() => {}); };
         opts.signal.addEventListener("abort", cancel, { once: true });
         try {
-          openedAt = Date.now();
           const decoder = new TextDecoder();
           // Same bound the runtime applies before sending (EVENT_WIRE_LIMIT_BYTES).
           const frames = new SseDecoder(EVENT_FRAME_CHARACTERS);
           while (!opts.signal.aborted) {
-            const { done, value } = await reader.read();
+            const { done, value } = await bounded(reader.read());
             if (done || opts.signal.aborted) break;
+            if (openedAt !== undefined && value.byteLength) arm(opts.idleTimeoutMs ?? 45_000);
             try {
               frames.push(decoder.decode(value, { stream: true }), data => {
                 if (opts.signal.aborted) return false;
@@ -79,8 +102,10 @@ export async function runRuntimeStream(opts: RuntimeStreamOptions): Promise<void
                 catch { throw new Error("Invalid event stream JSON"); }
                 const control = parsed as Hello | Reset;
                 if (control?.type === "stream.hello") {
+                  openedAt = Date.now();
                   const restarted = instance !== null && control.instance !== instance;
                   instance = control.instance;
+                  arm(opts.idleTimeoutMs ?? 45_000);
                   opts.onState("open");
                   if (restarted) {
                     // A restarted runtime has a new journal: the old cursor means nothing.
@@ -121,13 +146,20 @@ export async function runRuntimeStream(opts: RuntimeStreamOptions): Promise<void
           }
         } finally {
           opts.signal.removeEventListener("abort", cancel);
-          await reader.cancel().catch(() => {});
+          // Cancellation itself can wait for a broken network transport. It
+          // must not keep the next, cursor-preserving attempt from starting.
+          void reader.cancel().catch(() => {});
           reader.releaseLock();
         }
-        if (!opts.signal.aborted) opts.onState("reconnecting", "stream ended");
+        if (!opts.signal.aborted) { refreshConnection = true; opts.onState("reconnecting", "stream ended"); }
       } catch (error) {
         if (opts.signal.aborted) break;
+        refreshConnection = true;
         opts.onState("error", error instanceof Error ? error.message : "Event stream failed");
+      } finally {
+        clearTimeout(timer!);
+        opts.signal.removeEventListener("abort", abort);
+        request.abort();
       }
       if (opts.signal.aborted) break;
       if (openedAt !== undefined && Date.now() - openedAt >= 10000) attempt = 0;

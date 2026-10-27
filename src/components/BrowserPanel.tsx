@@ -21,12 +21,18 @@ export function BrowserPresence() {
   activeLocal.current = local;
   useEffect(() => {
     if (!local || !app.ui.browserOpen || !app.activeSessionId) return;
-    presentations.set(presentationKey(), "panel");
+    let cancelled = false;
+    const engine = store.engineIdFor(), session = app.activeSessionId, directory = app.directory;
+    const current = () => !cancelled && store.state.activeSessionId === session && store.state.directory === directory
+      && store.state.prefs.workspaceKey === app.prefs.workspaceKey && store.state.prefs.endpoint === app.prefs.endpoint;
+    const key = JSON.stringify([app.prefs.workspaceKey ?? app.prefs.endpoint, directory, engine, session]);
+    presentations.set(key, "panel");
     void browserNative<{scope?:{engine:string;sessionID:string};scopeKey?:string}>("browser_presence").then(presence => {
-      if (presence.scope?.engine === store.engineIdFor() && presence.scope?.sessionID === store.state.activeSessionId && store.state.ui.browserOpen)
+      if (current() && presence.scope?.engine === engine && presence.scope?.sessionID === session && store.state.ui.browserOpen)
         return browserNative("browser_monitor", { action: "restore", scopeKey:presence.scopeKey });
     }).catch(() => {});
-  }, [local, app.ui.browserOpen, app.activeSessionId]);
+    return () => { cancelled = true; };
+  }, [local, app.ui.browserOpen, app.activeSessionId, app.directory, app.prefs.workspaceKey, app.prefs.endpoint]);
   useEffect(() => {
     if (!isNative()) return;
     let cancelled = false;
@@ -72,8 +78,11 @@ export function BrowserPresence() {
         }
         if (cancelled || !stillSelected()) return;
         if (!local || !session) return;
-        let s = await browserNative<{ browserOpen: boolean; monitorOpen?: boolean; scopeKey?:string; scope?: {engine:string;sessionID:string} }>("browser_presence");
+        let s = await browserNative<{ running?: boolean; browserOpen: boolean; monitorOpen?: boolean; scopeKey?:string; scope?: {engine:string;sessionID:string} }>("browser_presence");
         if (cancelled || !stillSelected()) return;
+        // The native gateway returns running:false when its health request
+        // fails. That is unknown presence, not proof the browser was closed.
+        if (s.running === false) throw new Error("Browser presence temporarily unavailable");
         // A daemon restart or a late agent-side selection can leave the shared
         // service on another chat. Reconcile only on mismatch, never on every
         // health tick; a stale effect is guarded against the live store state.
@@ -82,6 +91,7 @@ export function BrowserPresence() {
           if (cancelled || !stillSelected()) return;
           s = await browserNative("browser_presence");
           if (cancelled || !stillSelected()) return;
+          if (s.running === false) throw new Error("Browser presence temporarily unavailable");
         }
         const ours = s.scope?.engine === engine && s.scope?.sessionID === session;
         if (s.browserOpen && ours && !wasOpen) {

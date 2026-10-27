@@ -9,6 +9,7 @@ import type { PermissionRequest, QuestionRequest } from "../api/types";
 import type { EngineId } from "../state/engines";
 import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
 import { store } from "../state/store";
+import { applyHistory, emptyChatRoot, type SessionChatState } from "../state/chatReducer";
 import { isNative } from "../native/platform";
 import { installAgentControlMcp } from "./install";
 import {
@@ -300,8 +301,7 @@ function isFinalAssistant(message: { role: string; finish?: string | null }): bo
   return message.role === "assistant" && Boolean(message.finish && message.finish !== "tool-calls");
 }
 
-function finalAssistantSince(sessionId: string, boundaryMessageId: string | null): boolean {
-  const chat = store.state.chat.sessions[sessionId];
+function finalAssistantSince(sessionId: string, boundaryMessageId: string | null, chat = store.state.chat.sessions[sessionId]): boolean {
   if (!chat) return false;
   for (const messageId of [...chat.messageOrder].reverse()) {
     if (messageId === boundaryMessageId) break;
@@ -310,40 +310,6 @@ function finalAssistantSince(sessionId: string, boundaryMessageId: string | null
     return isFinalAssistant(message);
   }
   return false;
-}
-
-function waitForManagedTurn(
-  sessionId: string,
-  boundaryMessageId: string | null,
-  deadline: number,
-  signal: AbortSignal,
-) {
-  return new Promise<void>((resolve) => {
-    let timer: ReturnType<typeof setTimeout>;
-    let unsubscribe = () => {};
-    const finish = () => {
-      clearTimeout(timer);
-      unsubscribe();
-      signal.removeEventListener("abort", inspect);
-      resolve();
-    };
-    const inspect = () => {
-      const interaction = pending(sessionId);
-      if (
-        signal.aborted ||
-        interaction.permissions.length ||
-        interaction.questions.length ||
-        store.state.chat.sessions[sessionId]?.lastError ||
-        finalAssistantSince(sessionId, boundaryMessageId) ||
-        Date.now() >= deadline
-      )
-        finish();
-    };
-    unsubscribe = store.subscribe(inspect);
-    signal.addEventListener("abort", inspect, { once: true });
-    timer = setTimeout(inspect, Math.max(0, deadline - Date.now()));
-    inspect();
-  });
 }
 
 function malformedToolCallMessage(
@@ -363,8 +329,7 @@ function malformedToolCallMessage(
   );
 }
 
-function recoverableMalformedToolMessage(sessionId: string, run: ManagedRun) {
-  const chat = store.state.chat.sessions[sessionId];
+function recoverableMalformedToolMessage(sessionId: string, run: ManagedRun, chat = store.state.chat.sessions[sessionId]) {
   if (!chat) return null;
   for (const messageId of [...chat.messageOrder].reverse()) {
     if (messageId === run.boundaryMessageId) break;
@@ -383,9 +348,8 @@ function containsCompletionMarker(text: string, marker: string): boolean {
   return text.split(/\r?\n/).some((line) => line.trim() === marker);
 }
 
-function completionMarkerSeen(sessionId: string, run: ManagedRun): boolean {
+function completionMarkerSeen(sessionId: string, run: ManagedRun, chat = store.state.chat.sessions[sessionId]): boolean {
   if (!run.completionMarker) return true;
-  const chat = store.state.chat.sessions[sessionId];
   if (!chat) return false;
   for (const messageId of [...chat.messageOrder].reverse()) {
     if (messageId === run.boundaryMessageId) break;
@@ -433,6 +397,12 @@ async function waitUntilSettled(
   signal: AbortSignal,
 ): Promise<unknown> {
   const deadline = Date.now() + timeoutSeconds * 1000;
+  const pause = () => new Promise<void>(resolve => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, Math.max(0, Math.min(1000, deadline - Date.now())));
+    signal.addEventListener("abort", done, { once: true });
+    if (signal.aborted) done();
+  });
   for (;;) {
     if (signal.aborted) return { outcome: "stopped", status: activeStatus(sessionId) };
     const result = (await waitForStateChange(sessionId, deadline, signal)) as {
@@ -448,12 +418,12 @@ async function waitUntilSettled(
     // A persisted run may be resumed while another chat is visible. Load its
     // authoritative history before deciding that a marker is absent; otherwise
     // an empty in-memory slot could cause a false continuation after restart.
-    await selectSession(run.directory, sessionId);
+    const { chat, session, backend, interactions } = await readChat(run.directory, sessionId, signal);
     if (signal.aborted) return { outcome: "stopped", status: activeStatus(sessionId) };
     run = getManagedRun(serverKey, sessionId);
     if (!run) return result;
-    const refreshedInteraction = pending(sessionId);
-    const refreshedStatus = activeStatus(sessionId);
+    const refreshedInteraction = interactions;
+    const refreshedStatus = chat.status;
     if (refreshedInteraction.permissions.length || refreshedInteraction.questions.length) {
       return {
         outcome: "needs_input",
@@ -461,30 +431,33 @@ async function waitUntilSettled(
         ...refreshedInteraction,
       };
     }
-    if (store.state.chat.sessions[sessionId]?.lastError) {
+    if (chat.lastError) {
       return {
         outcome: "failed",
         status: refreshedStatus,
-        error: store.state.chat.sessions[sessionId].lastError,
+        error: chat.lastError,
       };
     }
     if (refreshedStatus.type === "busy" || refreshedStatus.type === "retry") {
       if (Date.now() >= deadline)
         return { outcome: "timeout", status: refreshedStatus, timeoutSeconds };
+      await pause();
       continue;
     }
-    if (!finalAssistantSince(sessionId, run.turnBoundaryMessageId)) {
-      await waitForManagedTurn(sessionId, run.turnBoundaryMessageId, deadline, signal);
+    if (!finalAssistantSince(sessionId, run.turnBoundaryMessageId, chat)) {
+      // Background chats need no visible subscription. Read their durable page
+      // again after a bounded wait, without stealing the user's selection.
+      await pause();
       if (signal.aborted) return { outcome: "stopped", status: activeStatus(sessionId) };
       if (Date.now() >= deadline)
         return { outcome: "timeout", status: activeStatus(sessionId), timeoutSeconds };
       continue;
     }
-    const malformed = recoverableMalformedToolMessage(sessionId, run);
+    const malformed = recoverableMalformedToolMessage(sessionId, run, chat);
     const decision = decideManagedIdle(
       run,
       malformed?.id ?? null,
-      completionMarkerSeen(sessionId, run),
+      completionMarkerSeen(sessionId, run, chat),
     );
     let prompt: string | null = null;
     let recoveryKind: "malformed_tool" | "incomplete" | null = null;
@@ -528,21 +501,30 @@ async function waitUntilSettled(
       recoveryKind = "incomplete";
     }
 
-    // Keep the recovery in the same visible conversation. Selection is explicit
-    // because the user may have inspected another chat between send and wait.
-    const order = store.state.chat.sessions[sessionId]?.messageOrder ?? [];
+    // Target the original runtime chat, never the currently visible composer,
+    // model or draft. The runtime's idempotent ledger owns this command.
+    const order = chat.messageOrder;
     run = putManagedRun({
       ...run,
       turnBoundaryMessageId: order.length ? order[order.length - 1] : run.turnBoundaryMessageId,
     });
-    const accepted = await store.sendPrompt(prompt);
-    if (!accepted) {
+    try {
+      if (signal.aborted || backend !== store.backend || serverKey !== (store.state.prefs.workspaceKey ?? store.state.prefs.endpoint))
+        return { outcome: "stopped", status: activeStatus(sessionId) };
+      if (!session.model) throw new Error("В исходном чате не выбрана модель. Продолжение не отправлено.");
+      await backend.prompt(sessionId, run.directory, {
+        messageID: `managed-${crypto.randomUUID()}`,
+        model: { providerID: session.model.providerID, modelID: session.model.id },
+        variant: session.model.variant ?? undefined,
+        parts: [{ type: "text", text: prompt }],
+      }, signal);
+    } catch (error) {
       removeManagedRun(serverKey, sessionId);
       return {
         outcome: "recovery_failed",
         status: activeStatus(sessionId),
         recoveryKind,
-        error: store.state.ui.sendError ?? "the Enki runtime did not accept the recovery prompt",
+        error: error instanceof Error ? error.message : "the Enki runtime did not accept the recovery prompt",
       };
     }
     if (Date.now() >= deadline) {
@@ -568,8 +550,26 @@ function waitForSession(sessionId: string, timeoutSeconds: number): Promise<unkn
   return pending;
 }
 
-function conversation(sessionId: string, limit: number, maxChars: number) {
-  const chat = store.state.chat.sessions[sessionId];
+/** Read-only projection, isolated from visible selection, draft and history cache. */
+async function readChat(directory: string, sessionId: string, signal?: AbortSignal) {
+  const backend = store.backend;
+  const [session, page, snapshot] = await Promise.all([
+    backend.getSession(sessionId, directory, signal),
+    backend.messages(sessionId, { directory, limit: 200, signal }),
+    backend.client.snapshot(directory, signal),
+  ]);
+  if (backend !== store.backend || signal?.aborted) throw new Error("Подключение изменилось; чтение отменено.");
+  const root = emptyChatRoot();
+  applyHistory(root, sessionId, page.messages);
+  const chat = root.sessions[sessionId];
+  chat.status = snapshot.statuses[sessionId] ?? { type: "idle" };
+  return { session, chat, backend, interactions: {
+    permissions: snapshot.permissions.filter(p => p.sessionID === sessionId),
+    questions: (snapshot.questions ?? []).filter(q => q.sessionID === sessionId),
+  } };
+}
+
+function conversation(sessionId: string, limit: number, maxChars: number, chat: SessionChatState | undefined = store.state.chat.sessions[sessionId]) {
   if (!chat) return { sessionId, status: activeStatus(sessionId), messages: [] };
   const selected = chat.messageOrder.slice(-limit);
   const messages: unknown[] = [];
@@ -657,9 +657,7 @@ async function execute(method: string, raw: unknown): Promise<unknown> {
     }
     case "sessions": {
       const directory = text(params, "directory")!;
-      await selectDirectory(directory);
-      if (boolean(params, "refresh", true)) await store.refreshSessions();
-      return [...store.state.sessions, ...store.state.archivedSessions].map(sessionSummary);
+      return (await store.backend.listSessions(directory)).map(sessionSummary);
     }
     case "new_chat": {
       const directory = text(params, "directory")!;
@@ -681,11 +679,11 @@ async function execute(method: string, raw: unknown): Promise<unknown> {
     case "conversation": {
       const directory = text(params, "directory")!;
       const sessionId = text(params, "session_id")!;
-      await selectSession(directory, sessionId);
+      const { chat } = await readChat(directory, sessionId);
       return conversation(
         sessionId,
         integer(params, "limit", 40, 1, 200),
-        integer(params, "max_chars", 120_000, 1_000, 500_000),
+        integer(params, "max_chars", 120_000, 1_000, 500_000), chat,
       );
     }
     case "stop": {
