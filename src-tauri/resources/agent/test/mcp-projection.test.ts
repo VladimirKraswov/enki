@@ -10,7 +10,8 @@ it("a fresh UI reads MCP failure and idle recovery opens the same chat without a
   fs.writeFileSync(path.join(root, "global.json"), JSON.stringify({ version: 1, sources: [], servers: [{
     id: "enki-images", name: "Image tools", enabled: true, kind: "stdio", command: "/not-run-in-test", args: [], url: "", envKeys: [], bearer: false,
   }] }));
-  h.runtime.config.capabilities = async () => ({ root, key: "global", executable: "/not-run-in-test", mcp: true, browser: false, lspConfig: null, skillPaths: [] });
+  h.runtime.config.capabilities = async () => ({ root, key: "global", executable: "/not-run-in-test", mcp: true, mcpUnavailable: null,
+    browser: false, browserSkillPath: null, lspConfig: null, skillPaths: [] });
   const call = vi.fn(), release = vi.fn();
   vi.spyOn(h.runtime.pool, "acquire").mockRejectedValueOnce(Error("temporary failure")).mockRejectedValueOnce(Error("temporary failure"))
     .mockResolvedValue({ connection: { tools: async () => [{ name: "generate_image", inputSchema: { type: "object", properties: {} } }], call }, release });

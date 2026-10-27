@@ -37,6 +37,11 @@ Real pinned-SDK+HTTP integration test mcp-projection прошёл: initial2fail 
 API error snapshot -> idle refresh -> same session/newworker connected tools,
 commands0/tool calls0. Раньше UI-only план был локально committed639b868,
 НЕ опубликован. Финал16 требует новый нативный пакет из-за runtime change.
+Текущая16 fingerprint654115d35e5bba89d7a21718aa8556a9b8146b44520992d64dc565c4f65c10ba.
+UI16focused16pass; runtime realSDK1pass; обе tsc pass после добавления недостающих
+полей mcpUnavailable/browserSkillPath в тестовый CapabilitiesScope.
+H39/IMAGE215-API-VERIFIED: actual Settings->Images->Probe API responds,
+SDXL Lightning+FLUX Klein4B resident, генерация НЕ запускалась.
 Не утверждать hot compatibility/не пытаться активировать поверх native15.
 
 ## Далее
