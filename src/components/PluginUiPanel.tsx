@@ -6,6 +6,7 @@ import type { UiWidget } from "../agent/runtime/pluginUi/types";
 import { store, useAppSelector, errText } from "../state/store";
 import type { AppState } from "../state/types";
 import { PluginTerminalSurface } from "./PluginTerminalSurface";
+import { isMcpStartupNotice } from "../capabilities/recovery";
 
 const NO_VIEW: PluginUiView = { phase: "connecting", detail: "", snapshot: null, mode: { custom: false, terminalInput: false }, draftRevision: -1, generation: 0, notices: [] };
 const OFFLINE: DraftSyncState = { kind: "offline" };
@@ -59,7 +60,7 @@ export function PluginUiPanel({ sessionId, directory }: { sessionId: string; dir
   if (!active || active.session.sessionID !== sessionId) return null;
   const session = active.session, snapshot = view.snapshot;
   const act = (work: () => Promise<void>) => { setActionError(""); void work().catch(error => setActionError(errText(error))); };
-  const notices = view.notices.filter(notice => notice.at > dismissed);
+  const notices = view.notices.filter(notice => notice.at > dismissed && !isMcpStartupNotice(notice.text));
 
   if (view.phase === "error") return <div className="plugin-ui plugin-ui-error" role="alert">
     <span>{view.detail}</span>

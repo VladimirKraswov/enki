@@ -1,5 +1,6 @@
 import { recoveryText, requestModelTransition, transitionText, type ContextTransitionProgress } from "./modelTransition";
 import {McpNotices} from '../capabilities/notices';
+import { isMcpStartupNotice } from '../capabilities/recovery';
 import type { RuntimeServerStatus } from '../capabilities/registry';
 import { prepareWorkshop, resolveWorkshop, isWorkshopSession, type WorkshopRecord } from "../workshop/workspace";
 import { StreamNotifications, selectedSnapshot, shallowEqual } from "./notifications";
@@ -102,6 +103,7 @@ export const RETAINED_TRANSCRIPTS = 12;
 export const RETAINED_STREAM_SLOTS = 12;
 /** Chats whose last shared-MCP status is kept (the open chat reports again on use). */
 export const MCP_STATUS_LIMIT = 64;
+const EMPTY_MCP_STATUSES: RuntimeServerStatus[] = [];
 
 /** Runtime compaction settings → the context meter's thresholds. */
 function compactionOf(settings: RuntimeSettingsDTO): AppState["compaction"] {
@@ -311,10 +313,44 @@ class Store {
   private readonly mcpErrors = new Map<string, string>();
   /** Last shared-MCP status reported by this chat's worker (empty until it reports). */
   mcpServerStatuses(sessionId: string | null): RuntimeServerStatus[] {
-    return sessionId ? this.mcpStatuses.get(sessionId) ?? [] : [];
+    return sessionId ? this.mcpStatuses.get(sessionId) ?? EMPTY_MCP_STATUSES : EMPTY_MCP_STATUSES;
   }
   mcpConnectionError(sessionId: string | null): string | null {
     return sessionId ? this.mcpErrors.get(sessionId) ?? null : null;
+  }
+  /** Reopen only an idle SDK worker via the existing resource lifecycle.
+   * No registry edit, new prompt, action replay or server restart. */
+  async recoverMcpConnection(sessionId: string, directory: string): Promise<void> {
+    const runtime = this.runtime, generation = this.connectionGeneration;
+    const current = () => !!runtime && runtime === this.runtime && generation === this.connectionGeneration
+      && this.state.activeSessionId === sessionId && this.state.directory === directory;
+    const safe = () => current() && !this.isRunning(sessionId) && !this.state.ui.sending;
+    if (!safe() || !runtime) throw new Error("Переподключение инструментов возможно после текущего ответа в выбранном чате.");
+    const failed = this.mcpServerStatuses(sessionId).filter(s => s.state === "error").map(s => s.id);
+    const active = activePluginUi.get();
+    if (!active || active.session.client !== runtime.client || active.session.sessionID !== sessionId)
+      throw new Error("Дождитесь подключения интерфейса чата и повторите.");
+    const view = active.session.getView();
+    if (view.phase !== "live" || !view.snapshot) throw new Error("Дождитесь подключения интерфейса чата и повторите.");
+    // A UI reload has no historical MCP status snapshot. The same worker's
+    // scoped startup notice is also evidence of failed discovery, never of a
+    // failed action. Wait for a fresh complete report in that case.
+    if (!failed.length && !(view.notices ?? []).some(n => isMcpStartupNotice(n.text))) return;
+    if (view.snapshot?.pendingDraft || view.snapshot?.pendingSubmission || view.mode.custom || view.mode.terminalInput)
+      throw new Error("Сначала завершите ввод в интерфейсе расширения. Ваш текст сохранён.");
+    await active.draft.settle();
+    if (!safe() || active !== activePluginUi.get()) throw new Error("Чат или состояние работы изменились; переподключение отложено.");
+    if (active.draft.getState().kind !== "synced") throw new Error("Черновик ещё не подтверждён. Дождитесь сохранения текста и повторите.");
+    await runtime.client.refreshCapabilities(directory);
+    if (!safe() || active !== activePluginUi.get()) return;
+    this.mcpStatuses.delete(sessionId); this.mcpErrors.delete(sessionId); this.mutate({});
+    // Each waiter subscribes before opening and checks the latest report too.
+    let opened = false;
+    const waits = (failed.length ? failed : [""]).map(id => waitForMcpServer({ id, current, all: !id,
+      report: () => ({ servers: this.mcpServerStatuses(sessionId), error: this.mcpConnectionError(sessionId) }),
+      subscribe: check => this.subscribe(check),
+      open: () => { if (!opened) { opened = true; active.session.open(); } }, label: "MCP-инструментов" }));
+    await Promise.all(waits);
   }
   /** Explicit Connect: open the SAME chat through its existing SDK/UI lifecycle.
    * No model prompt, tool execution, new chat, or interruption of an agent. */
@@ -466,7 +502,7 @@ class Store {
       }
       this.mutate({});
     },
-    notice: (sessionID, text) => { if (!sessionID || sessionID === this.state.activeSessionId) this.patchUi({ toast: text }); },
+    notice: (sessionID, text) => { if (!isMcpStartupNotice(text) && (!sessionID || sessionID === this.state.activeSessionId)) this.patchUi({ toast: text }); },
     broker: request => void this.relayBroker(request),
     contextTransition: progress => {
       if (progress.operation) {

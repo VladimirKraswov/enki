@@ -1,6 +1,6 @@
 [package]
 name = "enki"
-version = "2.0.15"
+version = "2.0.16"
 description = "Enki desktop with the bundled Pi SDK agent runtime"
 authors = ["Enki contributors"]
 edition = "2021"

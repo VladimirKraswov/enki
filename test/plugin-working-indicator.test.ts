@@ -44,3 +44,21 @@ it("generic activity is shown only by the chat; explicit extension progress foll
     expect(node.querySelector('[role="status"]')?.textContent).toContain("Временный сбой");
   } finally { act(() => root.unmount()); }
 });
+
+it("shows uncertain tool failures but leaves discovery failure to the recovery card", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const startup = "Генератор: Не удалось подключиться к сервису MCP. Действия сервиса при подключении не запускались.";
+  const action = "Общий MCP недоступен; действие не повторялось.";
+  fake.running = false;
+  fake.view = { phase: "live", generation: 1, mode: { custom: false, terminalInput: false }, notices: [
+    { at: 1, level: "warning", text: startup }, { at: 2, level: "warning", text: action },
+  ], snapshot: { state: { statuses: {}, working: { visible: false }, widgets: [] } } };
+  const draft = { kind: "synced" };
+  fake.active = { session: { sessionID: "chat", subscribe: () => () => {}, getView: () => fake.view },
+    draft: { subscribe: () => () => {}, getState: () => draft, stash: null } };
+  const node = document.createElement("div"), root = createRoot(node);
+  try {
+    act(() => root.render(createElement(PluginUiPanel, { sessionId: "chat", directory: "/p" })));
+    expect(node.textContent).not.toContain(startup); expect(node.textContent).toContain(action);
+  } finally { act(() => root.unmount()); }
+});

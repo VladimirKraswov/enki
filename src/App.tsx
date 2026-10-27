@@ -9,6 +9,7 @@ import { BrowserPanel, BrowserPresence } from "./components/BrowserPanel";
 import { PiDialog } from "./components/PiDialog";
 import { HostDialogs } from "./components/HostDialogs";
 import { PluginUiBelowComposer, PluginUiPanel } from "./components/PluginUiPanel";
+import { McpRecoveryNotice } from "./components/McpRecoveryNotice";
 import { RUNTIME_CAPABILITIES } from "./agent/runtime/backend";
 import { store, useAppSelector, applyTheme } from "./state/store";
 import { Sidebar } from "./components/Sidebar";
@@ -130,6 +131,7 @@ export default function App() {
               s.connection.phase === "connecting" ? (
                 <>
                   <ChatView />
+                  {pluginChat && <McpRecoveryNotice key={`${pluginChat.directory}\n${pluginChat.sessionId}`} {...pluginChat} />}
                   {pluginChat && <PluginUiPanel key={`${pluginChat.directory}\n${pluginChat.sessionId}`} {...pluginChat} />}
                   <Composer />
                   {pluginChat && <PluginUiBelowComposer />}

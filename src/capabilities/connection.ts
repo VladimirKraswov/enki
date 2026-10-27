@@ -8,6 +8,8 @@ export function waitForMcpServer(options: {
   subscribe(check: () => void): () => void;
   open(): void;
   timeoutMs?: number;
+  label?: string;
+  all?: boolean;
 }): Promise<RuntimeServerStatus> {
   return new Promise((resolve, reject) => {
     let done = false;
@@ -21,9 +23,14 @@ export function waitForMcpServer(options: {
       if (!options.current()) return finish(new Error("Чат или подключение изменились. Проверьте управление в выбранном чате."));
       const report = options.report();
       if (report.error) return finish(new Error(report.error));
-      const server = report.servers.find(item => item.id === options.id);
-      if (server?.state === "error") return finish(new Error("Чат не смог загрузить инструменты управления. Повторите подключение; если ошибка сохранится, проверьте драйвер и мост MCP."));
+      const server = options.all
+        ? report.servers.find(item => item.state === "error") ?? report.servers[0]
+        : report.servers.find(item => item.id === options.id);
+      if (server?.state === "error") return finish(new Error(options.label
+        ? "Подключение инструментов не восстановлено. Проверьте сервис в настройках."
+        : "Чат не смог загрузить инструменты управления. Повторите подключение; если ошибка сохранится, проверьте драйвер и мост MCP."));
       if (server?.state === "connected") {
+        if (options.all && !report.servers.every(item => item.state === "connected")) return;
         if (!server.tools.length) return finish(new Error("Подключение ответило, но не предоставило инструментов управления."));
         finish(undefined, server);
       }

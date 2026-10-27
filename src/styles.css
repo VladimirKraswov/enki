@@ -1195,6 +1195,13 @@ select {
   font-size: 0.857143rem;
 }
 .plugin-ui-error { flex-direction: row; align-items: center; color: var(--danger, var(--warn)); }
+.mcp-recovery-notice {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px;
+  width: min(100%, var(--composer-width, 860px)); margin: 0 auto 6px;
+  padding: 6px 12px; color: var(--text-dim); font-size: 0.857143rem;
+}
+.mcp-recovery-notice > span { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.mcp-recovery-notice > button { flex: 0 0 auto; }
 .plugin-ui-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .plugin-ui-status, .plugin-ui-working {
   border: 1px solid var(--border);
