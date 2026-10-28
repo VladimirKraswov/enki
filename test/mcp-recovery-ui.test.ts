@@ -2,20 +2,20 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
-const f = vi.hoisted(() => ({ running: true, servers: [] as any[], recover: vi.fn(), endpoint: "", ready: true, notices: [] as any[] }));
+const f = vi.hoisted(() => ({ running: true, servers: [] as any[], recover: vi.fn(), endpoint: "", ready: true, activeSession: "chat", activeDirectory: "/p", notices: [] as any[] }));
 vi.mock("../src/state/store", () => ({ errText: String, store: {
   isRunning: () => f.running, mcpServerStatuses: () => f.servers,
   recoverMcpConnection: (...args: any[]) => f.recover(...args),
 }, useAppSelector: (select: any) => select({ connection: { phase: "connected", endpoint: f.endpoint },
   runtime: { instance: "i" }, prefs: { workspaceKey: "local" }, ui: { sending: false } }) }));
 vi.mock("../src/agent/runtime/pluginUi/active", () => {
-  const active = { session: { sessionID: "chat", directory: "/p", subscribe: () => () => {}, getView: () => ({ phase: f.ready ? "live" : "connecting", notices: f.notices, snapshot: {}, mode: {} }) },
+  const active = { session: { get sessionID() { return f.activeSession; }, get directory() { return f.activeDirectory; }, subscribe: () => () => {}, getView: () => ({ phase: f.ready ? "live" : "connecting", notices: f.notices, snapshot: {}, mode: {} }) },
     draft: { subscribe: () => () => {}, getState: () => ({ kind: "synced" }) } };
   return { activePluginUi: { subscribe: () => () => {}, get: () => active } };
 });
 import { McpRecoveryNotice } from "../src/components/McpRecoveryNotice";
 import { isMcpStartupNotice, McpRecoveryBudget } from "../src/capabilities/recovery";
-beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); f.endpoint = crypto.randomUUID(); f.running = true; f.ready = true; f.notices = [];
+beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); f.endpoint = crypto.randomUUID(); f.running = true; f.ready = true; f.activeSession = "chat"; f.activeDirectory = "/p"; f.notices = [];
   f.servers = [{ id: "enki-images", signature: "s", state: "error", tools: [] }]; f.recover.mockReset(); });
 
 it("waits for the current response, retries discovery once and offers an explicit retry after failure", async () => {
@@ -59,5 +59,16 @@ it("retains discovery recovery across a UI reload with only the scoped startup n
   try {
     await act(async () => root.render(createElement(McpRecoveryNotice, { sessionId: "chat", directory: "/p" })));
     expect(f.recover).toHaveBeenCalledOnce(); expect(node.textContent).toContain("Сервис не ответил");
+  } finally { act(() => root.unmount()); }
+});
+
+it.each(["session", "directory"])("does not project another %s's startup notices while switching chats", async changed => {
+  f.servers = []; f.running = false;
+  f.notices = [{ text: "Генератор: Не удалось подключиться к сервису MCP. Действия сервиса при подключении не запускались." }];
+  if (changed === "session") f.activeSession = "old-chat"; else f.activeDirectory = "/old-project";
+  const node = document.createElement("div"), root = createRoot(node);
+  try {
+    await act(async () => root.render(createElement(McpRecoveryNotice, { sessionId: "chat", directory: "/p" })));
+    expect(node.textContent).toBe(""); expect(f.recover).not.toHaveBeenCalled();
   } finally { act(() => root.unmount()); }
 });

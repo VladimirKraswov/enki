@@ -10,7 +10,7 @@ const notReady = () => false;
 const EMPTY_NOTICES: readonly { text: string }[] = [];
 const noNotices = () => EMPTY_NOTICES;
 const SERVICE_NAMES: Record<string, string> = { "enki-images": "Генератор изображений", "web-search": "Поиск в интернете",
-  "web-compass": "Web Compass", "cua-desktop": "Управление компьютером", "enki-schedules": "Таймеры", "rea-remote": "Удалённые инструменты" };
+  "web-compass": "Web Compass", "cua-desktop": "Управление компьютером", "enki-schedules": "Таймеры", "rea-remote": "Удалённое выполнение (REA)" };
 
 /** Discovery recovery only. Never interrupts a turn or repeats a tool action. */
 export function McpRecoveryNotice({ sessionId, directory }: { sessionId: string; directory: string }) {
@@ -21,6 +21,7 @@ export function McpRecoveryNotice({ sessionId, directory }: { sessionId: string;
     servers: store.mcpServerStatuses(sessionId) }), [sessionId]);
   const state = useAppSelector(select);
   const active = useSyncExternalStore(activePluginUi.subscribe, activePluginUi.get);
+  const sameChat = active?.session.sessionID === sessionId && active.session.directory === directory;
   const ready = useSyncExternalStore(active?.session.subscribe ?? noop, active ? () => {
     const view = active.session.getView();
     return view.phase === "live" && !!view.snapshot && !view.snapshot.pendingDraft && !view.snapshot.pendingSubmission
@@ -31,7 +32,7 @@ export function McpRecoveryNotice({ sessionId, directory }: { sessionId: string;
   const canRecover = ready && draftReady && active?.session.sessionID === sessionId && active.session.directory === directory;
   const key = JSON.stringify([state.workspace, state.endpoint, state.instance, sessionId, directory]);
   const failed = state.servers.filter(server => server.state === "error");
-  const hasFailure = failed.length > 0 || (!state.servers.length && notices.some(n => isMcpStartupNotice(n.text)));
+  const hasFailure = failed.length > 0 || (sameChat && !state.servers.length && notices.some(n => isMcpStartupNotice(n.text)));
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const live = useRef(true), inFlight = useRef<string | null>(null), currentKey = useRef(key);
   currentKey.current = key;

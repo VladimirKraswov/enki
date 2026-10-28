@@ -131,8 +131,9 @@ export default function App() {
               s.connection.phase === "connecting" ? (
                 <>
                   <ChatView />
-                  {pluginChat && <McpRecoveryNotice key={`${pluginChat.directory}\n${pluginChat.sessionId}`} {...pluginChat} />}
-                  {pluginChat && <PluginUiPanel key={`${pluginChat.directory}\n${pluginChat.sessionId}`} {...pluginChat} />}
+                  {/* Sibling keys must be distinct: duplicate keys retain orphaned notices when the chat changes. */}
+                  {pluginChat && <McpRecoveryNotice key={`mcp:${JSON.stringify(pluginChat)}`} {...pluginChat} />}
+                  {pluginChat && <PluginUiPanel key={`ui:${JSON.stringify(pluginChat)}`} {...pluginChat} />}
                   <Composer />
                   {pluginChat && <PluginUiBelowComposer />}
                 </>
