@@ -75,13 +75,21 @@ server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
 pathlib.Path(sys.argv[1]).write_text(str(server.server_port))
 server.serve_forever()
 ''')
-            stop = threading.Event(); children = []; deadline = time.monotonic() + 15
+            stop = threading.Event(); children = []; deadline = 0.0
             observations = []
             def spawn():
+                nonlocal deadline
                 port_file.unlink(missing_ok=True)
                 child = subprocess.Popen([sys.executable, str(fixture), str(port_file), str(len(children)+1)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 children.append(child)
-                while not port_file.exists() and time.monotonic() < deadline: time.sleep(.01)
+                # A cold CI interpreter may start slowly. Readiness is separate
+                # from the recovery deadline; an early exit must fail explicitly.
+                startup_deadline = time.monotonic() + 60
+                while not port_file.exists() and child.poll() is None and time.monotonic() < startup_deadline: time.sleep(.01)
+                if not port_file.exists():
+                    supervisor.terminate(child)
+                    self.fail('HTTP fixture did not become ready before its startup deadline')
+                deadline = time.monotonic() + 15
                 return child
             def probe(_):
                 if time.monotonic() >= deadline: stop.set(); return False

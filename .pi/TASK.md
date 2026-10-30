@@ -82,3 +82,9 @@ Fullnativeinstall stillrequired, version21 includesallprojects/browserfixes.
 Nextcanonical221/Hubmain/qualifiedCI21supportedmacos15->ordinaryinstallatidle;
 ownercurrentlyIDLE(laststatus). Currentnative16/UI18/browser36toolshealthy.
 DoNOTclaiminstalled20/21 orcleanupold44pinsuntilnativeinstalled+AXverified.
+
+21canonical firstattempt STOPPED beforepublication (no21receipt) after20MacCI
+failed test-model-tunnel-supervisor fixture startup consumed shared15secdeadline
+(noobservations). Testnow separates60secstartup/readiness from15secrecovery,
+failsearlyonchildexit; exact3failures+recoveredtrue assertions unchanged. Local4pass.
+Recommit21 then restartcanonical221 with exactnewHEAD; no21alreadyPublished.
