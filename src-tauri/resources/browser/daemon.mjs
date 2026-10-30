@@ -42,6 +42,15 @@ try { const mode = JSON.parse(await fs.readFile(path.join(root, 'interaction.jso
 // released: not the selected chat, no open browser, no composition and no
 // request in flight. Its persistent profile stays on disk under its own key,
 // so the same chat later reopens the same isolated profile.
+function newOwnedSession(key, scope = null) {
+  const owned = { key, scope, context: undefined, connections: new Map(), frameFlight: undefined, composition: undefined, serial: createToolQueue(), busy: 0, lastUsed: 0 };
+  owned.view = createView(() => getContext(owned));
+  owned.view.setMode(defaultMode);
+  return owned;
+}
+// Schema discovery owns no chat, page or user workspace. Its one backend is
+// outside the finite set of browser sessions and cannot evict a user's chat.
+const inventorySession = newOwnedSession('inventory');
 function ownedSession(key, scope = null) {
   if (!sessions.has(key)) {
     if (sessions.size >= 32) {
@@ -50,10 +59,7 @@ function ownedSession(key, scope = null) {
       sessions.delete(idle.key);
       for (const { client, official } of idle.connections.values()) { void client.close().catch(() => {}); void official.close().catch(() => {}); }
     }
-    const owned = { key, scope, context: undefined, connections: new Map(), frameFlight: undefined, composition: undefined, serial: createToolQueue(), busy: 0, lastUsed: 0 };
-    owned.view = createView(() => getContext(owned));
-    owned.view.setMode(defaultMode);
-    sessions.set(key, owned);
+    sessions.set(key, newOwnedSession(key, scope));
   }
   const owned = sessions.get(key);
   owned.lastUsed = Date.now();
@@ -273,7 +279,7 @@ const server = http.createServer(async (req, res) => {
       const directory = await fs.realpath(request.workspace);
       key = sessionKey(directory, request.session); scope = { directory, ...request.session };
     } else key = 'legacy';
-    const owned = ownedSession(key, scope);
+    const owned = request.method === 'tools/list' ? inventorySession : ownedSession(key, scope);
     owned.busy++;
     try { return await sessionContext.run(owned, async () => {
     // Signal interruption immediately, even if the manual request waits in the queue.
@@ -318,7 +324,11 @@ const server = http.createServer(async (req, res) => {
         else await page.goForward({ timeout: 60000 });
         return { navigated: true };
       }
-      const client = await connection(request.workspace, request.access);
+      // Discovery has no workspace authority and must not consume one backend
+      // per chat/worktree in the shared legacy discovery scope. Actual calls
+      // below still capture the exact caller's workspace and access policy.
+      const client = await connection(request.method === 'tools/list' ? workspace : request.workspace,
+        request.method === 'tools/list' ? 'project' : request.access);
       if (request.method === 'tools/list') {
         const inventory = await client.listTools();
         const base = [...inventory.tools, { name: 'browser_keyboard_type', description: 'Type or paste text with the keyboard into the currently focused field. Click the field with the mouse first. No DOM selectors or implicit focus changes.',
@@ -422,7 +432,7 @@ async function close() {
     if (ready.instanceId === instanceId) await fs.unlink(readyFile);
   } catch {}
   server.close();
-  for (const owned of sessions.values()) {
+  for (const owned of [inventorySession, ...sessions.values()]) {
     for (const { client, official } of owned.connections.values()) {
       await client.close().catch(() => {}); await official.close().catch(() => {});
     }

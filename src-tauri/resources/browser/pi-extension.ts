@@ -46,8 +46,8 @@ async function loadBrowser(command: string, cwd: string): Promise<BrowserConnect
   };
 }
 
-const UNAVAILABLE = "Браузер Desktop не подключён. Откройте Настройки → Браузер, запустите его и переоткройте сессию Pi.";
-const CLOSED = "Сеанс браузера Pi закрыт или заменён; действие не выполнено.";
+const UNAVAILABLE = "Браузер Enki не подключён. Проверьте состояние в Настройки → Браузер. Действие не повторялось.";
+const CLOSED = "Сеанс браузера этого чата закрыт или заменён; действие не выполнено.";
 const GUIDELINES = [
   "Prefer browser_action for action/wait/compact observation together; browser_sequence only for up to six already-known steps. Inspect completed count after interruption; never replay completed or uncertain actions. Use browser_observe for a compact snapshot or fresh CSS viewport screenshot. Full official tools remain available. steps must be an array, step/arguments must be objects; maxChars is an integer256–20000. On arguments recovery correct the shape; no input was sent.",
   "Respect the current browser mode. In fast mode prefer semantic tools; in human mode use fresh viewport screenshots, mouse XY and keyboard typing. Recovery includes a fresh screenshot; no failed action was replayed.",
@@ -104,6 +104,8 @@ export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: B
   let closed = true;
   let connection: BrowserConnection | undefined;
   let initialization: AbortController | undefined;
+  let discovery: Promise<void> | undefined;
+  let recovered = false;
   const closing = new WeakMap<BrowserConnection, Promise<void>>();
   const close = (owned?: BrowserConnection): Promise<void> => {
     if (!owned) return Promise.resolve();
@@ -194,8 +196,20 @@ export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: B
     const previous = connection;
     connection = undefined;
     closed = false;
+    recovered = false;
     // Do not hold RPC/model metadata hostage while a browser starts or fails.
-    void start(ctx, epoch, initialization.signal, previous);
+    discovery = start(ctx, epoch, initialization.signal, previous);
+  });
+  // Metadata startup stays detached, but a real turn waits for its tool inventory.
+  // Recover failed discovery once; never retry a browser action or model prompt.
+  pi.on("before_agent_start", async (_event, ctx) => {
+    const epoch = generation;
+    await discovery;
+    if (epoch === generation && !closed && !connection && !recovered && initialization) {
+      recovered = true;
+      discovery = start(ctx, generation, initialization.signal);
+      await discovery;
+    }
   });
   pi.on("session_shutdown", async () => {
     closed = true;

@@ -10,7 +10,7 @@ import { acknowledged, blobToDataUrl, installationId, pruneQueues, queueCutoverI
 import { errText } from "./errors";
 import { SubmissionLifecycle, type Submission } from "./submission";
 import { projectErrorText } from "../api/projectError";
-import type { MessagePart } from '../api/types';
+import type { MessagePart, Project } from '../api/types';
 import { initialState } from './initial';
 import type { AppState, UiState } from './types';
 export type { AppState, UiState, ConnectionState, ConnectionPhase } from './types';
@@ -436,8 +436,22 @@ class Store {
       && previous.appliedVariant && choice.variant === previous.appliedVariant) this.setModelChoice(choice.providerID, choice.modelID, previous.previousVariant, true);
     this.persistPrefs();
   }
-  async newBrowserTask(): Promise<void> {
+  private browserTaskFlight: Promise<void> | null = null;
+  newBrowserTask(): Promise<void> {
+    if (this.browserTaskFlight) return this.browserTaskFlight;
+    const flight = this.prepareNewBrowserTask().finally(() => {
+      if (this.browserTaskFlight === flight) this.browserTaskFlight = null;
+    });
+    this.browserTaskFlight = flight;
+    return flight;
+  }
+  private async prepareNewBrowserTask(): Promise<void> {
     if (this.state.ui.sending || this.state.ui.workspacePreparing || !browserEnabled(this.state.prefs) || !isLocalComputer(this.state.prefs.endpoint, !!this.currentHost())) return;
+    const selection = this.directoryGeneration, selected = this.state.activeSessionId;
+    // Failed setup must not leave an empty chat behind. Concurrent clicks share
+    // this preparation instead of creating several browser tasks.
+    await this.configureBrowser(browserSetupSnapshot().phase === 'error');
+    if (selection !== this.directoryGeneration || selected !== this.state.activeSessionId || browserSetupSnapshot().phase === 'error') return;
     const expected = this.directoryGeneration + 1;
     await this.newSession();
     if (this.directoryGeneration !== expected || this.state.directory !== null) return;
@@ -446,7 +460,6 @@ class Store {
     if (created && this.state.activeSessionId === created.id) {
       const browserGeneration = this.directoryGeneration;
       this.setBrowserTask(true); this.setUi({ settingsOpen: false });
-      await this.configureBrowser(browserSetupSnapshot().phase === 'error');
       if (this.state.activeSessionId !== created.id || browserSetupSnapshot().phase === 'error' || !browserEnabled(this.state.prefs)) return;
       try {
         await openSessionBrowser({directory:this.state.directory,engine:this.engineIdFor(),sessionId:created.id},
@@ -1333,11 +1346,13 @@ class Store {
         this.rememberActivitySession(info);
         this.updateSidebarSession(info);
         if (info.time.archived) this.clearUnread(info.id);
+        if (event.type === "session.created") this.scheduleProjectRefresh();
       }
     }
     if (event.type === "session.deleted") {
       const id = event.properties?.sessionID ?? (event.properties?.info as Session | undefined)?.id;
       if (typeof id === "string") this.updateSidebarSession(null, id);
+      this.scheduleProjectRefresh();
     }
   }
 
@@ -1389,14 +1404,62 @@ class Store {
     } catch (e) { if ((this.state.prefs.workspaceKey ?? this.state.prefs.endpoint) === key) this.patchUi({toast:errText(e)}); }
   }
 
+  private projectRefreshSequence = 0;
+  private projectPinCleanupFlight: Promise<void> | null = null;
+  private reconcileOldProjectPins(backend: AgentBackend, generation: number, projects: Project[], sequence: number): void {
+    const key = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
+    if (this.state.prefs.projectPinCleanup?.[key] || this.projectPinCleanupFlight) return;
+    const live = () => backend === this.backend && generation === this.connectionGeneration && sequence === this.projectRefreshSequence;
+    const known = new Set(projects.map(p => p.worktree));
+    const candidates = (this.state.prefs.pinnedProjects ?? []).filter(dir => !known.has(dir)
+      && dir !== this.state.directory && !this.isWorkshopDirectory(dir) && !this.isProjectlessDirectory(dir)
+      && /^[a-f0-9]{8}-[a-f0-9-]{27}$/i.test(this.state.prefs.lastSessionByDir[dir] ?? ""));
+    const pointers = new Map(candidates.map(dir => [dir, this.state.prefs.lastSessionByDir[dir]]));
+    const work = (async () => {
+      const empty = new Set<string>(); let failed = false, next = 0;
+      // Exact, authoritative reads; never erase folders, session records or histories.
+      await Promise.all(Array.from({ length: Math.min(2, candidates.length) }, async () => {
+        while (next < candidates.length && live()) {
+          const dir = candidates[next++];
+          try { if (!(await backend.listSessions(dir, { limit: 1 })).length) empty.add(dir); }
+          catch { failed = true; }
+        }
+      }));
+      if (!live() || failed) return;
+      const retire = new Set([...empty].filter(dir => pointers.get(dir) === this.state.prefs.lastSessionByDir[dir]
+        && dir !== this.state.directory && !this.isWorkshopDirectory(dir)));
+      this.mutate(s => ({ prefs: { ...s.prefs,
+        projectPinCleanup: { ...s.prefs.projectPinCleanup, [key]: true },
+        pinnedProjects: s.prefs.pinnedProjects?.filter(dir => !retire.has(dir)),
+        hiddenProjects: [...new Set([...(s.prefs.hiddenProjects ?? []), ...retire])],
+      } }));
+      this.persistPrefs();
+    })();
+    this.projectPinCleanupFlight = work;
+    void work.finally(() => { if (this.projectPinCleanupFlight === work) this.projectPinCleanupFlight = null; });
+  }
+  private projectRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private scheduleProjectRefresh(): void {
+    // Invalidate older HTTP snapshots immediately, coalesce a burst of deletes.
+    this.projectRefreshSequence++;
+    if (this.projectRefreshTimer) clearTimeout(this.projectRefreshTimer);
+    const generation = this.connectionGeneration;
+    this.projectRefreshTimer = setTimeout(() => {
+      this.projectRefreshTimer = null;
+      if (generation === this.connectionGeneration) void this.refreshProjects();
+    }, 75);
+  }
   async refreshProjects(): Promise<void> {
     if (this.state.connection.phase !== "connected") return;
     try {
       const backend = this.backend,
         gen = this.connectionGeneration;
+      const sequence = ++this.projectRefreshSequence;
       const projects = await backend.projects();
-      if (backend === this.backend && gen === this.connectionGeneration)
+      if (backend === this.backend && gen === this.connectionGeneration && sequence === this.projectRefreshSequence) {
         this.mutate({ projects });
+        this.reconcileOldProjectPins(backend, gen, projects, sequence);
+      }
     } catch (e) {
       this.patchUi({ toast: `Не удалось загрузить проекты: ${errText(e)}` });
     }

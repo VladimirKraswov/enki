@@ -124,6 +124,8 @@ export interface Prefs {
   helperEndpoint?: string;
   endpointState?: Record<string, Partial<Prefs>>;
   pinnedProjects?: string[];
+  /** Once per workspace: retire empty native-task pins left by the old control API. */
+  projectPinCleanup?: Record<string, boolean>;
   hiddenProjects?: string[];
   expandedProjects?: Record<string, boolean>;
   endpoint: string;

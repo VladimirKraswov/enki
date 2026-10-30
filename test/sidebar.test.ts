@@ -3,7 +3,7 @@
 // supervisor/SSH handshake (connectRuntime) is replaced by fixture backends.
 // Retired: "shows Pi chats alongside OpenCode chats" — one runtime catalogue
 // lists native chats and imported archives together.
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeFixture } from "./helpers/runtime-fixture";
 const hosts = vi.hoisted(() => ({ backends: {} as Record<string, unknown> }));
 vi.mock("../src/agent/registry", async (original) => ({ ...(await original<typeof import("../src/agent/registry")>()),
@@ -32,6 +32,7 @@ beforeEach(async () => {
   expect(await store.connectLocal()).toBe(true);
   await store.setDirectory("/work/a"); await store.selectSession("/work/a");
 });
+afterEach(() => { if (store?.projectRefreshTimer) clearTimeout(store.projectRefreshTimer); });
 const listed = (directory: string) => store.state.projectSessionLists[directory]?.sessions.map((s: { id: string }) => s.id);
 
 it("expands multiple projects without changing the current conversation, draft, or stream", async () => {
@@ -145,4 +146,40 @@ it("appends handoff drafts only to the recipient host/session, preserving existi
   expect(store.state.prefs.endpointState["ssh:other:22"].drafts.target).toBe("remote target\n\nhandoff");
   store.saveHandoffDraft(store.state.prefs.workspaceKey, session("target"), "local handoff");
   expect(store.state.prefs.drafts.target).toBe("local target\n\nlocal handoff");
+});
+
+it("refreshes project directories after background deletes, coalescing a burst without recreating chats", async () => {
+  let projects=[{id:"a",worktree:"/work/a",sandboxes:[]},{id:"temp",worktree:"/work/temporary-task",sandboxes:[]}];
+  local.on("GET","/projects",()=>projects); await store.refreshProjects();
+  expect(store.projectDirectories()).toContain("/work/temporary-task");
+  const before=local.made("GET","/projects").length;
+  projects=projects.slice(0,1);
+  for(let i=0;i<5;i++) local.emitGlobal({type:"session.deleted",properties:{sessionID:`temporary-${i}`,info:session(`temporary-${i}`,"/work/temporary-task")}},"/work/temporary-task");
+  await vi.waitFor(()=>expect(store.projectDirectories()).not.toContain("/work/temporary-task"));
+  expect(local.made("GET","/projects").length-before).toBe(1);
+  expect(store.state.activeSessionId).toBe("/work/a");
+  expect(local.calls.filter(c=>c.method==="POST"&&c.path==="/sessions")).toEqual([]);
+});
+
+it("a project snapshot begun before a delete cannot resurrect the deleted directory", async () => {
+  const pending=deferred<unknown[]>(); local.on("GET","/projects",()=>pending.promise);
+  const read=store.refreshProjects();
+  local.emitGlobal({type:"session.deleted",properties:{sessionID:"old",info:session("old","/work/temporary-task")}},"/work/temporary-task");
+  local.on("GET","/projects",()=>[{id:"a",worktree:"/work/a",sandboxes:[]}]);
+  await vi.waitFor(()=>expect(local.made("GET","/projects").length).toBeGreaterThan(1));
+  pending.resolve([{id:"stale",worktree:"/work/temporary-task",sandboxes:[]}]); await read;
+  expect(store.projectDirectories()).not.toContain("/work/temporary-task");
+});
+
+it("retires old automatically pinned empty native worktrees once, preserving explicit empty projects and histories", async () => {
+  const ghost="/work/deleted-worktree", explicit="/work/explicit-empty", legacy="/work/legacy-empty";
+  store.state.prefs.projectPinCleanup={};store.state.prefs.pinnedProjects=[ghost,explicit,legacy,"/work/a"];
+  store.state.prefs.lastSessionByDir[ghost]="00000000-0000-4000-8000-000000000001";
+  store.state.prefs.lastSessionByDir[legacy]="ses_original";
+  lists[ghost]=[];local.on("GET","/projects",()=>[{id:"a",worktree:"/work/a",sandboxes:[]}]);
+  await store.refreshProjects();await vi.waitFor(()=>expect(store.isProjectHidden(ghost)).toBe(true));
+  expect(store.projectDirectories()).not.toContain(ghost);expect(store.projectDirectories()).toContain(explicit);expect(store.projectDirectories()).toContain(legacy);
+  expect(store.state.prefs.lastSessionByDir[ghost]).toBe("00000000-0000-4000-8000-000000000001");
+  expect(local.calls.filter(c=>c.method==="DELETE")).toEqual([]);
+  store.restoreProject(ghost); await store.refreshProjects();expect(store.projectDirectories()).toContain(ghost);
 });

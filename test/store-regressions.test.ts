@@ -470,3 +470,20 @@ it("R5: accepting a prompt preserves a new draft typed while awaiting the acknow
   expect(commands()[0]).toMatchObject({ kind: "prompt", sessionID: "ses_a", directory: "/test/A", id: expect.stringMatching(/^msg_/),
     payload: { model: { providerID: "local-qwen-next", modelID: "qwen38-flash-next", variant: "medium" }, parts: expect.arrayContaining([{ type: "text", text: "first task" }]) } });
 });
+
+it("concurrent browser-task clicks share setup and create just one chat after readiness", async () => {
+  const integration=await import("../src/browser/integration"); let ready!:()=>void;
+  vi.spyOn(store,"configureBrowser").mockReturnValue(new Promise<void>(resolve=>{ready=resolve;}));
+  const workspace=vi.spyOn(store,"ensureChatWorkspace").mockImplementation(async()=>{await store.setDirectory("/test/browser-owned");return true;});
+  const create=vi.spyOn(store,"createSessionNow").mockImplementation(async()=>{store.state.activeSessionId="one-browser";return session("one-browser","/test/browser-owned");});
+  vi.spyOn(integration,"openSessionBrowser").mockResolvedValue({browserOpen:true} as never);
+  const first=store.newBrowserTask(), second=store.newBrowserTask(); expect(second).toBe(first);
+  expect(create).not.toHaveBeenCalled();expect(workspace).not.toHaveBeenCalled();
+  ready();await Promise.all([first,second]);expect(create).toHaveBeenCalledOnce();expect(workspace).toHaveBeenCalledOnce();
+});
+it("leaving the chat during browser preparation does not create a late empty session", async () => {
+  let ready!:()=>void;vi.spyOn(store,"configureBrowser").mockReturnValue(new Promise<void>(resolve=>{ready=resolve;}));
+  const create=vi.spyOn(store,"createSessionNow"); const first=store.newBrowserTask();
+  await store.setDirectory("/test/B");ready();await first;
+  expect(create).not.toHaveBeenCalled();expect(store.state.directory).toBe("/test/B");
+});

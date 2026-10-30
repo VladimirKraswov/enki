@@ -44,7 +44,7 @@ it("factory discovery registers lifecycle callbacks without starting a transport
   expect(fixture.load).not.toHaveBeenCalled();
   expect(fixture.connection.connect).not.toHaveBeenCalled();
   expect(fixture.pi.registerTool).not.toHaveBeenCalled();
-  expect(Object.keys(fixture.events)).toEqual(["session_start", "session_shutdown"]);
+  expect(Object.keys(fixture.events)).toEqual(["session_start", "before_agent_start", "session_shutdown"]);
 });
 
 it("uses exact official schemas, safe names and existing approval policy", async () => {
@@ -210,4 +210,20 @@ it('full access comes only from the session access mode, evaluated per call', as
   await tool.execute('full',{url:'https://example.com'});
   expect(f.connection.callTool).toHaveBeenLastCalledWith({name:official.name,arguments:{url:'https://example.com'},_meta:{arvelaAccess:'full',arvelaSession:{engine:'pi',sessionID:'pi_test'}}},expect.anything());
   await f.events.session_shutdown();
+});
+
+it("a real turn waits for initial discovery and retries its failure only once", async () => {
+  const f=setup(); f.load.mockRejectedValueOnce(Error("transient discovery"));
+  f.events.session_start({},f.ctx);
+  await vi.waitFor(()=>expect(f.ctx.ui.notify).toHaveBeenCalledOnce());
+  await f.events.before_agent_start({},f.ctx);
+  expect(f.load).toHaveBeenCalledTimes(2); expect(f.tools.has("desktop_browser_browser_navigate")).toBe(true);
+  await f.events.before_agent_start({},f.ctx); expect(f.load).toHaveBeenCalledTimes(2);
+  expect(f.connection.callTool).not.toHaveBeenCalled(); await f.events.session_shutdown();
+});
+it("repeated failed discovery does not create an unbounded retry or expose private errors", async () => {
+  const f=setup(); f.load.mockRejectedValue(Error("private password=fixture"));
+  f.events.session_start({},f.ctx); await f.events.before_agent_start({},f.ctx); await f.events.before_agent_start({},f.ctx);
+  expect(f.load).toHaveBeenCalledTimes(2); expect(f.tools.size).toBe(0);
+  expect(JSON.stringify(f.ctx.ui.notify.mock.calls)).not.toContain("password"); await f.events.session_shutdown();
 });

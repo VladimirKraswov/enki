@@ -37,3 +37,10 @@ it('bounds polling when the cached idle status is behind the authoritative busy 
  vi.useFakeTimers();const backend=fixture();backend.client.snapshot.mockResolvedValue({statuses:{[id]:{type:'busy'}},permissions:[],questions:[]});managed();
  try {const task=agentControlForTest.execute('wait',{session_id:id,timeout_seconds:2});await vi.advanceTimersByTimeAsync(2100);expect(await task).toMatchObject({outcome:'timeout'});expect(backend.messages.mock.calls.length).toBeLessThanOrEqual(3);expect(backend.prompt).not.toHaveBeenCalled();}finally{vi.useRealTimers();}
 });
+it('selecting an automation worktree never pins it as a permanent project',async()=>{
+ const before=store.state; const pin=vi.spyOn(store,'addProjectDirectory');
+ vi.spyOn(store,'setDirectory').mockImplementation(async dir=>{store.state={...store.state,directory:dir};});
+ vi.spyOn(store,'selectSession').mockResolvedValue(undefined);
+ try {await agentControlForTest.execute('select',{directory:'/fixture/new-task-worktree'});expect(pin).not.toHaveBeenCalled();expect(store.state.prefs.pinnedProjects).toEqual(before.prefs.pinnedProjects);}
+ finally {store.state=before;}
+});

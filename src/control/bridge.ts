@@ -150,9 +150,9 @@ function status() {
 
 async function selectDirectory(directory: string): Promise<void> {
   if (store.state.directory === directory) return;
-  const known = store.state.projects.some((project) => project.worktree === directory);
-  if (known) await store.setDirectory(directory);
-  else await store.addProjectDirectory(directory);
+  // Selecting a task's worktree is not a request to pin a permanent project.
+  // Only the user's folder picker/add-project action owns that preference.
+  await store.setDirectory(directory);
   if (store.state.directory !== directory)
     throw new Error(`Enki did not select ${directory}`);
 }
