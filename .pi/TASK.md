@@ -1,4 +1,4 @@
-# Enki 2.0.19 — проекты и браузер
+# Enki 2.0.20 — проекты, браузер и доступный runner
 
 W `.local/pi-sdk-migration-20261024/review`; R `/Volumes/Extend/work/Enki`.
 H42 `../stabilize-v42`. Prior18 UIinstalled/Hub/main7dbc926, native16 retained.
@@ -51,3 +51,17 @@ Extra evidence: repeated titles in live imported history allhave different origi
 legacyId (samearchive); NOTduplicateimports, donotdelete/dedupbytitle.
 Browser service restoredviaUI Stop(enabledfalse)->enabletrue. Actual36tools398ms.
 NewinventorySessionoutside32chatbudget; nochat/pageallocationonmetadata.
+
+## Delivery issue / current20
+
+19canonicalPASS1204UI/411runtime/280Rust+12runner; Hub/main1a76cc4 verified.
+CI41127061535 Macjob124308701908 CANCELLED BEFORErunner(no steps).
+Officialcheckannotation: scheduledmacOS14brownout Oct30 14:00UTC-Oct31 00:00UTC,
+retirementNov2. https://github.com/actions/runner-images/issues/13518.
+Officialrunner-imagesREADME confirms macos-14 and macos-15 bothARM64.
+ChangedONLYworkflow runner to macos-15 +version20/docs. NativeFP20equals19;
+source19mustnotbeoverwritten(signed/immutableversion), sofullrelease20required.
+Next: canonical220/verifybothsigned/mainpush/qualifiedCI20, thenordinarynative20
+installatidle (ownerwasIDLE in status-published.private.txt; recheckbeforeinstall).
+Currentnative16/UI18unchanged, browserrestored36tools. Noownprompts/stops.
+Old44pinnedemptyprojects cleanedonlywhen20nativeinstalled. Cleanupisreversible.
