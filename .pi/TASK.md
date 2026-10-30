@@ -1,4 +1,4 @@
-# Enki 2.0.20 — проекты, браузер и доступный runner
+# Enki 2.0.21 — проекты, браузер и доступный runner
 
 W `.local/pi-sdk-migration-20261024/review`; R `/Volumes/Extend/work/Enki`.
 H42 `../stabilize-v42`. Prior18 UIinstalled/Hub/main7dbc926, native16 retained.
@@ -65,3 +65,20 @@ Next: canonical220/verifybothsigned/mainpush/qualifiedCI20, thenordinarynative20
 installatidle (ownerwasIDLE in status-published.private.txt; recheckbeforeinstall).
 Currentnative16/UI18unchanged, browserrestored36tools. Noownprompts/stops.
 Old44pinnedemptyprojects cleanedonlywhen20nativeinstalled. Cleanupisreversible.
+
+## Current21: realChromium cleanup defect discovered before native installation
+
+20canonicalPASS1204UI/411runtime/280Rust+12runner, Hub/main710bb2c verified.
+20qualifieddispatch NOTstarted; onlyautomaticpushCI mayrun. 19CIcancelledours.
+Manualreal browser preferences.mjs (isolated profiles/localhost) actualactions
+ALLpassed, but unchangedassert temporaryprofiledeletedbeforedaemonexit FAILED
+(real-browser-action.log). Oldcleanup swallowedfsrm errors/reliedoneventtiming.
+Newdaemon tracks ONLYitscreatedtemporaryprofiles inSet; boundedfsrm retries5x100,
+finalexplicitcleanupbeforeexit; cleanupfailureexit1insteadfakeclean0. Noowners'
+oldprofiles/tokens/dirs scannedordeleted. Realtestsameassertions nowPASS
+(real-browser-action-cleanup.log): locale/timezone/privacy/serviceworkers/pacing,
+restart/privateauthnotreused/persistentstoragepreserved. Noownerbrowseractions.
+Fullnativeinstall stillrequired, version21 includesallprojects/browserfixes.
+Nextcanonical221/Hubmain/qualifiedCI21supportedmacos15->ordinaryinstallatidle;
+ownercurrentlyIDLE(laststatus). Currentnative16/UI18/browser36toolshealthy.
+DoNOTclaiminstalled20/21 orcleanupold44pinsuntilnativeinstalled+AXverified.

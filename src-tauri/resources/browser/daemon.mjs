@@ -30,6 +30,13 @@ const workspace = path.join(root, 'workspace');
 await fs.mkdir(workspace, { recursive: true, mode: 0o700 });
 await fs.mkdir(path.join(root, 'profile'), { recursive: true, mode: 0o700 });
 const sessions = new Map();
+// Only profiles created by THIS daemon may be removed on shutdown. Browser
+// close events can race transport shutdown; ownership must outlive the event.
+const temporaryProfiles = new Set();
+async function removeTemporaryProfile(profile) {
+  await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  temporaryProfiles.delete(profile);
+}
 const sessionContext = new AsyncLocalStorage();
 let selectedKey = 'legacy'; // Older CLI clients are isolated once Desktop selects a chat.
 let selectedScope = null;
@@ -80,6 +87,7 @@ async function getContext(owned = currentSession()) {
     const engineProfile = settings.engine === 'chrome' ? path.join(persistentProfile, 'chrome-profile') : persistentProfile;
     const profile = settings.storage === 'temporary'
       ? await fs.mkdtemp(path.join(root, 'temporary-profile-')) : engineProfile;
+    if (settings.storage === 'temporary') temporaryProfiles.add(profile);
     await fs.mkdir(profile, { recursive: true, mode: 0o700 });
     // The reduced-signal hidden surface runs the full Chromium through the
     // "chromium" channel; an explicit headless-shell path would defeat it.
@@ -107,13 +115,13 @@ async function getContext(owned = currentSession()) {
       }
     } catch (error) {
       await opened?.close().catch(() => {});
-      if (settings.storage === 'temporary') await fs.rm(profile, {recursive:true, force:true});
+      if (settings.storage === 'temporary') await removeTemporaryProfile(profile);
       throw error;
     }
     owned.context = opened; owned.settings = settings;
     opened.on('close', () => {
       if (owned.context === opened) { owned.context = undefined; owned.settings = undefined; }
-      if (settings.storage === 'temporary') owned.cleanup = fs.rm(profile, {recursive:true, force:true}).catch(() => {});
+      if (settings.storage === 'temporary') owned.cleanup = removeTemporaryProfile(profile).catch(() => {});
     });
   }
   return owned.context;
@@ -439,7 +447,12 @@ async function close() {
     await owned.context?.close().catch(() => {});
     await owned.cleanup;
   }
-  process.exit(0);
+  let cleanupFailed = false;
+  for (const profile of [...temporaryProfiles]) {
+    try { await removeTemporaryProfile(profile); } catch { cleanupFailed = true; }
+  }
+  if (cleanupFailed) process.stderr.write('Enki: temporary browser profile cleanup failed\n');
+  process.exit(cleanupFailed ? 1 : 0);
 }
 process.on('SIGTERM', () => void close());
 process.on('SIGINT', () => void close());
