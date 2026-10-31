@@ -42,6 +42,18 @@ function fixture(){
  return{head,envelopes,download,expected:{version:'1.2.3',nativeFingerprint:'fp'}};
 }
 test('publication succeeds only after head and both client-download packets match',async()=>{const f=fixture();const receipt=await verifyPublication(f.head,f.expected,f.envelopes,f.download);assert.equal(receipt.version,'1.2.3');assert.equal(Object.keys(receipt.artifacts).length,2);});
+test('the Hub-published commit is the contract: a newer local HEAD cannot claim it',async()=>{
+ // Same release bytes published from another commit: dispatching or receipting
+ // the local HEAD would make CI refuse (published_commit must equal main).
+ const f=fixture();f.head.publication={commit:'b'.repeat(40),checks:'operator-attested'};f.expected.commit='a'.repeat(40);
+ await assert.rejects(()=>verifyPublication(f.head,f.expected,f.envelopes,f.download),/published Enki 1\.2\.3 from commit b{40}/);
+ // Exact commit equality keeps the normal and idempotent paths working.
+ const g=fixture();g.head.publication={commit:'a'.repeat(40)};g.expected.commit='a'.repeat(40);
+ const receipt=await verifyPublication(g.head,g.expected,g.envelopes,g.download);assert.equal(receipt.publishedCommit,'a'.repeat(40));
+ // A Hub that reports no publication commit still verifies by bytes.
+ const h=fixture();h.expected.commit='a'.repeat(40);
+ assert.equal((await verifyPublication(h.head,h.expected,h.envelopes,h.download)).publishedCommit,undefined);
+});
 test('unavailable/other/stale heads, missing/mismatched descriptor or failed download cannot mark a release published',async()=>{
  for(const change of [h=>h.available=false,h=>h.version='1.2.2',h=>h.nativeFingerprint='other',h=>delete h.revision,h=>delete h.artifacts.source,h=>h.artifacts.hot.bytes++,h=>h.artifacts.source.digest='other']){
   const f=fixture();change(f.head);await assert.rejects(()=>verifyPublication(f.head,f.expected,f.envelopes,f.download));

@@ -131,6 +131,13 @@ pub fn run() {
             if let Err(error) = tray::setup(app.handle()) {
                 eprintln!("System tray unavailable: {error}");
             }
+            // An update restart may resume the workshop chat without the panel
+            // being opened again; refresh its runtime contract once at startup.
+            std::thread::spawn(|| {
+                if let Err(error) = workshop::refresh_existing() {
+                    eprintln!("Workshop runtime refresh failed: {error}");
+                }
+            });
             // The agent runtime is started here, by the native process, so
             // durable queues and schedules resume even before (and
             // independently of) the WebView. A failure is surfaced through

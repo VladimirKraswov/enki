@@ -38,6 +38,24 @@ test('device publication recovers lost acknowledgment once, verifies both packet
 });
 
 import {snapshotGit,validateVersions} from './packet.mjs';
+test('a tracked checkpoint made after publication fails loudly and never rewrites the immutable receipt',async()=>{
+ const f=repository();let head={available:false,revision:null},posts=0;const packets={};
+ const sha=()=>execFileSync('git',['rev-parse','HEAD'],{cwd:f.root,encoding:'utf8'}).trim();
+ const transport={head:async()=>head,publish:async body=>{posts++;const p=JSON.parse(Buffer.from(body.source,'base64'));
+  head={available:true,version:p.version,nativeFingerprint:p.nativeFingerprint,revision:'r1',artifacts:{},publication:{device:'fixture',commit:sha(),platform:'darwin',checks:'device-attested'}};
+  for(const kind of ['source','hot']){const digest=hash(Buffer.from(body[kind],'base64'));packets[digest]=f.sign(body[kind]);head.artifacts[kind]={digest};}
+ },artifact:async digest=>packets[digest]};
+ try{
+  const first=await publishDevice(f.root,'stable',transport);assert.equal(posts,1);assert.equal(first.publishedCommit,sha());
+  const receiptFile=path.join(f.root,'.local/releases/1.2.3-stable.json');const before=fs.readFileSync(receiptFile,'utf8');
+  // Same release bytes, but HEAD now carries a later tracked checkpoint.
+  fs.mkdirSync(path.join(f.root,'.pi'),{recursive:true});fs.writeFileSync(path.join(f.root,'.pi/TASK.md'),'checkpoint\n');
+  execFileSync('git',['add','.'],{cwd:f.root});execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','checkpoint'],{cwd:f.root});
+  await assert.rejects(()=>publishDevice(f.root,'stable',transport),/already published from commit [0-9a-f]{40}/);
+  assert.equal(posts,1);assert.equal(fs.readFileSync(receiptFile,'utf8'),before);
+  assert.equal(JSON.parse(before).commit,JSON.parse(before).publishedCommit);
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
+});
 test('Windows CRLF checkouts preserve manifest validation and canonical committed source bytes',()=>{
  const f=repository();try{
   execFileSync('git',['config','core.autocrlf','true'],{cwd:f.root});

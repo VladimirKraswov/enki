@@ -57,7 +57,10 @@ do not label delivery DONE. Publication offers an update; per the owner's standi
 instruction (31 Oct 2026) the workshop then accepts it automatically through the
 `desktop_updates` control tool (status → prepare → poll → apply as the final
 action) — no manual clicks. Applying waits for authoritative idle and the normal
-lifecycle; an explicit owner request not to apply takes precedence.
+lifecycle; an explicit owner request not to apply takes precedence. Final tracked
+docs/checkpoints must be committed *before* `release:local`; the Hub records
+`publication.commit`, receipts must match it, and `release:packages` dispatches
+that same HEAD (pushed to main) before any newer tracked commit.
 
 ## Язык общения
 

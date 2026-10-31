@@ -7,7 +7,7 @@ import { entriesToMessages } from "../src/sdk/history.ts";
 import { StreamTranslator } from "../src/sdk/translate.ts";
 import { isSteeringText, languageReminder, scheduleReminder, scheduleWakeReminder, steeringReminder, steeringText, visiblePromptText, wakeText } from "../src/policy/prompt.ts";
 import { legacyToolWorkflowReminder, legacyV2ToolWorkflowReminder, toolWorkflowReminder } from "../src/policy/toolWorkflow.ts";
-import { WORKSHOP_RELEASE_CONTEXT, LEGACY_WORKSHOP_RELEASE_CONTEXT, workshopReminder, workshopVisibleText } from "../src/policy/workshop.ts";
+import { WORKSHOP_RELEASE_CONTEXT, LEGACY_WORKSHOP_RELEASE_CONTEXT, LEGACY2_WORKSHOP_RELEASE_CONTEXT, workshopReminder, workshopVisibleText } from "../src/policy/workshop.ts";
 
 const user = (id: string, text: string) => ({ id, parentId: null, type: "message", timestamp: "2026-10-25T00:00:00Z", message: { role: "user", content: [{ type: "text", text }] } });
 const durable = (sid: string, text: string) => entriesToMessages(sid, [user("u", text)] as never)[0].parts[0];
@@ -74,12 +74,20 @@ describe("Мастерская release policy", () => {
     expect(WORKSHOP_RELEASE_CONTEXT).toContain("desktop_updates");
     expect(WORKSHOP_RELEASE_CONTEXT).toContain("подготовка сорвалась");
     expect(WORKSHOP_RELEASE_CONTEXT).toContain("без ручных кликов");
+    expect(WORKSHOP_RELEASE_CONTEXT).toContain("publication.commit");
     // The pre-automatic wording is retained only for stripping persisted history.
     expect(LEGACY_WORKSHOP_RELEASE_CONTEXT).toContain("Публикация предлагает обновиться; не применяй его");
     expect(LEGACY_WORKSHOP_RELEASE_CONTEXT).not.toContain("desktop_updates");
     const legacy = LEGACY_WORKSHOP_RELEASE_CONTEXT.replace("<arvela-workshop-release-v1>", `<arvela-workshop-release-v1 session="workshop">`);
     expect(workshopVisibleText(`текст\n\n${legacy}`, "workshop")).toBe("текст");
     expect(workshopVisibleText(`quoted:${legacy}`, "workshop")).toBe(`quoted:${legacy}`);
+    // The 2.0.24 wording (auto-accept without the publication.commit order) is
+    // embedded in sessions persisted on that build and must also strip.
+    expect(LEGACY2_WORKSHOP_RELEASE_CONTEXT).toContain("desktop_updates");
+    expect(LEGACY2_WORKSHOP_RELEASE_CONTEXT).not.toContain("publication.commit");
+    const legacy2 = LEGACY2_WORKSHOP_RELEASE_CONTEXT.replace("<arvela-workshop-release-v1>", `<arvela-workshop-release-v1 session="workshop">`);
+    expect(workshopVisibleText(`текст\n\n${legacy2}`, "workshop")).toBe("текст");
+    expect(workshopVisibleText(`quoted:${legacy2}`, "workshop")).toBe(`quoted:${legacy2}`);
   });
   it("hides only the exact own reminder (current and pre-Enki wording) before attachments", () => {
     const own = workshopReminder("workshop"), old = own.replace("для Мастерской:", "для Мастерской Arvela:");

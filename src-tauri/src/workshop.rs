@@ -4,6 +4,50 @@ use serde_json::json;
 use std::{fs, path::Path, sync::Mutex};
 static IO: Mutex<()> = Mutex::new(());
 const PROMPT: &str = include_str!("../resources/workshop/AGENTS.md");
+/// App-owned delivery-policy frame inside the workshop instructions. The user
+/// may rewrite everything outside the markers; the framed block itself follows
+/// the shipped application and is replaced verbatim on update.
+const POLICY_BEGIN: &str = "<!-- enki:delivery-policy:begin -->";
+const POLICY_END: &str = "<!-- enki:delivery-policy:end -->";
+fn app_policy(prompt: &str) -> Option<String> {
+    let begin = prompt.find(POLICY_BEGIN)?;
+    let end = prompt[begin..].find(POLICY_END)?;
+    Some(prompt[begin..begin + end + POLICY_END.len()].to_string())
+}
+/// Returns the new file content when the app-owned block must appear or be
+/// refreshed. A file without the frame is treated as user-refined
+/// instructions: the frame is appended, never replacing the owner's text.
+/// An unterminated (user-altered) frame is left untouched.
+fn sync_app_policy(existing: &str, policy: &str) -> Option<String> {
+    match existing.find(POLICY_BEGIN) {
+        None => Some(format!("{}\n\n{}\n", existing.trim_end(), policy)),
+        Some(begin) => {
+            let end = existing[begin..].find(POLICY_END)?;
+            let current = &existing[begin..begin + end + POLICY_END.len()];
+            if current == policy {
+                None
+            } else {
+                Some(format!(
+                    "{}{}{}",
+                    &existing[..begin],
+                    policy,
+                    &existing[begin + end + POLICY_END.len()..]
+                ))
+            }
+        }
+    }
+}
+/// After an update restart the workshop may be resumed without the UI opening
+/// its panel again; refresh RUNTIME.json/WORKSPACE.json from the shipped
+/// native version so the agent never reads a stale runtime contract.
+pub fn refresh_existing() -> Result<(), String> {
+    let root = crate::paths::app_data_dir()?.join("workshop");
+    if !root.join("WORKSPACE.json").is_file() {
+        return Ok(());
+    }
+    let _lock = IO.lock().map_err(|e| e.to_string())?;
+    prepare(&root, None).map(|_| ())
+}
 pub fn cli() -> Result<(), String> {
     crate::updates::ensure_writable()?;
     let _lock = IO.lock().map_err(|e| e.to_string())?;
@@ -108,9 +152,17 @@ fn prepare(root: &Path, candidate: Option<&str>) -> Result<Workspace, String> {
                     .and_then(source)
             })
     };
-    // A model/user may refine its local instructions; never silently overwrite them.
-    if read(&root.join("AGENTS.md"))?.is_none() {
-        write(&root.join("AGENTS.md"), PROMPT)?;
+    // A model/user may refine its local instructions; only the framed
+    // app-owned delivery policy is refreshed automatically.
+    match read(&root.join("AGENTS.md"))? {
+        None => write(&root.join("AGENTS.md"), PROMPT)?,
+        Some(existing) => {
+            if let Some(policy) = app_policy(PROMPT) {
+                if let Some(next) = sync_app_policy(&existing, &policy) {
+                    write(&root.join("AGENTS.md"), &next)?;
+                }
+            }
+        }
     }
     let legacy_directory = root
         .parent()
@@ -215,18 +267,47 @@ mod tests {
         );
     }
     #[test]
-    fn preserves_custom_instructions_and_rejects_wrong_source() {
+    fn syncs_the_framed_delivery_policy_and_preserves_owner_text() {
         let temp = Temp::new();
         let p = temp.path().join("workshop");
         let first = prepare(&p, None).unwrap();
         assert!(p.join("AGENTS.md").exists());
         fs::write(p.join("AGENTS.md"), "owner edits").unwrap();
         assert_eq!(prepare(&p, None).unwrap().directory, first.directory);
-        assert_eq!(
-            fs::read_to_string(p.join("AGENTS.md")).unwrap(),
-            "owner edits"
-        );
+        let synced = fs::read_to_string(p.join("AGENTS.md")).unwrap();
+        assert!(synced.starts_with("owner edits\n"));
+        assert!(synced.contains(POLICY_BEGIN) && synced.contains("desktop_updates"));
+        prepare(&p, None).unwrap();
+        assert_eq!(fs::read_to_string(p.join("AGENTS.md")).unwrap(), synced);
+        // A stale frame from an older application is replaced verbatim while
+        // owner text around it survives; an unterminated user frame is left.
+        let policy = app_policy(PROMPT).unwrap();
+        fs::write(
+            p.join("AGENTS.md"),
+            format!("keep\n\n{POLICY_BEGIN}\nstale policy\n{POLICY_END}\ntail\n"),
+        )
+        .unwrap();
+        prepare(&p, None).unwrap();
+        let refreshed = fs::read_to_string(p.join("AGENTS.md")).unwrap();
+        assert!(refreshed.starts_with("keep\n\n"));
+        assert!(refreshed.ends_with("\ntail\n"));
+        assert!(refreshed.contains(&policy) && !refreshed.contains("stale policy"));
+        let broken = format!("x\n{POLICY_BEGIN} altered by owner");
+        fs::write(p.join("AGENTS.md"), &broken).unwrap();
+        prepare(&p, None).unwrap();
+        assert_eq!(fs::read_to_string(p.join("AGENTS.md")).unwrap(), broken);
         assert!(prepare(&p, Some(temp.path().to_str().unwrap())).is_err());
+    }
+    #[test]
+    fn reentry_refreshes_the_runtime_contract_after_an_update() {
+        let temp = Temp::new();
+        let p = temp.path().join("workshop");
+        prepare(&p, None).unwrap();
+        fs::write(p.join("RUNTIME.json"), "{\"nativeVersion\":\"0.0.1\"}").unwrap();
+        prepare(&p, None).unwrap();
+        let runtime = fs::read_to_string(p.join("RUNTIME.json")).unwrap();
+        assert!(runtime.contains(env!("CARGO_PKG_VERSION")));
+        assert!(!runtime.contains("0.0.1"));
     }
     #[cfg(unix)]
     #[test]

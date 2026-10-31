@@ -45,7 +45,7 @@ try{
   const receipt=await publishAndVerify(
     ()=>request('POST','/api/updates',{channel,expectedRevision:current.revision,sourceCommit:commit,...envelopes}),
     ()=>request('GET',`/api/updates/enki/${channel}`),
-    {version,nativeFingerprint:fp},envelopes,
+    {version,nativeFingerprint:fp,commit},envelopes,
     digest=>request('GET',`/api/updates/artifacts/${digest}`,undefined,40*1048576));
   const receipts=path.join(root,'.local','releases');fs.mkdirSync(receipts,{recursive:true,mode:0o700});
   const file=path.join(receipts,`${version}-${channel}.json`);

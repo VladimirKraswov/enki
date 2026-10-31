@@ -18,6 +18,12 @@ export function assertSignedForClients(envelopes, expected, publicKey){
 export async function verifyPublication(head, expected, envelopes, download){
   if(head?.available!==true||head.version!==expected.version||head.nativeFingerprint!==expected.nativeFingerprint||typeof head.revision!=='string'||!head.revision)
     throw Error('Published Hub head does not match this release');
+  // The Hub records which commit produced this release. CI builds GitHub
+  // packages from that exact commit, so a locally newer HEAD (e.g. a tracked
+  // checkpoint made after publication) must never be recorded as published.
+  const publishedCommit=head.publication?.commit;
+  if(expected.commit&&publishedCommit&&publishedCommit!==expected.commit)
+    throw Error(`Hub published Enki ${expected.version} from commit ${publishedCommit}, not the verified HEAD ${expected.commit}; commit final docs and checkpoints before release:local`);
   const artifacts={};
   for(const kind of ['hot','source']){
     const wanted=envelopes[kind], raw=Buffer.from(wanted.payload,'base64'),digest=hash(raw),descriptor=head.artifacts?.[kind];
@@ -26,7 +32,7 @@ export async function verifyPublication(head, expected, envelopes, download){
     if(actual?.payload!==wanted.payload||actual.signature?.trim()!==wanted.signature.trim())throw Error(`Hub ${kind} downloaded packet mismatch`);
     artifacts[kind]={digest,bytes:raw.length};
   }
-  return{version:head.version,nativeFingerprint:head.nativeFingerprint,revision:head.revision,artifacts};
+  return{version:head.version,nativeFingerprint:head.nativeFingerprint,revision:head.revision,artifacts,...(publishedCommit?{publishedCommit}:{})};
 }
 
 export async function publishAndVerify(write, read, expected, envelopes, download) {

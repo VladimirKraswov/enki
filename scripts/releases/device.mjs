@@ -47,14 +47,23 @@ export async function publishDevice(root,channel,transport=deviceTransport()){
  for(const [kind,files] of [['source',snapshotGit(root,names)],['hot',snapshot(path.join(root,'dist'),ui)]]){const raw=Buffer.from(JSON.stringify({schemaVersion:1,kind,version,nativeFingerprint:fp,notes:'',files}));if(raw.length>24*1048576)throw Error('Encoded release payload too large');body[kind]=raw.toString('base64');digests[kind]=hash(raw);}
  let head=await transport.head(channel);body.expectedRevision=head.revision;
  const matches=h=>h.version===version&&h.nativeFingerprint===fp&&['source','hot'].every(k=>h.artifacts?.[k]?.digest===digests[k]);
+ // Identical bytes alone do not prove HEAD is still the published commit: a
+ // tracked checkpoint made after publication must fail loudly here instead of
+ // rewriting the receipt over an immutable Hub publication or dispatching a
+ // commit that CI will refuse (published_commit must equal github.sha).
+ const publishedCommit=head.publication?.commit;
+ if(matches(head)&&publishedCommit&&publishedCommit!==commit)
+  throw Error(`Enki ${version} is already published from commit ${publishedCommit}, HEAD is ${commit}. Final tracked docs and checkpoints must be committed before release:local (operational summaries belong in .local); the Hub release stays immutable.`);
  if(!matches(head)){
   try{await transport.publish(body);}catch(error){head=await transport.head(channel);if(!matches(head))throw error;}
   head=await transport.head(channel);
  }
  if(!matches(head))throw Error('Hub head does not contain this build');
+ const finalCommit=head.publication?.commit;
+ if(finalCommit&&finalCommit!==commit)throw Error(`Hub published Enki ${version} from commit ${finalCommit}, not the verified HEAD ${commit}; no receipt was written.`);
  const publicKey=fs.readFileSync(path.join(root,'src-tauri/updater.pub'),'utf8');
  for(const kind of ['source','hot']){const envelope=await transport.artifact(digests[kind]);const packet=verifyEnvelope(envelope,digests[kind],version,publicKey);if(packet.kind!==kind||packet.nativeFingerprint!==fp||envelope.payload!==body[kind])throw Error('Hub served different release bytes');}
- const receipt={...head,channel,commit,verifiedAt:new Date().toISOString(),publication:'paired-device'};const receipts=path.join(root,'.local/releases');fs.mkdirSync(receipts,{recursive:true,mode:0o700});fs.writeFileSync(path.join(receipts,version+'-'+channel+'.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
+ const receipt={...head,channel,commit,verifiedAt:new Date().toISOString(),publication:'paired-device',...(finalCommit?{publishedCommit:finalCommit}:{})};const receipts=path.join(root,'.local/releases');fs.mkdirSync(receipts,{recursive:true,mode:0o700});fs.writeFileSync(path.join(receipts,version+'-'+channel+'.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
  console.log('Verified Enki '+version+' via paired device: Hub head, both exact packets and pinned signatures.');return receipt;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
