@@ -15,23 +15,27 @@ must not be overwritten or silently published with this repair.
 This branch: owner-selected physical data root with private identity marker and
 no missing-disk fallback, external tool TMPDIR, runtime heap 1536 MiB, test heaps
 1024 MiB, worker-exit cleanup of harness-owned temp directories preserving
-restart/recovery tests. Version 2.0.27 is prepared for local installation.
+restart/recovery tests. Version 2.0.27 is installed locally with the original app identity/entitlements;
+codesign --verify --deep --strict PASS.
 
 Checks completed: UI 198 files/1223 tests, Rust 285 PASS/7 opt-in skipped,
 storage location 4 tests, runtime typecheck, clippy -D warnings, fmt, SDK pin
 check, docs, architecture and bundle; artifact gate 100 PASS/4 platform skips.
 Final runtime suite: 68 files/413 tests plus 167 SDK Node checks PASS. Native
-release build is in progress. No Hub or
+release build PASS (custom protocol, two build jobs). No Hub or
 GitHub publication has been performed for this local request.
 
 Data: complete stopped-store copy SHA256-verified for 67,999 regular files,
 9,755,886,709 bytes; both databases quick_check OK; all 307 session rows retained.
-Paired rollback copy is on Extend. Original internal data remains until the new
-native launch and history checks succeed. Private receipts are outside Git.
+Paired rollback copy is on Extend. Two normal native launches connected to the external store; protected workshop
+history is readable, all 307 session IDs match the backup and quick_check is OK.
+The verified internal duplicate was removed; data and app rollback are on
+Extend. Private receipts are outside Git.
 
-Next: finish gates, verify and install the local bundle at authoritative idle,
-activate external storage + compatible historical path, prove live API/history,
-remove the verified internal duplicate, activate bounded native cache monitor.
+DONE for the local Mac request. Native MacStorageGuard checks disk/pressure
+every five minutes; allowlisted closed-app cache cleanup runs at most every six
+hours, bounded logs, no process kills or session deletion. Operational config
+and private receipts live outside Git. No other platform or Hub rollout claimed.
 Do not start inference, replay old tasks, alter independent OpenCode/Pi stores,
 or restart Eridu workers/VMs.
 
