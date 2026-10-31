@@ -201,6 +201,9 @@ pub fn app_data_dir() -> Result<PathBuf, String> {
 /// live and where startup migration runs). Default profile only.
 pub fn app_data_parent() -> Result<PathBuf, String> {
     refuse_profile_parent(profile_override()?.as_deref())?;
+    if let Some(parent) = crate::storage_location::parent(&user_home()?)? {
+        return Ok(parent);
+    }
     #[cfg(target_os = "windows")]
     {
         let root =

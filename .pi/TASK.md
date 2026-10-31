@@ -1,3 +1,43 @@
+# TASK — local Mac resource repair (31 Oct 2026)
+
+Current owner request: diagnose RAM/SSD exhaustion, stop recurring accumulation,
+move this Mac's Enki data to Extend without losing histories. This is local
+maintenance; do not execute the previous release assignment automatically.
+
+Verified cause: the owner's pending catalog UX test captured a vi.fn rather
+than its implementation, then called the same newly replaced mock recursively.
+Two bundled-Node OOM reports at 21:31/21:32 match those test runs; kernel reported
+failed swapfile creation. The pending test was corrected in the original working
+tree (getMockImplementation; missing root binding); 16 targeted tests PASS under
+a 768 MiB heap. Pending model-catalog source/test work remains uncommitted and
+must not be overwritten or silently published with this repair.
+
+This branch: owner-selected physical data root with private identity marker and
+no missing-disk fallback, external tool TMPDIR, runtime heap 1536 MiB, test heaps
+1024 MiB, worker-exit cleanup of harness-owned temp directories preserving
+restart/recovery tests. Version 2.0.27 is prepared for local installation.
+
+Checks completed: UI 198 files/1223 tests, Rust 285 PASS/7 opt-in skipped,
+storage location 4 tests, runtime typecheck, clippy -D warnings, fmt, SDK pin
+check, docs, architecture and bundle; artifact gate 100 PASS/4 platform skips.
+Final runtime suite: 68 files/413 tests plus 167 SDK Node checks PASS. Native
+release build is in progress. No Hub or
+GitHub publication has been performed for this local request.
+
+Data: complete stopped-store copy SHA256-verified for 67,999 regular files,
+9,755,886,709 bytes; both databases quick_check OK; all 307 session rows retained.
+Paired rollback copy is on Extend. Original internal data remains until the new
+native launch and history checks succeed. Private receipts are outside Git.
+
+Next: finish gates, verify and install the local bundle at authoritative idle,
+activate external storage + compatible historical path, prove live API/history,
+remove the verified internal duplicate, activate bounded native cache monitor.
+Do not start inference, replay old tasks, alter independent OpenCode/Pi stores,
+or restart Eridu workers/VMs.
+
+---
+Previous checkpoint (historical context; no automatic continuation):
+
 # TASK — checkpoint (UTC)
 
 Standing scope: workshop self-development for the next stable release.

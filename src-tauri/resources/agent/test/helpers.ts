@@ -4,9 +4,7 @@
 // processes exactly as it would process a provider's.
 
 import { randomBytes } from "node:crypto";
-import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { NO_BROKER, type Broker } from "../src/control/broker.ts";
 import { Runtime, type RuntimeConfig } from "../src/core/runtime.ts";
@@ -15,12 +13,10 @@ import { buildRoutes } from "../src/server/routes.ts";
 import { startServer, type Credentials } from "../src/server/http.ts";
 import { scriptedRuntime, type ScriptedRuntime } from "../src/sdk/testing.ts";
 import type { SdkExtension, SdkExtensionApi } from "../src/sdk/adapter.ts";
+import { tempDir } from "./temp-files.ts";
+export { tempDir } from "./temp-files.ts";
 
 export const ORIGIN = "tauri://localhost";
-
-export function tempDir(prefix: string): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `enki-${prefix}-`)));
-}
 
 export interface Harness {
   runtime: Runtime;
@@ -65,7 +61,6 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
     ownedText(`${base}${route}`, { method, body: body !== undefined ? JSON.stringify(body) : undefined,
       headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...headers } }, h)
       .then(({ status, text }) => ({ status, body: (text ? JSON.parse(text) : undefined) as T }));
-  const projects: string[] = [];
   let stopping: Promise<void> | undefined;
   const h: Harness = {
     runtime, scripted, base, token, credentials, data,
@@ -82,8 +77,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
       }
     },
     project: (name) => {
-      const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `enki-project-${name}-`)));
-      projects.push(dir);
+      const dir = tempDir(`project-${name}`);
       return dir;
     },
     // Unconditional, idempotent teardown. A failed assertion can skip a test's own

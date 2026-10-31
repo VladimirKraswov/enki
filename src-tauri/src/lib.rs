@@ -28,6 +28,7 @@ pub mod runtime;
 mod runtime_ui;
 mod sound;
 mod storage_info;
+mod storage_location;
 mod tray;
 mod updates;
 mod usage_store;

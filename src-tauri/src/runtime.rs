@@ -458,6 +458,8 @@ fn data_dir() -> Result<PathBuf, String> {
 
 fn command(artifact: &Artifact) -> Result<Command, String> {
     let mut command = Command::new(&artifact.node);
+    // Bound the long-lived agent host separately from tools/tests it starts.
+    command.arg("--max-old-space-size=1536");
     command.arg(&artifact.entry);
     command.args(["--data"]).arg(data_dir()?);
     if crate::paths::profile_override()?.is_none() {
@@ -476,6 +478,13 @@ fn command(artifact: &Artifact) -> Result<Command, String> {
         }
     }
     command.current_dir(&artifact.root);
+    // Large tool/test temporary files belong beside the selected data store.
+    let temporary = crate::paths::app_data_dir()?.join("tmp");
+    fs::create_dir_all(&temporary).map_err(|e| e.to_string())?;
+    command
+        .env("TMPDIR", &temporary)
+        .env("TMP", &temporary)
+        .env("TEMP", &temporary);
     // User-controlled interpreter injection must not reach the runtime.
     for variable in [
         "NODE_OPTIONS",

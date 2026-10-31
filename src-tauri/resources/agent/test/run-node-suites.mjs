@@ -52,7 +52,7 @@ async function main() {
     const guard = pathToFileURL(path.join(tests, "node-guard.mjs")).href, sdkEnvironment = pathToFileURL(path.join(tests, "setup", "node-sdk-environment.mjs")).href;
     const code = await new Promise((resolve, reject) => {
       // store/db.ts uses parameter properties, which strip-only TS cannot load.
-      const child = spawn(process.execPath, ["--experimental-transform-types", "--import", guard, "--import", sdkEnvironment, "--test", "--test-concurrency=1", ...selected], { cwd: root, env, stdio: "inherit", shell: false, windowsHide: true });
+      const child = spawn(process.execPath, ["--max-old-space-size=1024", "--experimental-transform-types", "--import", guard, "--import", sdkEnvironment, "--test", "--test-concurrency=1", ...selected], { cwd: root, env, stdio: "inherit", shell: false, windowsHide: true });
       const timer = setTimeout(() => { child.kill(); reject(new Error("Node suites exceeded 30 minutes")); }, 30 * 60_000);
       child.once("error", reject);
       child.once("exit", (status, signal) => { clearTimeout(timer); resolve(status ?? (signal ? 1 : 0)); });
