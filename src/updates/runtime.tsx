@@ -52,6 +52,6 @@ export function UpdateRuntime(){
     return()=>{alive=false;stopAwake();clearInterval(timer);checks.stop();unlisten?.();quitListen?.();};
   },[]);return null;
 }
-export function UpdateBadge(){const s=useUpdates();return <ReadyUpdateBadge release={s.release} prepared={updates.prepared()} downloaded={s.downloaded}
+export function UpdateBadge(){const s=useUpdates();return <ReadyUpdateBadge release={s.release} prepared={updates.prepared()} downloaded={s.downloaded} waiting={s.waiting}
   onOpen={()=>{requestUpdateSettings();store.setUi({settingsOpen:true});}}/>;
 }

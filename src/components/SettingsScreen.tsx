@@ -1,5 +1,5 @@
 import { SettingHelp } from "./SettingHelp";
-import {consumeUpdateSettings} from "../updates/controller";
+import {consumeUpdateSettings,peekUpdateSettings} from "../updates/controller";
 import { SkillQualitySettings } from "./SkillQualitySettings";
 import { UpdateSettings } from "./UpdateSettings";
 import { HubSettings } from "./HubSettings";
@@ -87,8 +87,8 @@ function AppearanceSettings() {
 
 export function SettingsScreen() {
   const s = useAppState();
-  const [section, setSection] = useState<Section>(()=>consumeUpdateSettings()?"updates":"general"), [query, setQuery] = useState("");
-  useEffect(()=>{const open=()=>{consumeUpdateSettings();setSection("updates");setQuery("");};window.addEventListener("arvela-open-updates",open);return()=>window.removeEventListener("arvela-open-updates",open);},[]);
+  const [section, setSection] = useState<Section>(()=>peekUpdateSettings()?"updates":"general"), [query, setQuery] = useState("");
+  useEffect(()=>{const open=()=>{if(consumeUpdateSettings()){setSection("updates");setQuery("");}};open();window.addEventListener("arvela-open-updates",open);return()=>window.removeEventListener("arvela-open-updates",open);},[]);
   const [browserVisited, setBrowserVisited] = useState(false), [browserDirty, setBrowserDirty] = useState(false);
   const [qualityDirty,setQualityDirty]=useState(false),[qualityVisited,setQualityVisited]=useState(false);
   useEffect(()=>{if(section === "skillQuality")setQualityVisited(true);},[section]);

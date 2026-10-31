@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {ACTIVE_BUILD_STAGES,BUILD_STAGE_TEXT,UpdateController,type NativeStatus,type Transport} from '../src/updates/controller';
+import {ACTIVE_BUILD_STAGES,BUILD_STAGE_TEXT,UpdateController,type NativeStatus,type Release,type Transport} from '../src/updates/controller';
 const native:NativeStatus={nativeVersion:'1.0.0',nativeFingerprint:'a'.repeat(64),hot:{uiVersion:'1.0.0',activeDigest:null,pending:false,lastError:null},build:{stage:'ready'}};
 function fixture(kind:'hot'|'source'='hot'){
  const call=vi.fn(async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind}:action==='status'?native:{});
@@ -67,4 +67,34 @@ it('explicit retry clears only a failed old builder and never a running or moder
 it('a failed retry is visible and keeps the verified download for another attempt',async()=>{
  const c=new UpdateController((async(action:string)=>{if(action==='status')return {...native,build:{stage:'error'}};if(action==='build')throw Error('Disk full');return {};}) as Transport,async()=>{});
  await c.download();await c.build();expect(c.snapshot().error).toContain('Disk full');expect(c.snapshot().downloaded).toBe(true);expect(c.snapshot().busy).toBe('');
+});
+
+// Badge freshness contract with hub_updates::hub_update status (31 Oct 2026):
+// the native cache is the authority; the UI must follow every meaningful change
+// and must not keep a release the native cache no longer confirms.
+it('follows a newly published release: digest swap between two real digests, then installer readiness',async()=>{
+ let head:Record<string,unknown>={available:true,version:'1.0.1',kind:'source',channel:'stable',digest:'a'.repeat(64),binary:{state:'pending'}};
+ const c=new UpdateController((async()=>({...native,release:head,downloaded:false})) as Transport,async()=>{});
+ await c.refresh();expect(c.snapshot().release?.digest).toBe('a'.repeat(64));
+ // A newer publication changes the digest; comparing emptiness would miss it.
+ head={available:true,version:'1.0.2',kind:'source',channel:'stable',digest:'b'.repeat(64),binary:{state:'pending'}};
+ await c.refresh();expect(c.snapshot().release?.digest).toBe('b'.repeat(64));expect(c.snapshot().release?.version).toBe('1.0.2');
+ head={...head,binary:{state:'ready'}};await c.refresh();expect(c.snapshot().release?.binary?.state).toBe('ready');
+ // Identical status must not churn the state object.
+ const before=c.snapshot();await c.refresh();expect(c.snapshot().release).toBe(before.release);
+});
+it('a cleared native release removes the indicator instead of sticking (installed or invalidated)',async()=>{
+ let head:Release|null={available:true,version:'1.0.1',kind:'hot',channel:'stable',digest:'a'.repeat(64),binary:{state:'ready'}};
+ const c=new UpdateController((async()=>({...native,release:head,downloaded:true})) as Transport,async()=>{});
+ await c.refresh();expect(c.snapshot().release?.available).toBe(true);
+ // The check action clears its cache when the head has nothing newer; an
+ // explicit null is confirmation, not an absent result.
+ head=null;await c.refresh();expect(c.snapshot().release).toBeNull();expect(c.snapshot().downloaded).toBe(false);
+ // An available:false answer from check() survives (it is the current truth).
+ const call=vi.fn(async(action:string)=>action==='check'?{available:false}:{...native,release:null});
+ const d=new UpdateController(call as Transport,async()=>{});await d.check();await d.refresh();expect(d.snapshot().release?.available).toBe(false);
+});
+it('an older native without a release field never overwrites a checked release',async()=>{
+ const c=new UpdateController((async(action:string)=>action==='check'?{available:true,version:'1.0.1',kind:'hot',digest:'a'.repeat(64)}:native) as Transport,async()=>{});
+ await c.check();await c.refresh();expect(c.snapshot().release?.digest).toBe('a'.repeat(64));
 });

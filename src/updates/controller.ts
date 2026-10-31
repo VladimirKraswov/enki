@@ -17,7 +17,18 @@ export class UpdateController {
   prepared(){return this.state.status?.build.stage==='ready'&&!!this.state.release?.digest&&this.state.status.build.digest===this.state.release.digest;}
   /** Any ACTIVE native build phase (hub_updates/build.rs), including runtime preparation. */
   compiling(){return (ACTIVE_BUILD_STAGES as readonly string[]).includes(this.state.status?.build.stage??'');}
-  async refresh(){const status=await this.call<NativeStatus>('status');this.patch({status,...(!this.state.release&&status.release?.available&&status.release.channel===this.state.channel?{release:status.release,downloaded:!!status.downloaded}:{})});return status;}
+  /** Native is the authority for the checked release and installer readiness.
+   * Contract (hub_updates::hub_update): the `release` key is always reported —
+   * a check caches its available:true answer in the same call before replying,
+   * and clears the cache when the head has no newer release. So `release:null`
+   * means native confirmed there is nothing pending: an available release the
+   * cache no longer confirms is stale (installed or invalidated) and must not
+   * keep the badge lit. An absent field (older native build) is not evidence. */
+  async refresh(){const status=await this.call<NativeStatus>('status');const patch:Partial<UpdateState>={status};const r=status.release;const cur=this.state.release;
+    if(r&&r.channel===this.state.channel){
+      if(!cur||cur.available!==r.available||cur.version!==r.version||cur.kind!==r.kind||cur.revision!==r.revision||cur.digest!==r.digest||cur.binary?.state!==r.binary?.state){patch.release=r;patch.downloaded=!!status.downloaded;if(r.available)patch.notice='';}}
+    else if(r===null&&cur?.available){patch.release=null;patch.downloaded=false;}
+    this.patch(patch);return status;}
   async ready(){const s=await this.refresh();await this.call('ready',{digest:s.hot.activeDigest});}
   check=()=>this.run('check',async()=>{const release=await this.call<Release>('check',{channel:this.state.channel});this.patch({release,downloaded:false,notice:release.available?'':'Установлена актуальная версия.'});});
   download=()=>this.run('download',async()=>{await this.call('download',{channel:this.state.channel});this.patch({downloaded:true,notice:this.state.release?.kind==='hot'?'Подпись обновления проверена.':'Загружаем готовое приложение; сборка не требуется.'});await this.refresh();});
@@ -38,4 +49,8 @@ export class UpdateController {
 }
 let requested=false;
 export function requestUpdateSettings(){requested=true;window.dispatchEvent(new Event('arvela-open-updates'));}
+/** Render-safe peek: the initial section may be recomputed by React (Suspense
+ * retries, discarded concurrent renders) without a new mount, so reading the
+ * intent must not consume it. Only a committed mount consumes it in an effect. */
+export function peekUpdateSettings(){return requested;}
 export function consumeUpdateSettings(){const value=requested;requested=false;return value;}

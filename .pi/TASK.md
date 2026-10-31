@@ -2,63 +2,61 @@
 
 Standing scope: workshop self-development for the next stable release.
 
-## Current task — delivery-contract fixes (2.0.25)
+## Current task — update-navigation & badge freshness (2.0.26)
 
-Owner audit (31 Oct 2026, `.local/workshop-audit-20261031/`) confirmed the
-workshop can edit any Enki part and the runtime injects the release policy,
-but found delivery gaps. Fixed in this release:
+Owner complaint (31 Oct): the yellow update badge opened «Общее» instead of
+«Обновления»; the update state was not understandable; after the 2.0.25 apply
+restart the Hub-applied models were missing until an external agent re-applied
+the catalog (Settings→Models→Apply). DeepSeek hit a refresh timeout during that
+re-read; models.json itself was never rewritten (mtime evidence).
 
-- publication.commit is now a contract: Hub head publication commit must equal
-  the verifying HEAD in both publishers (`verify.mjs`, `device.mjs`); receipts
-  record `publishedCommit`; `dispatch-packages` refuses a mismatched receipt;
-  republishing from a moved HEAD fails loudly without rewriting the immutable
-  receipt. Regressions: device.test.mjs + verify.test.mjs.
-- Safe release order documented and policy-enforced: final tracked docs and
-  checkpoints BEFORE `release:local`; push the same HEAD; `release:packages`
-  before any newer tracked commit; operational summaries live in `.local`.
-  (Root cause of the blocked 2.0.24 dispatch: the checkpoint commit landed
-  after the published commit; CI requires `published_commit == github.sha`.)
-- Workshop runtime context is now refreshed at application start
-  (`workshop::refresh_existing` in lib.rs setup): after an update restart the
-  RUNTIME.json/WORKSPACE.json no longer stay stale when the workshop is
-  resumed without opening its panel. Regression: Rust reentry test.
-- Workshop AGENTS.md sync: the framed app-owned block
-  `<!-- enki:delivery-policy:begin/end -->` is appended to owner-refined
-  instructions and replaced verbatim when it goes stale; owner text outside
-  the frame is never overwritten; an unterminated user frame is left alone.
-  Rust regressions cover all three cases.
-- docs/SELF-DEVELOPMENT.md and docs/HUB-UPDATES.md now describe automatic
-  acceptance through `desktop_updates` and the publication.commit ordering
-  instead of "apply is a separate action".
+Proven on the pre-fix code (test kept in .local/update-navigation-audit/):
+`useState(() => consumeUpdateSettings() ...)` consumed a module-global flag
+inside render; any re-run of the mount render (Suspense retry / discarded
+concurrent attempt) made the second initializer run see `false` and open
+«Общее». Fix: peek-only in the initializer (render-safe), consumption happens
+exactly once in the committed mount effect or the open-event listener.
+Regression: test/update-navigation.test.ts (real lazy+Suspense App pattern;
+case «discarded render» fails on the old code, passes on the new) and
+test/update-navigation-flag.test.ts (peek is repeatable; consume is explicit).
 
-## Done
+Badge/tab single source of truth (hub_updates status contract): native caches
+its check result and clears it when nothing newer remains; `release:null` is
+confirmation, an absent field (older native) is not evidence. refresh() now
+syncs version/kind/revision/FULL digest/binary-state changes (a real
+digest-to-digest swap was previously ignored) and clears a stale available
+release when the native cache says null — the indicator cannot stick.
+Regressions in test/hub-updates.test.ts. While the workshop apply waits for
+idle, the settings section and the badge both state the queued version and the
+automatic restart explanation. Opening settings never starts installation
+(only a read-only refresh).
 
-- 2.0.24 (`4d4bd9d`) shipped `desktop_updates` (status/prepare/apply) and the
-  automatic-acceptance policy; receipt verified, installed via GUI bootstrap
-  (the 2.0.21 app predated the tool), served head 2.0.24.
-- 2.0.22 self-refactoring (2569b38) and 2.0.23 archive-continuation UX
-  (4f64c65) published and receipt-verified; 2.0.24 GitHub packages remain
-  unpublished (dispatch blocked by the post-publication checkpoint — history
-  stays honest, no receipt rewriting).
+## Catalog continuity after restart
 
-## Checks
+Baseline snapshot: .local/update-navigation-audit/models-before-2.0.26.json —
+providers local-artemis, local-gemma4, local-qwen, local-qwen-v100
+(local-qwen/qwen38-flash-next serves this chat). After the 2.0.26 restart the
+same four providers must be present without pressing Apply again; verify
+against this file (do not switch to cloud models; DeepSeek refresh timeouts
+are per-provider in the SDK and must not be treated as catalog loss).
 
-- This checkpoint: node --test release suite green (incl. new
-  publication-commit regressions), agent tree 412/67 + typecheck, Rust
-  workshop/control suites, fmt + strict clippy, frontend suite/build/docs via
-  `release:local` gates.
+## Checks so far
 
-## Next
+- Full vitest 199 files green (update-navigation regressions included), tsc,
+  build, architecture 217, bundle. No src-tauri changes this round → the
+  release is hot (green indicator); prepare downloads the hot packet.
 
-- After this Hub publish: verify receipt `publishedCommit` == HEAD, push the
-  same HEAD, then `npm run release:packages -- stable` with the existing gh
-  rights; wait for all three OS packages and check the Hub native descriptor.
-- Finish with `desktop_updates` prepare/apply as the final action; from this
-  release the whole loop is programmatic.
+## Next (release ordering per AGENTS.md)
+
+1. Version bump 2.0.26 in all manifests, commit (this checkpoint is in it),
+   `npm run release:local -- stable`.
+2. Verify receipt publishedCommit == HEAD == main; push the same HEAD;
+   `npm run release:packages -- stable` before any newer tracked commit.
+3. desktop_updates: prepare → poll prepared/ready → apply as the final action.
+   External agent verifies the installed 2.0.26, one badge click, and the four
+   model providers surviving the restart.
 
 ## Notes
 
-- The workshop store keeps `opencode.json` untracked (git exclude), owned by
-  the owner; never stage it.
-- Archive/audit folders live under `.local/` (pi-sdk-migration-20261024,
-  workshop-audit-20261031); do not delete or commit.
+- `opencode.json` in the workshop store stays untracked (git exclude).
+- Audit artifacts live in .local/update-navigation-audit/ (not committed).

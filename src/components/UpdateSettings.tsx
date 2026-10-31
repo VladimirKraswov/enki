@@ -40,6 +40,7 @@ export function UpdateSettings(){
       {(stage==='error'||stage==='ready')&&<button className="btn" disabled={disabled} onClick={()=>void updates.clear()}>Очистить подготовленные файлы</button>}
     </div>
     {u.release?.available&&<p className={`update-kind ${hot?'hot':''}`}>{releaseDescription}</p>}
+    {u.waiting&&<p role="status">Обновление Enki {u.release?.version??''} готово к установке. Enki перезапустится сам, как только все агенты завершат работу; черновики, очереди и настройки сохраняются. Можно закрыть настройки и продолжить работу.</p>}
     {u.release?.available&&!hot&&!built&&!compiling&&<details><summary>Собрать из исходников</summary>
       <p className="muted">Дополнительный вариант, если хотите установить выпуск до готовности пакета. Сборка занимает время и выполняется в отдельной папке. Чаты остаются доступны.</p>
       {prerequisites?.available?<button className="btn" disabled={disabled} onClick={()=>void updates.build()}>{u.busy==='build'?'Подготавливаю исходники…':'Собрать на этом компьютере'}</button>:<p className="muted">{prerequisites?.reason??'Проверяем Node.js/npm, Rust и системные инструменты…'}</p>}
