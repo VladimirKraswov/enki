@@ -53,7 +53,11 @@ dependencies when another task has pending work. Run `npm run release:local -- s
 and verify its canonical receipt, served head and both signed packets include your
 actual changed files. Another available release does not prove delivery of your
 change. If blocked, say code changed but update NOT published, with the exact reason;
-do not label delivery DONE. Publication offers an update; applying it remains separate.
+do not label delivery DONE. Publication offers an update; per the owner's standing
+instruction (31 Oct 2026) the workshop then accepts it automatically through the
+`desktop_updates` control tool (status → prepare → poll → apply as the final
+action) — no manual clicks. Applying waits for authoritative idle and the normal
+lifecycle; an explicit owner request not to apply takes precedence.
 
 ## Язык общения
 

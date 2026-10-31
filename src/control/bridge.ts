@@ -11,6 +11,8 @@ import { RUNTIME_AGENT_ID } from "../agent/runtime/ids";
 import { store } from "../state/store";
 import { applyHistory, emptyChatRoot, type SessionChatState } from "../state/chatReducer";
 import { isNative } from "../native/platform";
+import { agentsRunning, updates } from "../updates/runtime";
+import { BUILD_STAGE_TEXT } from "../updates/controller";
 import { installAgentControlMcp } from "./install";
 import {
   getManagedRun,
@@ -635,10 +637,65 @@ function conversation(sessionId: string, limit: number, maxChars: number, chat: 
   };
 }
 
+function updatesSnapshot(): Record<string, unknown> {
+  const s = updates.snapshot();
+  return {
+    channel: s.channel,
+    nativeVersion: s.status?.nativeVersion ?? null,
+    uiVersion: s.status?.hot.uiVersion ?? null,
+    available: s.release?.available === true,
+    version: s.release?.version ?? null,
+    kind: s.release?.kind ?? null,
+    binary: s.release?.binary?.state ?? null,
+    stage: s.status?.build.stage ?? null,
+    stageText: s.status?.build.stage ? BUILD_STAGE_TEXT[s.status.build.stage] ?? s.status.build.stage : null,
+    busy: s.busy || null,
+    waiting: s.waiting,
+    downloaded: s.downloaded,
+    compiling: updates.compiling(),
+    prepared: updates.prepared(),
+    error: s.error || null,
+    notice: s.notice || null,
+  };
+}
+
+async function updatesCommand(params: Params): Promise<unknown> {
+  const action = text(params, "action") ?? "status";
+  if (!["status", "prepare", "apply"].includes(action)) throw new Error("updates action must be status, prepare or apply");
+  await updates.refresh();
+  if (action === "status") return updatesSnapshot();
+  const snap = () => updates.snapshot();
+  if (action === "prepare") {
+    if (!snap().release) await updates.check();
+    const release = snap().release;
+    if (!release?.available) return updatesSnapshot();
+    if (snap().busy) return updatesSnapshot();
+    if (release.kind === "hot") {
+      if (!snap().downloaded) await updates.download();
+    } else if (release.kind === "source" && !updates.prepared() && !updates.compiling()) {
+      if (release.binary?.state === "ready" && !snap().downloaded) await updates.download();
+      else await updates.build();
+    }
+    return updatesSnapshot();
+  }
+  // apply: mirrors the visible «Установить» control, including the durable wait
+  // for authoritative idle; a running agent self-report is resolved by that gate.
+  const release = snap().release;
+  if (!release?.available || !release.kind) return { ...updatesSnapshot(), applied: false, reason: "up-to-date" };
+  if (release.kind === "hot" && !snap().downloaded) return { ...updatesSnapshot(), applied: false, reason: "not-prepared" };
+  if (release.kind === "source" && !updates.prepared()) return { ...updatesSnapshot(), applied: false, reason: "not-prepared" };
+  const running = agentsRunning();
+  await updates.install(running);
+  const after = snap();
+  const waiting = after.waiting && release.kind === "source";
+  return { ...updatesSnapshot(), applied: !running && !waiting, waiting, reason: waiting ? "agents-running" : null };
+}
+
 async function execute(method: string, raw: unknown): Promise<unknown> {
   const params = object(raw ?? {});
   switch (method) {
     case "schedule": return scheduleCommand(params);
+    case "updates": return updatesCommand(params);
     case "status":
       return status();
     case "projects":

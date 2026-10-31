@@ -500,6 +500,7 @@ fn call_desktop(method: &str, params: Value) -> Result<Value, String> {
 fn tools() -> Value {
     json!([
       {"name":"desktop_schedule","description":"Manage user-authorized wake-ups in an explicit Enki session, without selecting or interrupting it. For monitoring use repeat and choose a sensible interval; once for a delayed task. Use a stable request_key to prevent duplicates. Never claim a timer is saved until this tool succeeds. List/delete timers when asked to stop watching. All times are Unix milliseconds. Requires running Enki (including tray); no execution after full quit.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","create","remove","pause","resume"]},"directory":{"type":"string"},"session_id":{"type":"string"},"id":{"type":"string"},"title":{"type":"string","maxLength":120},"prompt":{"type":"string","maxLength":20000},"minutes":{"type":"integer","minimum":1,"maximum":10080},"mode":{"type":"string","enum":["once","repeat"]},"run_at":{"type":"number"},"request_key":{"type":"string","maxLength":128},"provider_id":{"type":"string"},"model_id":{"type":"string"}},"required":["action","directory","session_id"],"additionalProperties":false}},
+      {"name":"desktop_updates","description":"Check, prepare and apply Enki's own signed updates without the mouse. action=status reads the current release/build state; prepare starts the verified download or local source build (idempotent, poll status until prepared or stage=ready); apply behaves like the visible Install control: hot updates reload the interface, source updates wait durably for authoritative idle and then restart the app. Use apply as the final action of a completed update flow; a restart interrupts visible chats, durable state is preserved.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["status","prepare","apply"],"default":"status"}},"additionalProperties":false}},
       {"name":"desktop_status","description":"Read Enki connection, visible workspace/chat, model, run state and pending user interactions.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
       {"name":"desktop_projects","description":"Refresh and list projects known to the connected Enki instance.","inputSchema":{"type":"object","properties":{"refresh":{"type":"boolean","default":true}},"additionalProperties":false}},
       {"name":"desktop_select","description":"Select a project directory and optionally open one of its sessions in the visible desktop UI.","inputSchema":{"type":"object","properties":{"directory":{"type":"string"},"session_id":{"type":"string"}},"required":["directory"],"additionalProperties":false}},
@@ -523,6 +524,7 @@ fn tools() -> Value {
 fn tool_method(name: &str) -> Option<&'static str> {
     Some(match name {
         "desktop_schedule" => "schedule",
+        "desktop_updates" => "updates",
         "desktop_status" => "status",
         "desktop_projects" => "projects",
         "desktop_select" => "select",
@@ -617,6 +619,18 @@ mod tests {
             .unwrap();
         assert!(tools.iter().any(|t| t["name"] == "desktop_send"));
         assert!(tools.iter().any(|t| t["name"] == "desktop_wait"));
+        let updates = tools
+            .iter()
+            .find(|tool| tool["name"] == "desktop_updates")
+            .expect("desktop_updates is exposed");
+        assert_eq!(
+            updates
+                .pointer("/inputSchema/properties/action/enum")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(tool_method("desktop_updates"), Some("updates"));
         assert!(tools.iter().any(|t| t["name"] == "desktop_managed_runs"));
         assert!(tools
             .iter()
