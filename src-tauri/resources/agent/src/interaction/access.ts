@@ -14,8 +14,6 @@ export type DefaultPolicy = "ask" | "read" | "full";
 
 /** Tools that only observe; asking about them would train users to click "yes". */
 const READ_ONLY = new Set(["read", "ls", "list", "find", "glob", "grep", "search", "tree", "lsp_diagnostics", "lsp_hover", "lsp_definition"]);
-/** Tools that can change files, run commands or reach the network. */
-const MUTATING = new Set(["write", "edit", "multiedit", "multi_edit", "apply_patch", "patch", "bash", "powershell", "shell", "run", "fetch", "web_fetch", "download"]);
 
 /**
  * Enki's own project tools (extensions/project-tools.ts). Applied ONLY when the
@@ -28,7 +26,6 @@ const PROJECT_TOOLS = new Map([
 ]);
 
 export function isReadOnlyTool(tool: string): boolean { return READ_ONLY.has(tool); }
-export function isMutatingTool(tool: string): boolean { return MUTATING.has(tool); }
 
 /** Permission vocabulary shared with the stored rules. */
 export function permissionFor(tool: string): string {

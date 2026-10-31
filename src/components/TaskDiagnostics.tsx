@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { taskDiagnostics } from '../diagnostics/tasks';
 import type { SessionChatState } from '../state/chatReducer';
-const time = (ms: number | null) => ms == null ? 'Не измерено' : `${(ms/1000).toFixed(1)} с`;
+import { secondsText } from '../util/duration';
+const time = (ms: number | null) => ms == null ? 'Не измерено' : secondsText(ms);
 const states = {running:'Выполняется',ended:'Агент завершил ответ',error:'Ошибка',aborted:'Остановлено',unknown:'Недостаточно данных'};
 export function TaskDiagnostics({chat}:{chat?: SessionChatState}) {
   const [selected,setSelected] = useState('');

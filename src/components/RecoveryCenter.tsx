@@ -6,13 +6,6 @@ import { store, useAppState } from '../state/store';
 import { Icon } from './Icon';
 
 const labels = {prepared:'Не отправлено',dispatching:'Доставка не подтверждена',uncertain:'Доставка не подтверждена',accepted:'Доставлено',refused:'Отклонено агентом',cancelled:'Отменено'};
-export function RecoveryButton() {
-  const s = useAppState();
-  const [open, setOpen] = useState(false);
-  const workspace = s.prefs.workspaceKey ?? s.prefs.endpoint;
-  return <><button className="icon-btn" aria-label="Требует внимания и журнал отправок" title="Требует внимания" onClick={() => setOpen(true)}><Icon name="context" size={17}/></button>
-    {open && <RecoveryCenter key={workspace} workspace={workspace} close={() => setOpen(false)}/>}</>;
-}
 export function RecoveryCenter({workspace, close}:{workspace:string; close:()=>void}) {
   useAppState();
   const [records,setRecords] = useState<Operation[]>([]), [notice,setNotice] = useState(''), [busy,setBusy] = useState(''), [all,setAll] = useState(false);

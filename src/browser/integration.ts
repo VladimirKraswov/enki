@@ -4,7 +4,6 @@ import { browserEnabled, browserNodeProgram } from "./preferences";
 
 import { browserEnvironment, type BrowserEnvironment } from "./environment";
 
-export const BROWSER_MCP = "desktop_browser";
 export interface BrowserPreferences { enabled?: boolean; nodeProgram?: string; mode?: "fast" | "human"; taskEffort?: "low" | "medium"; environment?: Partial<BrowserEnvironment> }
 export interface BrowserStatus {
   supported: boolean; installed: boolean; running: boolean; browserOpen?: boolean;

@@ -11,8 +11,6 @@ import type { RuntimeConnection } from "./runtime/client";
 import { localConnection, remoteConnection } from "./runtime/connection";
 import { LOCAL_WORKSPACE, RUNTIME_AGENT_ID } from "./runtime/ids";
 
-export const DEFAULT_BACKEND_ID = RUNTIME_AGENT_ID;
-
 export type RuntimeTarget =
   | { kind: "local" }
   | { kind: "remote"; host: RemoteHost };

@@ -50,7 +50,7 @@ export type UiStreamMessage =
   | { type: "ui.event"; seq: number; event: { type: string; properties: Record<string, unknown> } }
   | { type: "ui.invalid"; what: "reset" | "frame" };
 
-function record(value: unknown): value is Record<string, unknown> {
+export function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function isDraft(value: unknown): value is DraftSnapshot {

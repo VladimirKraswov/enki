@@ -1,5 +1,4 @@
 /** Transport data only. Factories, Components and generic results never cross it. */
-export const PLUGIN_UI_PROTOCOL_VERSION = 1 as const;
 export const MAX_INPUT_BYTES = 64 * 1024;
 export const MAX_FRAME_BYTES = 64 * 1024;
 export const MAX_QUEUED_BYTES = 1024 * 1024;

@@ -25,20 +25,16 @@ import {
   VERSION,
   type AgentSession,
   type AgentSessionEvent,
-  type CompactionResult,
-  type ContextUsage,
   type ExtensionAPI,
-  type ExtensionContext,
   type ExtensionUIContext,
   type InlineExtension,
   type SessionEntry,
   type SessionInfo,
-  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getSupportedThinkingLevels, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type {
-  Api, AssistantMessage, AuthOperationOptions, Credential, CredentialInfo, CredentialStore, ImageContent, Model, TextContent,
+  Api, AssistantMessage, AuthOperationOptions, Credential, CredentialInfo, CredentialStore, ImageContent, Model,
   ToolResultMessage, UserMessage,
 } from "@earendil-works/pi-ai";
 import fs from "node:fs";
@@ -59,17 +55,12 @@ export type SdkImage = ImageContent;
 export type SdkThinkingLevel = ThinkingLevel;
 export type SdkExtension = InlineExtension;
 export type SdkExtensionApi = ExtensionAPI;
-export type SdkExtensionContext = ExtensionContext;
 export type SdkUiContext = ExtensionUIContext;
-export type SdkCompaction = CompactionResult;
-export type SdkContextUsage = ContextUsage;
-export type SdkToolDefinition = ToolDefinition;
 export type SdkModelRuntime = ModelRuntime;
 export type SdkMessage = AgentMessage;
 export type SdkAssistantMessage = AssistantMessage;
 export type SdkUserMessage = UserMessage;
 export type SdkToolResultMessage = ToolResultMessage;
-export type SdkTextContent = TextContent;
 export type SdkCredentialStore = CredentialStore;
 export type SdkCredential = Credential;
 export type SdkCredentialInfo = CredentialInfo;
@@ -79,11 +70,6 @@ export const THINKING_LEVELS: readonly SdkThinkingLevel[] = ["off", "minimal", "
 
 export function isThinkingLevel(value: unknown): value is SdkThinkingLevel {
   return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
-}
-
-/** The installed package version, compared against the contract pin at startup. */
-export function installedSdkVersion(): string {
-  return VERSION;
 }
 
 export function assertPinnedSdk(): void {
@@ -575,10 +561,6 @@ export function modelThinkingLevels(model: SdkModel): string[] {
 export function trustStore(agentDir: string): { get(cwd: string): boolean | null; set(cwd: string, decision: boolean | null): void } {
   const store = new ProjectTrustStore(agentDir);
   return { get: (cwd) => store.get(cwd), set: (cwd, decision) => store.set(cwd, decision) };
-}
-
-export function supportedThinkingLevels(session: SdkSession): SdkThinkingLevel[] {
-  return session.getAvailableThinkingLevels();
 }
 
 export type SdkUsageSnapshot = { tokens: number | null; contextWindow: number; percent: number | null };

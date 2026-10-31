@@ -49,11 +49,6 @@ export interface Session {
   workshop?: boolean;
 }
 
-/** Imported OpenCode history is shown read-only until explicitly continued. */
-export function isReadOnlySession(session: Pick<Session, "origin"> | undefined | null): boolean {
-  return session?.origin?.kind === "opencode";
-}
-
 export type SessionStatus =
   | { type: "idle" }
   | { type: "busy" }
@@ -238,13 +233,6 @@ export interface VcsInfo {
   [key: string]: unknown;
 }
 
-export interface VcsFileStatus {
-  file: string;
-  added?: number;
-  removed?: number;
-  status?: string;
-}
-
 export interface SessionDiffFile {
   file: string;
   before?: string;
@@ -263,14 +251,6 @@ export interface FileEntry {
   absolute: string;
   type: "file" | "directory";
   ignored?: boolean;
-}
-
-export interface PtyInfo {
-  id: string;
-  title?: string;
-  args?: string[];
-  cwd?: string;
-  status?: "running" | "exited" | string;
 }
 
 export interface ServerEvent {

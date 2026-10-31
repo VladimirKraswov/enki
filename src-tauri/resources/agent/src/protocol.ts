@@ -422,11 +422,6 @@ export interface LegacyArchiveDTO {
   sessions: number;
 }
 
-export interface MigrationStatusDTO {
-  archives: LegacyArchiveDTO[];
-  journal: Array<{ id: string; kind: string; state: string; detail?: string; updatedAt: number }>;
-}
-
 // ------------------------------------------------------------- helpers
 
 /** Bounded identifier accepted for sessions, commands, queue items and schedules. */

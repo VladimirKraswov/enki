@@ -40,10 +40,3 @@ export function createPluginUiBridge(ports: PluginHostPorts): ExtensionUIContext
     setToolsExpanded: expanded => ports.state.setToolsExpanded(expanded),
   };
 }
-
-/** No SDK default command actions. Calling code must wire the real per-session runtime. */
-export async function bindPluginUi(session: AgentSession, ports: PluginHostPorts): Promise<void> {
-  await session.bindExtensions({ uiContext: createPluginUiBridge(ports), mode: "tui",
-    commandContextActions: ports.commands, abortHandler: ports.lifecycle.abortHandler,
-    shutdownHandler: ports.lifecycle.shutdownHandler, onError: ports.lifecycle.onError });
-}

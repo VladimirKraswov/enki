@@ -57,8 +57,3 @@ export function hasOverlayWindowControls(p: DesktopPlatform = platform()): boole
 export function modKeyLabel(p: DesktopPlatform = platform()): string {
   return p === "macos" ? "⌘" : "Ctrl";
 }
-
-/** Short name for user-facing text ("сохраняется на этом Mac" vs "…компьютере"). */
-export function platformName(p: DesktopPlatform = platform()): string {
-  return p === "macos" ? "Mac" : p === "windows" ? "Windows" : p === "linux" ? "Linux" : "компьютере";
-}

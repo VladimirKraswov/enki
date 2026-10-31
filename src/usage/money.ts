@@ -1,4 +1,7 @@
 import type { UsageCache, UsageFact } from "./cache";
+import { dayKeyOf } from "./metrics";
+
+export { dayKeyOf };
 
 /**
  * Money accounting on top of the usage cache. Paid DeepSeek replies are priced
@@ -100,11 +103,6 @@ export interface LedgerDoc {
 export const emptyLedger = (): LedgerDoc => ({ schema: 1, updatedAt: 0, days: {} });
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
-
-export function dayKeyOf(timeMs: number): string {
-  const date = new Date(timeMs);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
 
 interface Bucket {
   input: number;

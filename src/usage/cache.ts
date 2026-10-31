@@ -1,6 +1,6 @@
 import type { MessageResponse, Session } from "../api/types";
 import type { UsageSource } from "./metrics";
-import { periodStart, type UsageEngine, type UsagePeriod, type UsageReport } from "./metrics";
+import { dayKeyOf, finite, periodStart, type UsageEngine, type UsagePeriod, type UsageReport } from "./metrics";
 
 /**
  * Incremental usage cache. The expensive part of the usage view is pulling every
@@ -32,9 +32,6 @@ export const CACHE_FILE = "usage-cache.json";
 export const LEDGER_FILE = "usage-ledger.json";
 
 export const emptyCache = (): UsageCache => ({ schema: 1, sessions: {}, messages: {} });
-
-const finite = (value: unknown) =>
-  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 
 export function factOf(message: MessageResponse, sessionID: string, engine: UsageEngine): UsageFact | null {
   const info = message.info;
@@ -144,11 +141,6 @@ export async function refreshUsageCache(
   return { cache: next, changed, refreshedSessions: refreshed, failures };
 }
 
-const dayKey = (time: number) => {
-  const date = new Date(time);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-};
-
 const emptyRow = () => ({
   total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, other: 0, reasoning: 0, replies: 0,
 });
@@ -193,7 +185,7 @@ export function reportFromCache(
     entry.row.replies++;
     entry.sessions.add(fact.sid);
     sessionsInWindow.add(fact.sid);
-    days.set(dayKey(fact.t), (days.get(dayKey(fact.t)) ?? 0) + total);
+    days.set(dayKeyOf(fact.t), (days.get(dayKeyOf(fact.t)) ?? 0) + total);
   }
   const foundSessions = Object.keys(cache.sessions).length;
   return {

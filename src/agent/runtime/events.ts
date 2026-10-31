@@ -5,7 +5,7 @@
 // reconnect replays exactly what was missed. When the runtime instance changed
 // (restart) or the cursor fell out of the retained journal (`stream.reset`),
 // the caller must reconcile from a fresh snapshot instead of trusting replay.
-import type { EventEnvelope, ServerEventDTO } from "../../../src-tauri/resources/agent/src/protocol";
+import type { EventEnvelope } from "../../../src-tauri/resources/agent/src/protocol";
 import { EVENT_FRAME_CHARACTERS } from "../../../src-tauri/resources/agent/src/protocol";
 import { SseDecoder, SseFrameTooLarge } from "../../api/sse";
 import type { RuntimeClient } from "./client";
@@ -174,6 +174,3 @@ export async function runRuntimeStream(opts: RuntimeStreamOptions): Promise<void
     }
   } finally { opts.onState("closed"); }
 }
-
-/** Runtime event (`ServerEventDTO`) in the shape the chat reducer consumes. */
-export type RuntimeEvent = ServerEventDTO;

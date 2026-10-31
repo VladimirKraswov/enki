@@ -11,7 +11,7 @@ import { sameScope } from "../../../../src-tauri/resources/agent/src/plugin-ui/p
 import { SseDecoder } from "../../../api/sse";
 import type { RuntimeClient } from "../client";
 import type { SurfaceAttachmentHandle, SurfaceHandlers, SurfacePort } from "./surfaceController";
-import { isUiSnapshot, parseUiMessage, type PendingDraftChange, type PendingSubmission, type UiScope, type UiSnapshot, type UiStreamMessage, type UiSurfaceState } from "./types";
+import { isUiSnapshot, parseUiMessage, record, type PendingDraftChange, type PendingSubmission, type UiScope, type UiSnapshot, type UiStreamMessage, type UiSurfaceState } from "./types";
 
 export type UiPhase = "connecting" | "waiting" | "live" | "reconnecting" | "closed" | "error";
 export interface UiMode { custom: boolean; terminalInput: boolean }
@@ -29,7 +29,6 @@ export interface PluginUiView {
 }
 
 const MAX_FAILURES = 6;
-const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
 export class PluginUiSession implements SurfacePort {
   private view: PluginUiView = { phase: "connecting", detail: "Подключаю интерфейс расширений…", snapshot: null, mode: { custom: false, terminalInput: false }, draftRevision: -1, generation: 0, notices: [] };

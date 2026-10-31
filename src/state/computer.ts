@@ -1,4 +1,3 @@
-export const COMPUTER_MCP="cua_desktop";
 export type ComputerStatus={platform?:string;supported?:boolean;installed:boolean;enabled:boolean;version:string;command:string;skillPath:string;
   permissions:{accessibility?:boolean;screen_recording?:boolean;screen_recording_capturable?:boolean|null;daemon_running?:boolean;status?:string;refusal?:{code?:string};uia?:boolean;interactive_session?:boolean;windows_visible?:boolean}};
 export function computerReadinessError(status:ComputerStatus):string|undefined{

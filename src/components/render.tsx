@@ -7,7 +7,6 @@ import type {
   AssistantMessage,
   MessagePart,
   PermissionRequest,
-  Session,
   UserMessage,
 } from "../api/types";
 import { store, useAppState, useAppSelector } from "../state/store";
@@ -402,22 +401,3 @@ export function PermissionCard({
 }
 
 export {QuestionCard} from "./QuestionCard";
-
-export function sessionStatusLine(
-  s: ReturnType<typeof useAppState>,
-  session: Session | null,
-): string | null {
-  if (!session) return null;
-  const st = s.chat.sessions[session.id]?.status ?? s.statuses[session.id];
-  if (!st) return null;
-  switch (st.type) {
-    case "busy":
-      return "Выполняется…";
-    case "retry":
-      return `Повтор (попытка ${st.attempt ?? 1})${st.message ? `: ${st.message}` : ""}`;
-    case "waiting":
-      return "Ожидает ответа";
-    default:
-      return null;
-  }
-}

@@ -6,7 +6,8 @@ import { store, useAppState } from "../state/store";
 import { browserEnabled } from "../browser/preferences";
 import { isLocalComputer } from "../state/computer";
 import { isNative } from "../native/platform";
-const duration = (value: number | null | undefined) => value == null ? "—" : `${(value / 1000).toFixed(1)} с`;
+import { secondsText } from "../util/duration";
+const duration = (value: number | null | undefined) => value == null ? "—" : secondsText(value);
 export function BrowserPerformance() {
   const app = useAppState(), [metrics,setMetrics] = useState<Metrics | null>(null), [busy,setBusy] = useState(false), [error,setError] = useState("");
   const turn = currentTurnPerformance(app.activeSessionId ? app.chat.sessions[app.activeSessionId] : undefined);

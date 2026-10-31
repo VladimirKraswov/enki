@@ -50,12 +50,14 @@ export function periodStart(period: UsagePeriod, now: number): number {
   return localMidnight.getTime();
 }
 
-const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+/** A billable token count: a finite positive number, otherwise zero. */
+export const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 const empty = (): UsageCounters => ({ total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, other: 0, reasoning: 0, replies: 0 });
-const dayKey = (time: number) => {
+/** Local calendar day key; the same format is persisted in the usage cache and the money ledger. */
+export function dayKeyOf(time: number): string {
   const date = new Date(time);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-};
+}
 
 /** The model belongs to the assistant response, not the session's current selection. */
 export function addMessageUsage(target: UsageCounters, message: MessageResponse): number {
@@ -137,7 +139,7 @@ export async function scanUsage(
             const amount = addMessageUsage(row, message);
             if (!amount) continue;
             addMessageUsage(totals, message);
-            days.set(dayKey(time), (days.get(dayKey(time)) ?? 0) + amount);
+            days.set(dayKeyOf(time), (days.get(dayKeyOf(time)) ?? 0) + amount);
             sessionModels.add(key);
           }
           before = page.before;
