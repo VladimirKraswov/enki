@@ -67,6 +67,8 @@ export function Composer() {
   const switching = isSwitching(switchState);
   const providers = store.configuredProvidersWithModels();
   const session = store.activeSession() ?? null;
+  const archive = !!session && store.isLegacySession(session.id);
+  const continuing = !!session && store.isArchiveContinuing(session.id);
   const status = session
     ? store.activityStatus(session.id)
     : s.ui.sending
@@ -200,6 +202,7 @@ export function Composer() {
   }, [draft]);
 
   const send = () => {
+    if (archive) return;
     const text = store.getDraft();
     // s.ui.sending also blocks a second Enter while the first request awaits acknowledgement.
     if (queueEdit) {
@@ -245,6 +248,14 @@ export function Composer() {
           Связь с чатом временно прервалась. Восстанавливаем автоматически — повторять запрос не нужно.
         </div>
       )}
+      {archive && session && <div className="archive-composer-notice" role="note">
+        <div><strong>Этот чат доступен только для чтения</strong>
+          <p>Откройте рабочее продолжение с этой историей. Черновик и вложения перенесутся; запрос не отправится автоматически.</p></div>
+        <button type="button" className="btn" aria-label="Продолжить чат" disabled={!connected || continuing || s.ui.runtimeLoading}
+          onClick={() => void store.continueLegacySession(session)}>
+          {continuing ? "Открываю продолжение…" : "Продолжить чат"}
+        </button>
+      </div>}
       {s.ui.sendError && (
         <div className="composer-error" role="alert">
           {s.ui.sendError}
@@ -396,6 +407,7 @@ export function Composer() {
             aria-label={queueEdit ? "Применить изменения" : running ? "Добавить в очередь" : "Send prompt"}
             title={queueEdit ? "Применить изменения к запросу в очереди" : undefined}
             disabled={
+              archive ||
               (!queueEdit && !connected) ||
               (!draft.trim() && !attachments.length && !kept.length) ||
               s.ui.sending ||

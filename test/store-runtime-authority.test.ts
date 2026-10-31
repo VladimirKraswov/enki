@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 // Store ↔ runtime authority, over the shared route fixture.
 // - Lost-ACK reconciliation (Store.reconcileOperation): only the exact ledger
 //   that received a send may disprove it; a pre-2.0 (OpenCode / Pi CLI) record

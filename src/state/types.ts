@@ -50,6 +50,7 @@ export interface UiState {
   historyLoading: boolean;
   historyError: string | null;
   sending: boolean;
+  archiveContinuing?: string | null;
   sendError: string | null;
   vcs: VcsInfo | null;
   settingsOpen: boolean;

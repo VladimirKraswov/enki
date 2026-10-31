@@ -210,15 +210,55 @@ class Store {
    * new Pi SDK session seeded with the mapped archive entries; the archive is
    * never rewritten and no old prompt is replayed. Nothing is sent here.
    */
-  async continueLegacySession(session: Session): Promise<boolean> {
+  private archiveContinuations = new Map<string, Promise<boolean>>();
+  isArchiveContinuing(sessionId: string): boolean {
+    return this.state.ui.archiveContinuing === `${this.connectionGeneration}:${sessionId}`;
+  }
+  continueLegacySession(session: Session): Promise<boolean> {
+    if (session.origin?.kind !== "opencode") return Promise.resolve(false);
+    const gen = this.connectionGeneration, key = `${gen}:${session.id}`;
+    const pending = this.archiveContinuations.get(key);
+    if (pending) return pending;
+    this.patchUi({ archiveContinuing: key, sendError: null });
+    const flight = this.prepareArchiveContinuation(session).finally(() => {
+      this.archiveContinuations.delete(key);
+      if (this.state.ui.archiveContinuing === key)
+        this.patchUi({ archiveContinuing: null });
+    });
+    this.archiveContinuations.set(key, flight);
+    return flight;
+  }
+
+  private async prepareArchiveContinuation(session: Session): Promise<boolean> {
     if (session.origin?.kind !== "opencode") return false;
     const backend = this.backend, gen = this.connectionGeneration;
+    const selection = this.state.activeSessionId, directoryGen = this.directoryGeneration;
+    const workspace = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
+    const stillHere = () => gen === this.connectionGeneration && backend === this.runtime;
+    const sameSelection = () => selection === this.state.activeSessionId && directoryGen === this.directoryGeneration;
     try {
       const created = await backend.continueLegacy(session.id, session.directory);
-      if (backend !== this.runtime || gen !== this.connectionGeneration) return false;
+      if (!stillHere()) return false;
+      // The SDK owns the idempotent history continuation. Only pending local
+      // input changes scope here; no historical or new prompt is executed.
+      await attachmentDrafts.move(attachmentScope(workspace, session.directory, session.id),
+        attachmentScope(workspace, created.directory, created.id));
+      if (!stillHere()) return false;
       this.mutate((x) => ({
         prefs: {
           ...x.prefs,
+          drafts: (() => {
+            const drafts = { ...x.prefs.drafts }, from = draftKey(session.id, session.directory), to = draftKey(created.id, created.directory);
+            const text = drafts[from] ?? "", existing = drafts[to] ?? "";
+            if (text) drafts[to] = existing && existing !== text ? `${existing}\n\n${text}` : text;
+            delete drafts[from];
+            return drafts;
+          })(),
+          modelChoice: {
+            ...x.prefs.modelChoice,
+            ...(x.prefs.modelChoice[`session:${session.id}`] && !x.prefs.modelChoice[`session:${created.id}`]
+              ? { [`session:${created.id}`]: x.prefs.modelChoice[`session:${session.id}`] } : {}),
+          },
           handoffOrigins: {
             ...x.prefs.handoffOrigins,
             [created.id]: { from: session.id, fromEngine: "opencode", title: session.title, directory: session.directory, omitted: 0 },
@@ -229,11 +269,14 @@ class Store {
       this.persistPrefs();
       this.rememberActivitySession(created);
       this.updateSidebarSession(created);
-      await this.selectSession(created.id);
-      this.patchUi({ toast: "Создан новый чат с историей из архива. Исходный чат не изменён." });
+      if (sameSelection()) {
+        await this.selectSession(created.id);
+        if (stillHere() && this.state.activeSessionId === created.id)
+          this.patchUi({ sendError: null, toast: "Продолжение открыто. Черновик и вложения перенесены; отправьте запрос, когда будете готовы." });
+      }
       return true;
     } catch (e) {
-      this.patchUi({ toast: `Не удалось продолжить чат из архива: ${errText(e)}` });
+      if (stillHere() && sameSelection()) this.patchUi({ sendError: `Не удалось продолжить чат: ${errText(e)}. Черновик сохранён.` });
       return false;
     }
   }

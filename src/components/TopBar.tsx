@@ -25,7 +25,7 @@ export function TopBar() {
     {archive && <span className="execution-badge" title="Этот чат доступен только для чтения">Архив</span>}
     <span className="spacer"/>
     <div className="chat-toolbar" aria-label="Инструменты чата">
-      {archive && session && <button className="icon-btn" aria-label="Продолжить чат" title="Создать рабочее продолжение с историей архива" disabled={!ready} onClick={() => void store.continueLegacySession(session)}><Icon name="handoff" size={17}/></button>}
+      {archive && session && <button className="icon-btn" aria-label="Продолжить чат" title="Создать рабочее продолжение с историей архива" disabled={!ready || store.isArchiveContinuing(session.id)} onClick={() => void store.continueLegacySession(session)}><Icon name="handoff" size={17}/></button>}
       <button ref={anchor} className={`icon-btn${menu ? " on" : ""}`} aria-label="Действия чата" title="Действия чата" aria-haspopup="menu" aria-expanded={menu}
         onClick={() => { setMenu(!menu); store.setUi({ contextOpen: false }); }}><Icon name="dots" size={18}/></button>
       <button className={`icon-btn${s.ui.contextOpen ? " on" : ""}`} aria-label="Контекст задачи" aria-expanded={s.ui.contextOpen} aria-controls={s.ui.contextOpen ? CONTEXT_PANEL_ID : undefined}
