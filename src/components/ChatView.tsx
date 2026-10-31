@@ -199,6 +199,16 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
           </div>;
         })}
         {end < order.length && <button className="history-more" onClick={newer}>Следующие сообщения · {order.length - end}<Icon name="chevron" size={16}/></button>}
+        {sessionId && (store.notSent.get(sessionId) ?? []).map(n => (
+          <div className="history-message" key={`not-sent-${n.id}`}>
+            <div className="msg-user"><div className="msg-body"><div className="msg-text">{n.text.length > 4000 ? `${n.text.slice(0, 4000)}…` : n.text}</div></div></div>
+            <div className="status-line" role="alert">
+              {n.state === 'refused' ? `Запрос не отправлен: ${n.reason}` : `Запрос отменён до выполнения: ${n.reason}`}
+              {' '}<button className="btn small" onClick={() => void store.returnNotSent(sessionId, n.record)}>Вернуть в черновик</button>{' '}
+              <button className="btn small ghost" onClick={() => store.dismissNotSent(sessionId, n.id)}>Скрыть</button>
+            </div>
+          </div>
+        ))}
         {bannerError && <div className="msg-error" role="alert">{bannerError}</div>}
         {/* Without a live stream the alert below replaces the spinner: running is unconfirmed. */}
         {!unconfirmed && (question || permission) && <div className="status-line waiting-for-user" role="status">{permission ? 'Ожидает вашего разрешения' : 'Ожидает вашего ответа'}</div>}

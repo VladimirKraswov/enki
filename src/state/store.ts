@@ -103,6 +103,9 @@ export const RETAINED_TRANSCRIPTS = 12;
 export const RETAINED_STREAM_SLOTS = 12;
 /** Chats whose last shared-MCP status is kept (the open chat reports again on use). */
 export const MCP_STATUS_LIMIT = 64;
+
+/** How long a pre-dispatch refusal stays visible in its chat before it must be handled. */
+const NOT_SENT_WINDOW_MS = 14 * 24 * 3600 * 1000;
 const EMPTY_MCP_STATUSES: RuntimeServerStatus[] = [];
 
 /** Runtime compaction settings → the context meter's thresholds. */
@@ -573,6 +576,7 @@ class Store {
       }
       for (const listener of this.transitionListeners) listener(progress);
     },
+    commandRefused: refusal => void this.settlePreDispatchRefusal(refusal),
     // Delivered only from the current runtime's streams (both are generation-fenced).
     settings: settings => {
       this.mutate({ compaction: compactionOf(settings) });
@@ -1704,6 +1708,76 @@ class Store {
       this.historyLoaded.delete(sessionId); this.historyLoaded.add(sessionId);
     }
     if (!this.state.ui.historyError) this.markReadIfViewing();
+    void this.refreshNotSent(sessionId);
+  }
+
+  // ---------- prompts refused before dispatch ----------
+
+  /**
+   * A send the runtime durably accepted and then refused before the SDK saw it
+   * (a Hub failure during model preparation, a lost reservation). The ledger
+   * keeps the exact input; the operation journal record says where it belongs.
+   * These notices are derived from the durable journal on every view, so they
+   * survive navigation and restarts, and disappear only when returned to the
+   * draft or explicitly dismissed.
+   */
+  readonly notSent = new Map<string, { id: string; text: string; state: 'refused' | 'cancelled'; reason: string; record: Operation }[]>();
+  private readonly notSentReasons = new Map<string, string>();
+  private async settlePreDispatchRefusal(refusal: { id: string; sessionID: string; state: 'rejected' | 'cancelled'; error?: string }): Promise<void> {
+    const here = this.state.runtime?.hostId ? `runtime:${this.state.runtime.hostId}` : null;
+    if (!here) return;
+    let records: Operation[];
+    try { records = await operationJournal.list(this.state.prefs.workspaceKey ?? this.state.prefs.endpoint); }
+    catch { return; }
+    const record = records.find(r => r.id === refusal.id && r.sessionId === refusal.sessionID
+      && r.state === 'accepted' && ledgerAuthority(r) === here);
+    if (!record) return;
+    if (!await operationJournal.settlePreDispatch(record, refusal.state === 'rejected' ? 'refused' : 'cancelled')) return;
+    this.notSentReasons.set(record.id, refusal.error ?? "");
+    void this.refreshNotSent(refusal.sessionID);
+  }
+  async refreshNotSent(sessionId: string | null): Promise<void> {
+    if (!sessionId) return;
+    const workspace = this.state.prefs.workspaceKey ?? this.state.prefs.endpoint;
+    const here = this.state.runtime?.hostId ? `runtime:${this.state.runtime.hostId}` : null;
+    const chat = this.state.chat.sessions[sessionId];
+    let out: { id: string; text: string; state: 'refused' | 'cancelled'; reason: string; record: Operation }[] = [];
+    try {
+      const records = await operationJournal.list(workspace);
+      for (const record of records) {
+        if (record.sessionId !== sessionId || (record.state !== 'refused' && record.state !== 'cancelled')) continue;
+        if (Date.now() - record.updatedAt > NOT_SENT_WINDOW_MS) continue;
+        if ((this.state.prefs.recoveredOperations ?? []).includes(record.id)) continue;
+        if ((this.state.prefs.dismissedOperations ?? []).includes(record.id)) continue;
+        // Positive proof in the transcript outranks everything: the message is there.
+        if (chat?.messageOrder.includes(record.id)) continue;
+        const fallback = record.state === 'cancelled' ? 'отменено до выполнения' : 'отклонено до выполнения';
+        let reason = this.notSentReasons.get(record.id)?.trim() || undefined;
+        if (reason === undefined && ledgerAuthority(record) === here && here) {
+          try { const receipt = await this.backend.client.receipt(record.id); reason = typeof receipt.error === 'string' && receipt.error.trim() ? receipt.error.trim() : undefined; }
+          catch { /* the durable refusal stands; only the wording degrades */ }
+        }
+        out.push({ id: record.id, text: record.text, state: record.state, reason: reason ?? fallback, record });
+      }
+    } catch { return; }
+    if (out.length) this.notSent.set(sessionId, out); else this.notSent.delete(sessionId);
+    this.mutate({});
+  }
+  dismissNotSent(sessionId: string, id: string): void {
+    this.mutate(s => ({ prefs: { ...s.prefs, dismissedOperations: [...new Set([...(s.prefs.dismissedOperations ?? []), id])] } }));
+    this.persistPrefs();
+    const list = this.notSent.get(sessionId)?.filter(n => n.id !== id);
+    if (list?.length) this.notSent.set(sessionId, list); else this.notSent.delete(sessionId);
+    this.mutate({});
+  }
+  async returnNotSent(sessionId: string, record: Operation): Promise<void> {
+    try {
+      const message = await this.restoreOperationDraft(record);
+      this.patchUi({ toast: message });
+      await this.refreshNotSent(sessionId);
+    } catch (error) {
+      this.patchUi({ toast: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   /**
@@ -3836,6 +3910,12 @@ export function applyTheme(theme: Prefs["theme"]): void {
   root.style.colorScheme = effective;
   applyAppearance(store.state.prefs.appearance);
 }
+
+const stopNotSentWatch = operationJournal.subscribe(() => {
+  void store.refreshNotSent(store.state.activeSessionId);
+  for (const sessionId of [...store.notSent.keys()]) if (sessionId !== store.state.activeSessionId) void store.refreshNotSent(sessionId);
+});
+void stopNotSentWatch;
 
 if (typeof window !== "undefined") {
   window

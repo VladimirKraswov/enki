@@ -7,7 +7,7 @@ vi.mock('../src/state/store',()=>({
  useAppState:()=>useSyncExternalStore(cb=>{fixture.listeners.add(cb);return()=>fixture.listeners.delete(cb);},()=>fixture.state),
  // Mirrors the actual store port ChatView uses (single runtime: engine tag 'pi';
  // isLegacySession decides whether live stream status applies).
- store:{get state(){return fixture.state;},pendingInteraction:()=>fixture.state?.pending??({permissions:[],questions:[]}),setConversationAtBottom:()=>{},engineIdFor:()=> 'pi',handoffOrigin:()=>null,isPiSession:()=>true,
+ store:{get state(){return fixture.state;},pendingInteraction:()=>fixture.state?.pending??({permissions:[],questions:[]}),setConversationAtBottom:()=>{},engineIdFor:()=> 'pi',handoffOrigin:()=>null,isPiSession:()=>true,notSent:new Map(),dismissNotSent:()=>{},returnNotSent:async()=>{},
  isLegacySession:(id:string|null)=>!!id&&!!fixture.state?.legacy?.includes(id),isProjectless:()=>false,
  setUi:(patch:any)=>{fixture.state={...fixture.state,ui:{...fixture.state.ui,...patch}};for(const cb of fixture.listeners)cb();}},
 }));

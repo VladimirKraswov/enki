@@ -61,6 +61,10 @@ fn transition(from: Option<&str>, to: &str) -> bool {
                 "accepted" | "uncertain" | "refused" | "cancelled"
             )
             | (Some("uncertain"), "accepted")
+            // The exact receiving ledger answered "rejected/cancelled" before the
+            // SDK saw the command: durably accepted, provably never executed.
+            // Only the verified receipt path in the UI performs this settlement.
+            | (Some("accepted"), "refused" | "cancelled")
     )
 }
 
@@ -232,6 +236,34 @@ mod tests {
         r.directory = "/test".into();
         write(&path, r, Some("dispatching".into())).unwrap();
         assert!(write(&path, record(), Some("accepted".into())).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_verified_pre_dispatch_refusal_settles_an_accepted_record_exactly_once() {
+        let root = std::env::temp_dir().join(format!(
+            "arvela-journal-refused-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("journal.sqlite");
+        let mut r = record();
+        write(&path, r.clone(), None).unwrap();
+        r.state = "dispatching".into();
+        write(&path, r.clone(), Some("prepared".into())).unwrap();
+        r.state = "accepted".into();
+        write(&path, r.clone(), Some("dispatching".into())).unwrap();
+        // The receiving ledger later refused the command before dispatch.
+        r.state = "refused".into();
+        r.updated_at = 2;
+        write(&path, r.clone(), Some("accepted".into())).unwrap();
+        // Settled: a second answer of any kind cannot rewrite it.
+        let mut again = r.clone();
+        again.state = "cancelled".into();
+        again.updated_at = 3;
+        assert!(write(&path, again, Some("refused".into())).is_err());
+        assert_eq!(list(&path, "host-a").unwrap()[0].state, "refused");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

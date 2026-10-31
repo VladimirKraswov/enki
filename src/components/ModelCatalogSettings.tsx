@@ -13,7 +13,9 @@ import {
 } from "../models/catalog";
 import {
   applyCatalog,
+  CatalogBusyAbort,
   fetchCatalog,
+  previewCatalog,
   publishCatalog,
   type CatalogRefreshError,
 } from "../hub/modelCatalog";
@@ -221,6 +223,9 @@ export function ModelCatalogSettings() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [adminKey, setAdminKey] = useState("");
+  // null = not checked / cannot decide; true = the catalog differs from the
+  // live models.json; false = it already matches. Read-only, agent-safe.
+  const [catalogPending, setCatalogPending] = useState<boolean | null>(null);
   const load = async () => {
     setLoading(true);
     setError("");
@@ -238,17 +243,31 @@ export function ModelCatalogSettings() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const busySession = [...Object.values(store.state.activityStatuses), ...Object.values(store.state.statuses)].some(
-    (status) => status.type === "busy" || status.type === "retry",
-  );
+  const isBusyNow = () =>
+    [...Object.values(store.state.activityStatuses), ...Object.values(store.state.statuses)].some(
+      (status) => status.type === "busy" || status.type === "retry",
+    );
+  const busySession = isBusyNow();
+  // Transient lock notice (not an error): cleared automatically once no agent
+  // is working, so a refusal cannot outlive its cause.
+  const [blockedByWork, setBlockedByWork] = useState(false);
+  useEffect(() => { if (!busySession) setBlockedByWork(false); }, [busySession]);
+  const excludedKey = state.excluded.join("\u0000");
+  useEffect(() => {
+    // Keep the apply readiness visible before any click; the check reads the
+    // runtime's models.json without writing or refreshing providers.
+    if (!catalog || catalog.version === 0 || !state.enabled || store.currentHost()) { setCatalogPending(null); return; }
+    let alive = true;
+    void previewCatalog(catalog, state, { client: store.client, remote: !!store.currentHost() })
+      .then((preview) => { if (alive) setCatalogPending(preview.blocked ? null : preview.changed); })
+      .catch(() => { if (alive) setCatalogPending(null); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, state.enabled, excludedKey, store.currentHost()]);
   const dirty =
     JSON.stringify(models) !== JSON.stringify(catalog?.models ?? []);
   const apply = async () => {
     if (!catalog) return;
-    if (busySession) {
-      setError("Дождитесь завершения работающего агента перед применением каталога.");
-      return;
-    }
     if (!state.enabled) {
       setError("Включите «Применять на этом устройстве», чтобы каталог писался в настройки моделей среды выполнения.");
       return;
@@ -257,7 +276,27 @@ export function ModelCatalogSettings() {
     setError("");
     setNotice("");
     try {
-      const { report, appliedOpencode, appliedPi } = await applyCatalog(catalog, state, { client: store.client, remote: !!store.currentHost() });
+      // Structural truth first: it is a read-only plan+merge of models.json, so
+      // a repeated apply succeeds even while an agent is busy and never turns
+      // another provider's discovery timeout into a failed apply. Real changes
+      // remain protected until agents are idle.
+      const preview = await previewCatalog(catalog, state, { client: store.client, remote: !!store.currentHost() });
+      if (!preview.blocked && !preview.changed) {
+        store.setHubModels({ ...state, appliedVersion: catalog.version, appliedOpencode: [], appliedPi: preview.appliedPi });
+        setCatalogPending(null);
+        setNotice(`Каталог v${catalog.version} уже применён — локальные настройки моделей ему соответствуют. Ничего не записано, работа агентов не прервана.`);
+        return;
+      }
+      setCatalogPending(preview.blocked ? null : true);
+      // The preview read is async: check the live store again, and let the
+      // writer re-check right before the CAS save. A no-op stays available.
+      if (isBusyNow()) {
+        setBlockedByWork(true);
+        return;
+      }
+      const { report, appliedOpencode, appliedPi } = await applyCatalog(catalog, state, { client: store.client, remote: !!store.currentHost() }, () => {
+        if (isBusyNow()) throw new CatalogBusyAbort();
+      });
       store.setHubModels({
         ...state,
         appliedVersion: catalog.version,
@@ -273,7 +312,12 @@ export function ModelCatalogSettings() {
           ? `Каталог v${catalog.version} применён — ${parts.join("; ")}. Среда выполнения перечитала список моделей.`
           : `Каталог v${catalog.version} уже соответствует локальным настройкам.`,
       );
+      setCatalogPending(false);
     } catch (failure) {
+      if (failure instanceof CatalogBusyAbort) {
+        setBlockedByWork(true);
+        return;
+      }
       // CatalogRefreshError: the file was committed. Record ownership (not the
       // version, so Apply stays offered) so a later removal can still remove them.
       const owned = (failure as Partial<CatalogRefreshError> | null)?.appliedPi;
@@ -376,11 +420,21 @@ export function ModelCatalogSettings() {
               >
                 Применить на этом устройстве
               </button>
-              <button className="btn" disabled={busy} onClick={() => void restart()}>
+              <button
+                className="btn"
+                disabled={busy}
+                onClick={() => void restart()}
+              >
                 Обновить модели
               </button>
             </div>
           </div>
+          {busySession && catalogPending === true ? (
+            <p role="status" className="settings-notice">В каталоге есть изменения настроек моделей — применение станет доступно, когда все агенты завершат работу. Текущие настройки не изменены.</p>
+          ) : null}
+          {blockedByWork ? (
+            <p role="status" className="settings-notice">Агенты ещё работают — изменения каталога не применены, настройки и ключи не изменены. Попробуйте ещё раз, когда все агенты завершат работу.</p>
+          ) : null}
           {error ? <p role="alert" className="composer-error">{error}</p> : null}
           {notice ? <p role="status" className="settings-notice">{notice}</p> : null}
         </div>

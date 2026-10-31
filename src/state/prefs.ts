@@ -76,6 +76,8 @@ export interface PiSettings {
 export interface Prefs {
   workshop?: import("../workshop/workspace").WorkshopRecord;
   recoveredOperations?: string[];
+  /** Pre-dispatch refusals the owner explicitly hid from the chat. */
+  dismissedOperations?: string[];
   /** Audio is removed only after its text and receipt are durably saved together. */
   dictationReceipts?: string[];
   modelServices?: import("../models/services").ModelService[];

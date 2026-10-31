@@ -50,6 +50,12 @@ export interface RuntimeModelsPort {
   refreshProviders(): Promise<{ errors: string[] }>;
 }
 
+/** Thrown by a preWrite guard when new agent work started while the catalog
+ * plan was being read: nothing has been written and nothing needs rollback. */
+export class CatalogBusyAbort extends Error {
+  constructor() { super("Агенты ещё работают; каталог не применён, настройки не изменены."); }
+}
+
 /**
  * Writes the effective catalog into the ONE runtime's models.json through its
  * CAS endpoint and refreshes the runtime catalog. There is no per-engine
@@ -63,6 +69,7 @@ export async function applyCatalog(
   catalog: HubCatalog,
   prefs: HubModelsPrefs,
   runtime: { client: RuntimeModelsPort; remote: boolean },
+  preWrite?: () => void,
 ): Promise<{ report: ApplyReport; appliedOpencode: string[]; appliedPi: string[] }> {
   if (!prefs.enabled) throw new Error("Применение каталога выключено на этом устройстве.");
   if (runtime.remote) throw new Error("Каталог Hub применяется только к среде выполнения этого компьютера. Настройки моделей удалённого сервера не изменены.");
@@ -73,8 +80,13 @@ export async function applyCatalog(
     throw new Error("Настройки моделей загружены из внешнего профиля. Их объединение с каталогом Hub пока не поддерживается; текущие подключения сохранены.");
   const piMerge = mergePiModels(current.content, plan.pi, plan.removePi);
   if (piMerge.error) throw new Error(piMerge.error);
-  // CAS: an edit made elsewhere since the read is refused by the runtime (409).
-  if (piMerge.changed) await runtime.client.saveModelsConfig(current.content, piMerge.text);
+  // The caller's guard runs after every await before this point and
+  // immediately before the write: work that started while the plan was being
+  // read must not be displaced by the save.
+  if (piMerge.changed) {
+    preWrite?.();
+    await runtime.client.saveModelsConfig(current.content, piMerge.text);
+  }
   const appliedPi = Object.keys(plan.pi);
   const refreshed = await runtime.client.refreshProviders().catch((error: unknown) => ({ errors: [error instanceof Error ? error.message : String(error)] }));
   if (refreshed.errors.length)
@@ -84,4 +96,38 @@ export async function applyCatalog(
     appliedOpencode: [],
     appliedPi,
   };
+}
+
+export interface CatalogPreview {
+  /** true when applying would write models.json (or the read could not decide). */
+  changed: boolean;
+  /** An external/imported or read-only profile: apply refuses regardless of diff. */
+  blocked: boolean;
+  /** Provider ids a successful (or already-matching) apply would record as owned. */
+  appliedPi: string[];
+}
+
+/**
+ * Read-only structural check against the live models.json: the same plan and
+ * merge that applyCatalog would perform, but no CAS write and no provider
+ * refresh, so it is safe while an agent is busy and cannot surface an
+ * unrelated provider's discovery timeout as a failed apply. An unparseable or
+ * unreadable configuration reports `changed` — only a real equality is a no-op.
+ */
+export async function previewCatalog(
+  catalog: HubCatalog,
+  prefs: HubModelsPrefs,
+  runtime: { client: RuntimeModelsPort; remote: boolean },
+): Promise<CatalogPreview> {
+  const plan = planCatalog(catalog, prefs);
+  const appliedPi = Object.keys(plan.pi);
+  if (runtime.remote) return { changed: true, blocked: true, appliedPi };
+  if (!prefs.enabled) return { changed: appliedPi.length > 0, blocked: false, appliedPi };
+  const status = await runtime.client.configStatus();
+  const current = await runtime.client.modelsConfig();
+  if (status.state === "ready" || status.state === "blocked" || current.readOnly)
+    return { changed: true, blocked: true, appliedPi };
+  const merge = mergePiModels(current.content, plan.pi, plan.removePi);
+  if (merge.error) return { changed: true, blocked: false, appliedPi };
+  return { changed: merge.changed, blocked: false, appliedPi };
 }

@@ -5,7 +5,7 @@ import { operationJournal, type Operation } from '../operations/journal';
 import { store, useAppState } from '../state/store';
 import { Icon } from './Icon';
 
-const labels = {prepared:'Не отправлено',dispatching:'Доставка не подтверждена',uncertain:'Доставка не подтверждена',accepted:'Доставлено',refused:'Отклонено агентом',cancelled:'Отменено'};
+const labels = {prepared:'Не отправлено',dispatching:'Доставка не подтверждена',uncertain:'Доставка не подтверждена',accepted:'Доставлено',refused:'Не отправлен (отклонён до выполнения)',cancelled:'Отменено до выполнения'};
 export function RecoveryCenter({workspace, close}:{workspace:string; close:()=>void}) {
   useAppState();
   const [records,setRecords] = useState<Operation[]>([]), [notice,setNotice] = useState(''), [busy,setBusy] = useState(''), [all,setAll] = useState(false);

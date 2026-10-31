@@ -103,6 +103,17 @@ export class OperationJournal {
     if (record.state !== 'prepared') throw Error('Доставка могла состояться. Сначала проверьте историю.');
     await this.write(record, 'cancelled', 'prepared');
   }
+  /**
+   * The exact ledger that received the accepted command later answered
+   * "rejected/cancelled" before the SDK saw it: durably accepted, provably
+   * never executed. Only a receipt verified against the same authority may
+   * settle an accepted record, and only once.
+   */
+  async settlePreDispatch(record: Operation, state: 'refused' | 'cancelled'): Promise<boolean> {
+    if (record.state !== 'accepted') return false;
+    try { await this.write(record, state, 'accepted'); return true; }
+    catch { return false; }
+  }
   /** The runtime's durable ledger says the command was refused or never recorded. */
   async settle(record: Operation, state: 'refused' | 'cancelled') {
     if (!['dispatching', 'uncertain'].includes(record.state)) return false;

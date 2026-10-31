@@ -3,10 +3,10 @@ import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 const { fetchCatalog } = vi.hoisted(() => ({ fetchCatalog: vi.fn() }));
-vi.mock('../src/hub/modelCatalog', () => ({ fetchCatalog, applyCatalog: vi.fn(), publishCatalog: vi.fn() }));
+vi.mock('../src/hub/modelCatalog', async (importActual) => ({ ...(await importActual() as object), fetchCatalog, applyCatalog: vi.fn(), publishCatalog: vi.fn() }));
 vi.mock('../src/state/store', () => ({
     useAppState: () => ({ prefs: { hubModels: { enabled: true, excluded: [], appliedVersion: 0, appliedOpencode: [], appliedPi: [] } } }),
-    store: { state: { activityStatuses: {}, statuses: {} }, setHubModels: vi.fn() }
+    store: { state: { activityStatuses: {}, statuses: {} }, setHubModels: vi.fn(), currentHost: () => null, client: { configStatus: async () => ({ state: 'none' }), modelsConfig: async () => ({ path: '/agent/models.json', content: '{"providers":{}}' }), saveModelsConfig: async () => ({}), refreshProviders: async () => ({ errors: [] }) } }
 }));
 import { ModelCatalogSettings, newCatalogModel, PI_REQUIRED } from '../src/components/ModelCatalogSettings';
 

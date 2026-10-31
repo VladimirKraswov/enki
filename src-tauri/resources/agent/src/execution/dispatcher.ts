@@ -47,7 +47,32 @@ export class Dispatcher {
     private readonly hub: HubLeases,
     private readonly journal: EventJournal,
     private readonly draining: () => boolean,
+    // Bounded same-command retries inside the existing reservation, before
+    // dispatch: a transient Hub failure may not masquerade as a permanent
+    // refusal. Nothing is dispatched between attempts and the ledger stays
+    // "accepted" until the final outcome.
+    private readonly hubRetryDelayMs: readonly number[] = [1500, 3000],
   ) {}
+
+  // Only stateless discovery is retried here. A reservation (prepare) has its
+  // own same-requestKey retry inside the Hub client, and an authority/scope
+  // change is a definite decision — the model was chosen under the old
+  // connection, so re-deciding under a new one would change its meaning.
+  private async hubStep<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await run();
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        if (signal.aborted || text.includes("Подключение к Hub изменилось") || attempt >= this.hubRetryDelayMs.length) throw error;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, this.hubRetryDelayMs[attempt]);
+          signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+        });
+        signal.throwIfAborted();
+      }
+    }
+  }
 
   onReceipt(listener: ReceiptListener): () => void {
     this.listeners.add(listener);
@@ -113,7 +138,7 @@ export class Dispatcher {
     try {
       // Discovery precedes the decision: a fresh runtime never sends a
       // Hub-owned model directly just because its route cache is empty.
-      const routed = !!(await this.hub.resolve(model.providerID, model.modelID, signal)) || requireHub;
+      const routed = !!(await this.hubStep(signal, () => this.hub.resolve(model.providerID, model.modelID, signal))) || requireHub;
       if (!routed) return true;
       this.journal.append(request.directory, request.sessionID, { type: "session.status", properties: { sessionID: request.sessionID, status: { type: "waiting", message: "Подготовка модели на Hub" } } });
       await this.hub.ensureRun(model.providerID, model.modelID, request.sessionID, signal);
@@ -146,7 +171,7 @@ export class Dispatcher {
       let routed: boolean;
       // Trusted discovery before direct-vs-Hub, for source summaries and
       // targets alike (manual, queued and timer prompts all pass here).
-      try { routed = !!expected || !!(await this.hub.resolve(model.providerID, model.modelID, signal)) || requireHub; }
+      try { routed = !!expected || !!(await this.hubStep(signal, () => this.hub.resolve(model.providerID, model.modelID, signal))) || requireHub; }
       catch (error) {
         this.journal.append(request.directory, request.sessionID, { type: "session.idle", properties: { sessionID: request.sessionID } });
         throw new Error(signal.aborted ? cancelled() : error instanceof Error ? error.message : String(error));
@@ -172,7 +197,7 @@ export class Dispatcher {
     };
     return {
       resolve: async (model, available) => {
-        alias = await this.hub.resolveMissing(model, available, signal);
+        alias = await this.hubStep(signal, () => this.hub.resolveMissing(model, available, signal));
         signal.throwIfAborted();
         return alias.model;
       },

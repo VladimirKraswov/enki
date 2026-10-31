@@ -446,6 +446,20 @@ async function waitUntilSettled(
       await pause();
       continue;
     }
+    // A prompt refused by the runtime before dispatch never starts a turn:
+    // without this the wait would spin to its deadline showing only "idle".
+    await store.refreshNotSent(sessionId).catch(() => undefined);
+    const startedAt = run.createdAt;
+    const refusal = (store.notSent.get(sessionId) ?? []).find(n =>
+      !chat.messageOrder.includes(n.id) && n.record.updatedAt >= startedAt);
+    if (refusal) {
+      removeManagedRun(serverKey, sessionId);
+      return {
+        outcome: "failed",
+        status: refreshedStatus,
+        error: `Запрос отвергнут средой выполнения до отправки: ${refusal.reason}. Текст доступен в чате (не отправлен); слепая повторная отправка запрещена.`,
+      };
+    }
     if (!finalAssistantSince(sessionId, run.turnBoundaryMessageId, chat)) {
       // Background chats need no visible subscription. Read their durable page
       // again after a bounded wait, without stealing the user's selection.
@@ -571,8 +585,14 @@ async function readChat(directory: string, sessionId: string, signal?: AbortSign
   } };
 }
 
+function notSentProjection(sessionId: string, chat?: SessionChatState) {
+  return (store.notSent.get(sessionId) ?? [])
+    .filter(n => !chat?.messageOrder.includes(n.id))
+    .map(n => ({ id: n.id, text: n.text.slice(0, 400), status: n.state === 'refused' ? "не отправлен" : "отменён до выполнения", reason: n.reason }));
+}
+
 function conversation(sessionId: string, limit: number, maxChars: number, chat: SessionChatState | undefined = store.state.chat.sessions[sessionId]) {
-  if (!chat) return { sessionId, status: activeStatus(sessionId), messages: [] };
+  if (!chat) return { sessionId, status: activeStatus(sessionId), notSent: notSentProjection(sessionId), messages: [] };
   const selected = chat.messageOrder.slice(-limit);
   const messages: unknown[] = [];
   let chars = 0;
@@ -632,6 +652,7 @@ function conversation(sessionId: string, limit: number, maxChars: number, chat: 
     sessionId,
     status: chat.status,
     lastError: chat.lastError,
+    notSent: notSentProjection(sessionId, chat),
     truncated: selected.length > messages.length,
     messages,
   };
@@ -737,6 +758,7 @@ async function execute(method: string, raw: unknown): Promise<unknown> {
       const directory = text(params, "directory")!;
       const sessionId = text(params, "session_id")!;
       const { chat } = await readChat(directory, sessionId);
+      await store.refreshNotSent(sessionId).catch(() => undefined);
       return conversation(
         sessionId,
         integer(params, "limit", 40, 1, 200),

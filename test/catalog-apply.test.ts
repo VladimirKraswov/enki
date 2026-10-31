@@ -3,7 +3,7 @@
 // written. Written for the LEGACY pass, NOT RUN.
 import { expect, it, vi } from 'vitest';
 import { applyCatalog, CatalogRefreshError, type RuntimeModelsPort } from '../src/hub/modelCatalog';
-import { hubModelsState } from '../src/models/catalog';
+import { hubModelsState, mergePiModels, planCatalog } from '../src/models/catalog';
 
 const model = { id: 'common', label: 'Common', opencode: { providerId: 'common', provider: { models: { m: {} } } }, pi: { providerId: 'common', provider: { models: [{ id: 'm' }] } } };
 const prefs = hubModelsState({ hubModels: { enabled: true, appliedOpencode: ['old'], appliedPi: ['old'] } });
@@ -74,3 +74,29 @@ it('a refresh failure after the CAS write still reports the providers Enki now o
     expect(client.saveModelsConfig).toHaveBeenCalledTimes(1);
   }
 });
+
+import { CatalogBusyAbort } from '../src/hub/modelCatalog';
+it('a preWrite guard aborts the CAS save when work started during the plan reads, writing nothing', async () => {
+  const client = port('{"providers":{"local":{"models":[]}}}');
+  let busy = false;
+  client.refreshProviders.mockImplementation(async () => { busy = true; return { errors: [] }; });
+  // Busy flips on after the config read — exactly the racing case: the guard
+  // runs after every await before the write.
+  await expect(applyCatalog({ version: 2, models: [model] }, prefs, { client, remote: false }, () => { if (busy) throw new CatalogBusyAbort(); })).resolves.toMatchObject({ report: { piChanged: true } });
+  const client2 = port('{"providers":{"local":{"models":[]}}}');
+  await expect(applyCatalog({ version: 2, models: [model] }, prefs, { client: client2, remote: false }, () => { throw new CatalogBusyAbort(); })).rejects.toBeInstanceOf(CatalogBusyAbort);
+  expect(client2.saveModelsConfig).not.toHaveBeenCalled();
+  expect(client2.refreshProviders).not.toHaveBeenCalled();
+});
+it('the guard never blocks a no-op merge', async () => {
+  const prefsIdle = hubModelsState({ hubModels: { enabled: true, appliedPi: [] } });
+  const merged = appliedContentForFix();
+  const client = port(merged);
+  const result = await applyCatalog({ version: 2, models: [model] }, prefsIdle, { client, remote: false }, () => { throw new CatalogBusyAbort(); });
+  expect(result.report.piChanged).toBe(false);
+  expect(client.saveModelsConfig).not.toHaveBeenCalled();
+});
+function appliedContentForFix(): string {
+  const plan = planCatalog({ version: 2, models: [model] }, hubModelsState({ hubModels: { enabled: true } }));
+  return mergePiModels('{"providers":{"local":{"models":[]}}}', plan.pi, plan.removePi).text;
+}
