@@ -196,8 +196,16 @@ impl Applied {
             Self::Interrupted { previous, .. } => ("interrupted", Some(previous)),
             Self::Committed { previous, .. } => ("committed", previous.as_ref()),
         };
+        // `ts` is what lets a restarting app recognise its own just-committed
+        // install and explain the restart; without it a receipt is only
+        // forensics. A clock jump (NTP step) can make it implausible — the
+        // consumer must treat a future or stale stamp as "not fresh".
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         serde_json::json!({"version": version, "installed": self.installed(), "phase": phase,
-            "error": self.error(), "previous": previous})
+            "error": self.error(), "previous": previous, "ts": ts})
     }
 }
 
@@ -613,6 +621,11 @@ mod tests {
                 assert_eq!(receipt["phase"], "committed");
                 assert_eq!(receipt["installed"], true);
                 assert_eq!(receipt["previous"], previous.display().to_string());
+                // The restarting app trusts `ts` to explain its own restart; a
+                // committed receipt without a plausible stamp cannot do that.
+                assert!(receipt["ts"]
+                    .as_u64()
+                    .is_some_and(|t| t > 1_700_000_000_000));
                 assert_eq!(applied.error().is_some(), fail == "record");
                 if rename_destination {
                     assert!(

@@ -1,5 +1,5 @@
 export interface Release {digest?:string;channel?:'stable'|'preview';available:boolean;version?:string;kind?:'hot'|'source';notes?:string;revision?:string;binary?:{state:'ready'|'pending'|'unavailable';message?:string}}
-export interface NativeStatus {release?:Release|null;downloaded?:boolean;nativeVersion:string;nativeFingerprint:string;hot:{uiVersion:string;activeDigest:string|null;pending:boolean;lastError:string|null};build:{digest?:string|null;stage?:string;mode?:'source'|'binary';receivedBytes?:number;totalBytes?:number;error?:string;version?:string;elapsedSeconds?:number;logPath?:string;logBytes?:number;cache?:{state?:string;hits?:number;misses?:number;writes?:number}};installation?:{version:string;installed:boolean;error?:string|null;phase?:'not_committed'|'interrupted'|'committed';previous?:string|null}}
+export interface NativeStatus {release?:Release|null;downloaded?:boolean;nativeVersion:string;nativeFingerprint:string;hot:{uiVersion:string;activeDigest:string|null;pending:boolean;lastError:string|null};build:{digest?:string|null;stage?:string;mode?:'source'|'binary';receivedBytes?:number;totalBytes?:number;error?:string;version?:string;elapsedSeconds?:number;logPath?:string;logBytes?:number;cache?:{state?:string;hits?:number;misses?:number;writes?:number}};installation?:{version:string;installed:boolean;error?:string|null;phase?:'not_committed'|'interrupted'|'committed';previous?:string|null;ts?:number}}
 export interface UpdateState {release:Release|null;status:NativeStatus|null;busy:string;error:string;notice:string;downloaded:boolean;waiting:boolean;channel:'stable'|'preview'}
 export type Transport=<T>(action:string,extra?:Record<string,unknown>)=>Promise<T>;
 /** Native builder stages in order; each is cancellable and blocks conflicting controls. */
@@ -46,6 +46,22 @@ export class UpdateController {
   install=(running:boolean)=>{if(!this.state.release?.kind)return Promise.resolve();if(this.state.release.kind==='source'&&running){this.patch({waiting:true,notice:'Установка начнётся после завершения агентов.'});return Promise.resolve();}return this.run('install',async()=>{this.patch({waiting:false});await this.apply(this.state.release!.kind!);});};
   async tick(running:boolean){if(this.state.waiting&&!running&&!this.state.busy)await this.install(false);}
   stopWaiting(){this.patch({waiting:false,notice:''});}
+}
+/**
+ * After a source/binary update the app restarts to load the new bundle. That
+ * restart is the intended delivery step, but it looks exactly like a crash to
+ * whoever was watching a chat. When the just-committed install receipt is
+ * fresh (written moments ago by the pre-restart process) the next start must
+ * say so. A receipt predating the `ts` field, or any implausible stamp (clock
+ * jump), returns null — we never re-announce an old update on every start.
+ */
+export function freshApplyNotice(installation:NativeStatus['installation'],now:number):string|null{
+  if(!installation||!installation.installed||installation.phase!=='committed')return null;
+  const ts=installation.ts;
+  if(typeof ts!=='number'||!Number.isFinite(ts))return null;
+  // Fresh = committed within the last 2 minutes on a clock that did not jump.
+  if(ts>now||now-ts>120000)return null;
+  return `Enki обновлён до версии ${installation.version} и перезапущен для применения. Чаты и данные сохранены.`;
 }
 let requested=false;
 export function requestUpdateSettings(){requested=true;window.dispatchEvent(new Event('arvela-open-updates'));}

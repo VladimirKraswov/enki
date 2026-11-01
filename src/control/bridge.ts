@@ -663,6 +663,7 @@ function updatesSnapshot(): Record<string, unknown> {
   return {
     channel: s.channel,
     nativeVersion: s.status?.nativeVersion ?? null,
+    installedVersion: s.status?.installation?.installed && s.status.installation.phase === 'committed' ? s.status.installation.version : null,
     uiVersion: s.status?.hot.uiVersion ?? null,
     available: s.release?.available === true,
     version: s.release?.version ?? null,

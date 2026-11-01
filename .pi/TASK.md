@@ -1,47 +1,27 @@
-# TASK checkpoint (2026-11-01, session 8a5e5bd7)
+# TASK checkpoint (2026-11-02, session 8a5e5bd7)
 
 ## Цель
-Один релиз 2.0.28 (>2.0.27): (A) catalog-apply UX (no-op при занятом агенте,
-свежий guard, непостоянный blocker) + (B) отказ команды до dispatch не исчезает
-(Eridu-случай): ledger-rejection после durable ACK → «Не отправлен» в исходном
-чате с причиной, черновик/скрытие, desktop_wait/conversation видят отказ.
+2.0.29: перезапуск после source-обновления перестаёт выглядеть падением.
+Квитанция `last-install.json` получает `ts`; первый запуск после свежей
+подтверждённой установки показывает штатный toast (версия + «данные
+сохранены»); `desktop_updates status` отдаёт `installedVersion`.
 
 ## Ограничения
 TMPDIR ВНЕ репозитория: /Volumes/Extend/work/enki-release-tmp (0700, Extend;
 внутри .local project-map падает — git-ignore-aware). NODE_OPTIONS≤1024
-(768 использован), cargo jobs ≤2, без параллельных инференсов. Не трогать
-d1e46f3/eecb774, opencode.json, Eridu-сессию/код/VM. Рекурсию mock
-(getMockImplementation) в catalog-apply-ux не возвращать.
+(768), cargo jobs ≤2. Не трогать d1e46f3/eecb774, opencode.json, Eridu.
+Часы машины могли давать скачок (timed шагал −2ч36м за перезапуск 2.0.28):
+notice молчит для будущих/устаревших/бессоюзных receipt — неannounce заново.
 
 ## Проверенные факты
-- Catalog: 41/41 (catalog-apply, -ux 6, editor, review, model-catalog, bridge).
-  Блокировка — неперсистентный status, автоочистка при idle; guard перед CAS;
-  fresh store.state после preview; no-op пишет только appliedPi/appliedVersion.
-  Прежний код: 4/6 падали (proof .local/catalog-apply-audit/old-code-proof.log).
-- Отказ до dispatch: journal accepted→refused|cancelled (Rust whitelist+тест),
-  runtimeSync.commandRefused, store.settlePreDispatchRefusal/notSent/
-  refreshNotSent/dismiss/return, ChatView-карточка, RecoveryCenter метки,
-  bridge conversation.notSent + wait outcome failed. test/command-refusal 6/6.
-- Runtime: bounded retry discovery (resolve/resolveMissing ≤2, same command,
-  scope-change НЕ ретраится, ensureRun без диспетчерских ретраев — свой
-  same-requestKey цикл в hub.ts). hub-retry 3/3; hub-lease-authority+
-  model-alias 41/41.
-- UI vitest 1238 — кроме project-map, зелёный при TMPDIR вне репо (5/5).
-- chat-window мок дополнен портом notSent (4/4).
-
-## Изменённые файлы (кроме каталог-пакета)
-src/operations/journal.ts, src/state/{runtimeSync,store,prefs}.ts,
-src/components/{ChatView,RecoveryCenter}.tsx, src/control/bridge.ts,
-src-tauri/src/journal.rs, resources/agent/src/execution/dispatcher.ts,
-test/command-refusal.test.ts, resources/agent/test/hub-retry.test.ts,
-test/chat-window.test.ts, test/catalog-*.
+- freshApplyNotice: mount-тест + таблица (свежий/устаревший/будущий/без ts/
+  interrupted) — test/update-applied-notice.test.ts 4/4; прежний код: 3/4
+  падали (proof .local/catalog-apply-audit/old-code-proof-2.0.29.log).
+- bridge installedVersion — agent-control-updates 6/6.
+- Rust receipt ts — hub_updates 26/26, lib 286/286, clippy -D warnings, fmt.
+- UI vitest 201 файлов EXIT=0; runtime 416/416; sdk-compat fail 0; tsc/build;
+  architecture 217; check:bundle OK.
 
 ## Следующий шаг
-1) Полный npm test + runtime suite + cargo (fmt/clippy/test) при верном TMPDIR.
-2) tsc/build/architecture/bundle; docs (HUB-UPDATES про refuse-контракт?),
-   version 2.0.28 во всех манифестах; review diff; commit.
-3) release:local -- stable (TMPDIR=/Volumes/Extend/work/enki-release-tmp),
-   receipt+served+2 пакета, push same HEAD, release:packages, desktop_updates
-   apply последним (source-обновление: native fingerprint изменён journal.rs →
-   жёлтый, idle gate). Наблюдатель проверит живые клики catalog + refuse.
-4) Маркер ENKI_CATALOG_DELIVERY_VERIFIED только после применения и проверок.
+release:local stable 2.0.29 → квитанция/head/пакеты → push → авто-apply
+(desktop_updates). Наблюдателю после apply: toast «Enki обновлён до 2.0.29…».

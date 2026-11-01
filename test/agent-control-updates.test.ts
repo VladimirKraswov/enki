@@ -49,6 +49,15 @@ describe("desktop updates control", () => {
     expect(status.available).toBe(false);
     expect(status.nativeVersion).toBeNull();
   });
+  it("exposes the committed installed version so a restart is explainable to observers", async () => {
+    h.controller.s.status = {
+      nativeVersion: "2.0.29", hot: { uiVersion: "2.0.29" }, build: { stage: null },
+      installation: { version: "2.0.29", installed: true, error: null, phase: "committed", ts: 1 },
+    };
+    expect((await run("status")).installedVersion).toBe("2.0.29");
+    h.controller.s.status!.installation!.phase = "interrupted";
+    expect((await run("status")).installedVersion).toBeNull();
+  });
   it("prepare checks the release and starts the local source build when no binary is ready", async () => {
     const prepared = await run("prepare");
     expect(prepared.version).toBe("2.0.99");

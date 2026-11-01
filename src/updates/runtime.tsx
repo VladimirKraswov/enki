@@ -4,7 +4,7 @@ import {keepRuntimeAwake} from './background';
 import {useEffect,useSyncExternalStore} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
-import {UpdateController,requestUpdateSettings} from './controller';
+import {UpdateController,requestUpdateSettings,freshApplyNotice} from './controller';
 import {ReadyUpdateBadge} from './ReadyUpdateBadge';
 import {isNative} from '../native/platform';
 import {maintenance} from '../operations/maintenance';
@@ -42,7 +42,12 @@ export function UpdateRuntime(){
     const saved=localStorage.getItem('arvela.update.channel');updates.setChannel(saved==='preview'?'preview':'stable');
     // Health is acknowledged after React has mounted, never while downloading.
     const checks=watchUpdateChecks(()=>updates.check(),()=>!updates.snapshot().busy&&!updates.snapshot().downloaded&&!updates.compiling()&&!updates.snapshot().waiting);
-    void updates.ready().catch(()=>{}).finally(()=>checks.check());
+    void updates.ready().catch(()=>{}).finally(()=>{
+      checks.check();
+      // A source/binary update restarts the app to load the new bundle. Say so
+      // once at the next start so the restart is not mistaken for a crash.
+      try{const notice=freshApplyNotice(updates.snapshot().status?.installation,Date.now());if(notice)store.setUi({toast:notice});}catch{}
+    });
     let alive=true;let unlisten:(()=>void)|undefined;let quitListen:(()=>void)|undefined;
     void listen('arvela-open-updates',()=>{requestUpdateSettings();store.setUi({settingsOpen:true});}).then(fn=>{if(alive)unlisten=fn;else fn();}).catch(()=>{});
     void listen('arvela-before-quit',()=>{void (async()=>{try{await flushDictationCapture();savePrefs(store.getSnapshot().prefs);if(!flushPrefs())throw Error('Не удалось сохранить состояние перед выходом.');await attachmentDrafts.flush();await invoke('runtime_quit_ready',{ready:true});}catch(e){store.setUi({toast:String(e)});await invoke('runtime_quit_ready',{ready:false});}})().catch(()=>{});}).then(fn=>{if(alive)quitListen=fn;else fn();}).catch(()=>{});
