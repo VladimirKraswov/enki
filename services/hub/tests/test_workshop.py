@@ -74,7 +74,7 @@ class Exchange(unittest.TestCase):
         for name in ['../x', '/x', 'x//y', 'x\\y', '.local/key', '.env', 'target/x', 'src/CON.ts', 'src/x.', 'src/x\ny', 'src/a b']:
             with self.subTest(name=name), self.assertRaises(m.Fault):
                 self.call('changes', data=self.change() | {'files': {name:'YQ=='}})
-        for content in [b'\x00', b'-----BEGIN PRIVATE KEY-----', b'sk-'+b'x'*32, b'\xff']:
+        for content in [b'\x00', b'-----BEGIN '+b'PRIVATE KEY-----', b'sk-'+b'x'*32, b'\xff']:
             with self.assertRaises(m.Fault):
                 self.call('changes', data=self.change() | {'files': {'src/x':base64.b64encode(content).decode()}})
         self.assertEqual(self.call('changes')['items'], [])
