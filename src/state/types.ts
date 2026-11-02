@@ -14,6 +14,7 @@ export type ConnectionPhase =
   | "incompatible";
 
 export interface ConnectionState {
+  startup?: import('../agent/runtime/startup').RuntimeStartup;
   phase: ConnectionPhase;
   version: string | null;
   error: string | null;

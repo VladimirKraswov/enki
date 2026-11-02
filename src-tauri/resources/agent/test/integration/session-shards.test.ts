@@ -93,7 +93,7 @@ it("re-homes a chat whose history sits in the shard of another spelling of its f
   // A real symlink alias, like the owner's former app-data folder still linked
   // under its old name.
   const alias = path.join(tempDir("misplaced-alias"), "old-name");
-  fs.symlinkSync(dir, alias);
+  fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
   const sid = await newSession(first, dir, { title: "Мастерская" });
   expect(await talk(first, "home-1", sid, dir, "первый")).toBe("completed");
   // Durable work of this chat, so the move must carry it too: a queued prompt
@@ -146,7 +146,7 @@ it("brings a chat adopted through an alias into its canonical folder and shard",
   const first = await start({ data });
   const real = first.project("alias-target");
   const alias = path.join(tempDir("alias-parent"), "link");
-  fs.symlinkSync(real, alias);
+  fs.symlinkSync(real, alias, process.platform === "win32" ? "junction" : "dir");
   const sid = await newSession(first, alias, { title: "Через alias" });
   expect(await talk(first, "alias-1", sid, alias, "первый")).toBe("completed");
   const file = first.runtime.catalog.get(sid)!.sessionFile!;

@@ -10,6 +10,7 @@ import { RuntimeBackend } from "./runtime/backend";
 import type { RuntimeConnection } from "./runtime/client";
 import { localConnection, remoteConnection } from "./runtime/connection";
 import { LOCAL_WORKSPACE, RUNTIME_AGENT_ID } from "./runtime/ids";
+import type { RuntimeStartup } from './runtime/startup';
 
 export type RuntimeTarget =
   | { kind: "local" }
@@ -31,9 +32,10 @@ function connector(target: RuntimeTarget): () => Promise<RuntimeConnection> {
  * token or a restarted runtime, so a remote backend only ever re-resolves the
  * same remote host.
  */
-export async function connectRuntime(target: RuntimeTarget): Promise<RuntimeBackend> {
+export async function connectRuntime(target: RuntimeTarget, progress?: (value: RuntimeStartup) => void): Promise<RuntimeBackend> {
   const connect = connector(target);
-  return new RuntimeBackend(await connect(), connect, workspaceKey(target));
+  const initial = target.kind === 'local' ? await localConnection(progress) : await connect();
+  return new RuntimeBackend(initial, connect, workspaceKey(target));
 }
 
 /** Exact lookup kept for persisted ids: only the runtime id is known. */

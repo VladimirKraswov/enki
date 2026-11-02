@@ -852,6 +852,7 @@ class Store {
       connection: {
         ...s.connection,
         phase: "connecting",
+        startup: undefined,
         error: null,
         streamState: "idle",
       },
@@ -860,7 +861,10 @@ class Store {
     this.persistPrefs();
     try {
       const target: RuntimeTarget = host ? { kind: "remote", host } : { kind: "local" };
-      const runtime = await connectRuntime(target);
+      const runtime = await connectRuntime(target, value => {
+        if (request === this.hostGeneration && target.kind === 'local')
+          this.mutate(s => ({ connection: { ...s.connection, startup: value } }));
+      });
       if (request !== this.hostGeneration) return false;
       return await this.doConnect(runtime, target);
     } catch (e) {

@@ -1,4 +1,5 @@
 import {AttachmentChip} from "./AttachmentChip";
+import { RuntimeStartupStatus } from './RuntimeStartupStatus';
 import { modelServices, isSwitching } from "../models/services";
 import { compactModelName } from "../models/display";
 import { availablePickerModels } from "../models/picker";
@@ -231,7 +232,8 @@ export function Composer() {
       {selection && <ModelSelectionDialog {...selection}
         status={modelServices.statusFor(selection.providerID, selection.modelID, undefined, engineId)}
         onClose={() => { selectionAbort.current?.abort(); selectionTicket.current++; setSelection(null); }} onRetry={() => void selectModel(selection.providerID, selection.modelID)}/>}
-      {!connected && (
+      {!connected && !store.currentHost() && <RuntimeStartupStatus progress={s.connection.startup} error={s.connection.error} onRetry={() => void store.retryConnection()}/>}
+      {!connected && store.currentHost() && (
         <div className="offline-banner" role="alert">
           <span>Нет связи со средой выполнения Enki. Черновики и история сохранены.</span>
           <button onClick={() => void store.retryConnection()}>

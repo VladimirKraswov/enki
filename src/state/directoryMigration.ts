@@ -3,20 +3,27 @@ import type { Prefs } from "./prefs";
 /** Apply this host's committed directory moves before opening its saved chat.
  * Other hosts, transcript contents and session IDs are never rewritten. */
 export function migrateDirectoryPrefs(prefs: Prefs, aliases: Record<string, string>): Prefs {
+  const canonicalKey = (value: string): string => /^[A-Za-z]:[\\/]/.test(value) ? value.replace(/\\/g, '/').toLowerCase() : value;
   const pairs = Object.entries(aliases).filter(([from, to]) => from !== to
     && (/^\//.test(from) || /^[A-Za-z]:[\\/]/.test(from))
     && (/^\//.test(to) || /^[A-Za-z]:[\\/]/.test(to))).sort((a, b) => b[0].length - a[0].length);
   if (!pairs.length) return prefs;
   const move = (value: string): string => {
+    const original = value;
     const seen = new Set<string>();
     for (let i = 0; i < 16; i++) {
-      if (seen.has(value)) return [...seen][0];
-      seen.add(value);
-      const match = pairs.find(([from]) => value === from || value.startsWith(from + "/") || value.startsWith(from + "\\"));
+      const current = canonicalKey(value);
+      if (seen.has(current)) return original;
+      seen.add(current);
+      const matches = pairs.filter(([from]) => current === canonicalKey(from) || current.startsWith(canonicalKey(from) + "/") || current.startsWith(canonicalKey(from) + "\\"));
+      const match = matches[0];
       if (!match) return value;
+      if (matches.some(([from,to]) => canonicalKey(from) === canonicalKey(match[0]) && canonicalKey(to) !== canonicalKey(match[1]))) return original;
       value = match[1] + value.slice(match[0].length);
+      // A case/slash-only canonical spelling is a completed move, not a loop.
+      if (canonicalKey(value) === current) return value;
     }
-    return [...seen][0];
+    return original;
   };
   const list = (values?: string[]) => values && [...new Set(values.map(move))];
   const keyed = <T,>(values: Record<string, T> | undefined, drafts = false): Record<string, T> => {

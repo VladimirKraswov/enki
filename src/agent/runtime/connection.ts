@@ -9,6 +9,7 @@ import type { RemoteHost } from "../../native/hosts";
 import { validRemote } from "../../native/hosts";
 import type { RuntimeConnection } from "./client";
 import type { NativeUiScope } from "./pluginUi/types";
+import { parseStartup, type RuntimeStartup } from './startup';
 
 export const CONTRACT = 1;
 
@@ -18,10 +19,30 @@ function checked(connection: RuntimeConnection): RuntimeConnection {
   return connection;
 }
 
-export async function localConnection(): Promise<RuntimeConnection> {
+export async function localConnection(progress?: (value: RuntimeStartup) => void): Promise<RuntimeConnection> {
   if (!isNative()) throw new Error("Среда выполнения Enki доступна в установленном приложении.");
   const { invoke } = await import("@tauri-apps/api/core");
-  return checked(await invoke<RuntimeConnection>("runtime_connection"));
+  let stopped = false, reading: Promise<void> | null = null;
+  const poll = (): Promise<void> => {
+    if (!progress || stopped) return Promise.resolve();
+    if (reading) return reading;
+    reading = (async () => {
+      try {
+        const status = await invoke<{startup?:unknown}>('runtime_status');
+        const value = parseStartup(status.startup);
+        if (value && !stopped) progress(value);
+      } catch { /* Older native clients still connect without additive progress. */ }
+    })().finally(() => { reading = null; });
+    return reading;
+  };
+  const timer = progress ? setInterval(() => void poll(), 500) : undefined;
+  void poll();
+  try {
+    const connection = await invoke<RuntimeConnection>('runtime_connection');
+    await poll(); // Keep the final ready/failed snapshot, not a stale hash phase.
+    return checked(connection);
+  } catch (error) { await poll(); throw error; }
+  finally { stopped = true; if (timer) clearInterval(timer); }
 }
 
 export async function remoteConnection(host: RemoteHost): Promise<RuntimeConnection> {

@@ -1,5 +1,6 @@
 import { store, useAppState } from "../state/store";
 import { useEffect, useRef } from "react";
+import { RuntimeStartupStatus } from './RuntimeStartupStatus';
 
 export function DeleteConfirm() {
   const s = useAppState();
@@ -77,6 +78,7 @@ export function ConnectionGate() {
   const s = useAppState();
   const remote = store.currentHost();
   if (s.connection.phase === "connected") return null;
+  if (!remote) return <div className="gate"><RuntimeStartupStatus progress={s.connection.startup} error={s.connection.error} onRetry={() => void store.retryConnection()}/></div>;
   return (
     <div className="gate" role="alert" aria-live="polite">
       <h2>

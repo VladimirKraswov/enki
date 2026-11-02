@@ -13,6 +13,16 @@ use std::{
 };
 use unicode_normalization::UnicodeNormalization;
 
+/// Directory locks live for ONE verification only. Windows refuses an open
+/// directory's replacement/reparse mutation while write/delete sharing is
+/// denied, so validating every ancestor again for every payload is redundant.
+/// Payload bytes are still hashed on every activation; no disk marker is used.
+#[derive(Default)]
+struct CheckedPaths {
+    #[cfg(windows)]
+    directories: BTreeMap<PathBuf, (File, Metadata)>,
+}
+
 const MANIFEST: &str = "runtime-manifest.json";
 const METADATA_LIMIT: u64 = 8 * 1024 * 1024;
 const MAX_FILES: usize = 200_000;
@@ -145,30 +155,64 @@ fn linked(meta: &Metadata) -> bool {
 
 /// Check every absolute ancestor before opening content. Never canonicalize an
 /// untrusted artifact path: doing so would erase evidence of an ancestor link.
-fn checked_metadata(full: &Path, directory: bool) -> Result<Metadata, String> {
-    if !full.is_absolute()
-        || full
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
-    {
-        return Err(problem("artifact path must be absolute and normalized"));
-    }
-    let mut ancestors: Vec<_> = full.ancestors().collect();
-    ancestors.reverse();
-    for at in ancestors {
-        let meta = fs::symlink_metadata(at).map_err(|_| problem("artifact path is unavailable"))?;
-        if linked(&meta) || (at != full && !meta.is_dir()) {
-            return Err(problem("artifact contains a link or invalid ancestor"));
+impl CheckedPaths {
+    fn metadata(&mut self, full: &Path, directory: bool) -> Result<Metadata, String> {
+        if !full.is_absolute()
+            || full
+                .components()
+                .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        {
+            return Err(problem("artifact path must be absolute and normalized"));
         }
-        if at == full {
-            return if (directory && meta.is_dir()) || (!directory && meta.is_file()) {
-                Ok(meta)
-            } else {
-                Err(problem("artifact path has the wrong file type"))
-            };
+        let mut ancestors: Vec<_> = full.ancestors().collect();
+        ancestors.reverse();
+        for at in ancestors {
+            #[cfg(windows)]
+            if (at != full || directory) && self.directories.contains_key(at) {
+                if at == full {
+                    return Ok(self.directories[at].1.clone());
+                }
+                continue;
+            }
+            let meta =
+                fs::symlink_metadata(at).map_err(|_| problem("artifact path is unavailable"))?;
+            if linked(&meta) || (at != full && !meta.is_dir()) {
+                return Err(problem("artifact contains a link or invalid ancestor"));
+            }
+            #[cfg(windows)]
+            if meta.is_dir() {
+                use std::os::windows::fs::OpenOptionsExt;
+                let handle = OpenOptions::new()
+                    .access_mode(0x80)
+                    .custom_flags(0x02200000)
+                    .share_mode(0x00000001)
+                    .open(at)
+                    .map_err(|_| problem("artifact directory cannot be locked"))?;
+                let opened = handle
+                    .metadata()
+                    .map_err(|_| problem("artifact directory handle is unavailable"))?;
+                let after = fs::symlink_metadata(at)
+                    .map_err(|_| problem("artifact directory changed during open"))?;
+                if !opened.is_dir()
+                    || linked(&opened)
+                    || linked(&after)
+                    || !same_file(&meta, &opened)
+                    || !same_file(&after, &opened)
+                {
+                    return Err(problem("artifact directory changed during open"));
+                }
+                self.directories.insert(at.to_path_buf(), (handle, opened));
+            }
+            if at == full {
+                return if (directory && meta.is_dir()) || (!directory && meta.is_file()) {
+                    Ok(meta)
+                } else {
+                    Err(problem("artifact path has the wrong file type"))
+                };
+            }
         }
+        Err(problem("artifact path is unavailable"))
     }
-    Err(problem("artifact path is unavailable"))
 }
 
 fn same_file(a: &Metadata, b: &Metadata) -> bool {
@@ -207,8 +251,8 @@ fn stable(a: &Metadata, b: &Metadata) -> bool {
     true
 }
 
-fn open_regular(full: &Path) -> Result<File, String> {
-    let before = checked_metadata(full, false)?;
+fn open_regular(paths: &mut CheckedPaths, full: &Path) -> Result<File, String> {
+    let before = paths.metadata(full, false)?;
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -227,7 +271,7 @@ fn open_regular(full: &Path) -> Result<File, String> {
     let opened = file
         .metadata()
         .map_err(|_| problem("artifact handle is unavailable"))?;
-    let after = checked_metadata(full, false)?;
+    let after = paths.metadata(full, false)?;
     if !opened.is_file()
         || linked(&opened)
         || !same_file(&before, &opened)
@@ -238,8 +282,8 @@ fn open_regular(full: &Path) -> Result<File, String> {
     Ok(file)
 }
 
-fn read_manifest(full: &Path) -> Result<Vec<u8>, String> {
-    let mut file = open_regular(full)?;
+fn read_manifest(paths: &mut CheckedPaths, full: &Path) -> Result<Vec<u8>, String> {
+    let mut file = open_regular(paths, full)?;
     let before = file
         .metadata()
         .map_err(|_| problem("manifest handle is unavailable"))?;
@@ -260,14 +304,19 @@ fn read_manifest(full: &Path) -> Result<Vec<u8>, String> {
     Ok(raw)
 }
 
-fn hash_file(full: &Path) -> Result<String, String> {
-    let mut file = open_regular(full)?;
+fn hash_file(
+    paths: &mut CheckedPaths,
+    full: &Path,
+    mut tick: impl FnMut() -> Result<(), String>,
+) -> Result<String, String> {
+    let mut file = open_regular(paths, full)?;
     let before = file
         .metadata()
         .map_err(|_| problem("artifact handle is unavailable"))?;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        tick()?;
         let read = file
             .read(&mut buffer)
             .map_err(|_| problem("artifact file cannot be read"))?;
@@ -321,13 +370,19 @@ fn validate_shape(manifest: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
-fn inventory(root: &Path) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
-    checked_metadata(root, true)?;
+fn inventory(
+    paths: &mut CheckedPaths,
+    root: &Path,
+    progress: &mut impl FnMut(Progress) -> Result<(), String>,
+) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
+    paths.metadata(root, true)?;
     let mut files = BTreeSet::new();
     let mut directories = BTreeSet::new();
     let mut canonical = BTreeSet::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
+        #[cfg(windows)]
+        paths.metadata(&directory, true)?;
         for item in
             fs::read_dir(&directory).map_err(|_| problem("artifact inventory unavailable"))?
         {
@@ -362,14 +417,40 @@ fn inventory(root: &Path) -> Result<(BTreeSet<String>, BTreeSet<String>), String
             } else {
                 return Err(problem("artifact contains a special file"));
             }
+            progress(Progress {
+                phase: "inventory",
+                completed: files.len(),
+                total: None,
+            })?;
         }
     }
     Ok((files, directories))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Progress {
+    pub phase: &'static str,
+    pub completed: usize,
+    pub total: Option<usize>,
+}
+
 pub fn verify(root: &Path, expected: Expected<'_>) -> Result<VerifiedArtifact, String> {
-    checked_metadata(root, true)?;
-    let raw = read_manifest(&root.join(MANIFEST))?;
+    verify_observed(root, expected, |_| Ok(()))
+}
+
+pub fn verify_observed(
+    root: &Path,
+    expected: Expected<'_>,
+    mut progress: impl FnMut(Progress) -> Result<(), String>,
+) -> Result<VerifiedArtifact, String> {
+    let mut paths = CheckedPaths::default();
+    progress(Progress {
+        phase: "manifest",
+        completed: 0,
+        total: None,
+    })?;
+    paths.metadata(root, true)?;
+    let raw = read_manifest(&mut paths, &root.join(MANIFEST))?;
     let manifest_sha256 = digest(&raw);
     let manifest: Manifest = serde_json::from_slice(&raw)
         .map_err(|_| problem("artifact manifest has invalid fields"))?;
@@ -387,7 +468,7 @@ pub fn verify(root: &Path, expected: Expected<'_>) -> Result<VerifiedArtifact, S
         ));
     }
     // Complete structure/link/inventory checks precede EVERY payload read.
-    let (mut files, directories) = inventory(root)?;
+    let (mut files, directories) = inventory(&mut paths, root, &mut progress)?;
     files.remove(MANIFEST);
     let listed: BTreeSet<_> = manifest.files.keys().cloned().collect();
     if files != listed {
@@ -404,13 +485,30 @@ pub fn verify(root: &Path, expected: Expected<'_>) -> Result<VerifiedArtifact, S
     if directories != allowed_directories {
         return Err(problem("artifact contains an unlisted directory"));
     }
-    for (relative, expected_hash) in &manifest.files {
-        if hash_file(&root.join(relative))? != *expected_hash {
+    progress(Progress {
+        phase: "hashing",
+        completed: 0,
+        total: Some(manifest.files.len()),
+    })?;
+    for (index, (relative, expected_hash)) in manifest.files.iter().enumerate() {
+        if hash_file(&mut paths, &root.join(relative), || {
+            progress(Progress {
+                phase: "hashing",
+                completed: index,
+                total: Some(manifest.files.len()),
+            })
+        })? != *expected_hash
+        {
             return Err(format!("artifact file hash mismatch: {relative}"));
         }
+        progress(Progress {
+            phase: "hashing",
+            completed: index + 1,
+            total: Some(manifest.files.len()),
+        })?;
     }
     // Detect metadata mutation as well as payload mutation between phases.
-    if read_manifest(&root.join(MANIFEST))? != raw {
+    if read_manifest(&mut paths, &root.join(MANIFEST))? != raw {
         return Err(problem("artifact manifest changed during verification"));
     }
     Ok(VerifiedArtifact {
@@ -486,6 +584,54 @@ mod tests {
         let result = fixture.verify().unwrap();
         assert_eq!(result.manifest.files.len(), 2);
         assert_eq!(result.manifest_sha256.len(), 64);
+    }
+
+    #[test]
+    fn reports_all_verification_phases_and_cancellation_prevents_remaining_reads() {
+        let f = Fixture::new();
+        let mut events = Vec::new();
+        verify_observed(&f.root(), Expected::default(), |p| {
+            events.push(p);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(events.first().unwrap().phase, "manifest");
+        assert!(events.iter().any(|p| p.phase == "inventory"));
+        let last = events.last().unwrap();
+        assert_eq!(
+            (last.phase, last.completed, last.total),
+            ("hashing", 2, Some(2))
+        );
+        let error = verify_observed(&f.root(), Expected::default(), |p| {
+            if p.phase == "hashing" && p.completed == 0 {
+                Err("owner cancelled".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "owner cancelled");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_directories_stay_locked_until_every_payload_is_checked() {
+        let f = Fixture::new();
+        let moved = f.0.join("moved");
+        let mut attempted = false;
+        verify_observed(&f.root(), Expected::default(), |p| {
+            if p.phase == "hashing" && !attempted {
+                attempted = true;
+                assert!(
+                    fs::rename(f.root(), &moved).is_err(),
+                    "a verified ancestor must not be replaceable"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(attempted);
+        fs::rename(f.root(), &moved).unwrap();
     }
 
     #[test]
@@ -671,7 +817,8 @@ mod tests {
             .unwrap_err()
             .contains("link"));
         let alias_parent = alias.join("node");
-        assert!(checked_metadata(&alias_parent, true)
+        assert!(CheckedPaths::default()
+            .metadata(&alias_parent, true)
             .unwrap_err()
             .contains("link"));
     }

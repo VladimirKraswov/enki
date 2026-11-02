@@ -144,6 +144,13 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: ./scripts/verify-windows.ps1 -ArtifactOnly
+      - name: Measure Windows runtime verification on the packaged artifact
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $artifact = (Resolve-Path 'src-tauri/target/enki-agent/current').Path
+          cargo run --locked --manifest-path src-tauri/Cargo.toml --example runtime_verify_probe -- $artifact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Artifact receipt
         id: receipt
         run: node scripts/ci-artifacts.mjs ${{ matrix.platform }}

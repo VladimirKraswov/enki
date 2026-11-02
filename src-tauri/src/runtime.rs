@@ -34,6 +34,11 @@ use std::{
 use tauri::{Emitter, Manager};
 
 const READY_DEADLINE: Duration = Duration::from_secs(60);
+const VERIFY_DEADLINE: Duration = Duration::from_secs(15 * 60);
+const START_WAIT: Duration = Duration::from_secs(16 * 60 + 30);
+fn ready_deadline(verified_at: Instant) -> Instant {
+    verified_at + READY_DEADLINE
+}
 const STDERR_TAIL: usize = 16 * 1024;
 const ORIGINS: &[&str] = &[
     "tauri://localhost",
@@ -245,6 +250,7 @@ impl AckError {
 
 #[derive(Default, Clone)]
 pub struct RuntimeSupervisor {
+    startup: Arc<startup::Startup>,
     inner: Arc<Mutex<Option<Supervised>>>,
     start: Arc<Mutex<()>>,
     activity: Arc<Mutex<Value>>,
@@ -334,6 +340,7 @@ mod config_commit;
 mod config_fs;
 mod control;
 mod rotation;
+mod startup;
 mod vault;
 
 pub struct Artifact {
@@ -372,23 +379,41 @@ fn inside(root: &Path, relative: &str) -> Result<PathBuf, String> {
 /// Verify the complete immutable artifact at every activation; a previous .ok
 /// marker is not evidence about its current bytes. This never executes Node.
 pub fn locate(app: &tauri::AppHandle) -> Result<Artifact, String> {
+    locate_checked(app, None)
+}
+fn locate_observed(
+    app: &tauri::AppHandle,
+    mut progress: impl FnMut(artifact::Progress) -> Result<(), String>,
+) -> Result<Artifact, String> {
+    locate_checked(app, Some(&mut progress))
+}
+fn locate_checked(
+    app: &tauri::AppHandle,
+    progress: Option<&mut dyn FnMut(artifact::Progress) -> Result<(), String>>,
+) -> Result<Artifact, String> {
     let root = artifact_root(app)?;
     let node_relative = if cfg!(windows) {
         "node/node.exe"
     } else {
         "node/bin/node"
     };
-    let verified = artifact::verify(
-        &root,
-        artifact::Expected {
-            contract: Some(CONTRACT),
-            node: Some(node_relative),
-            entry: Some("app/dist/main.js"),
-            ..artifact::Expected::default()
-        },
-    )
+    let expected = artifact::Expected {
+        contract: Some(CONTRACT),
+        node: Some(node_relative),
+        entry: Some("app/dist/main.js"),
+        ..artifact::Expected::default()
+    };
+    let mut interrupted = None;
+    let verified = match progress {
+        Some(progress) => artifact::verify_observed(&root, expected, |value| {
+            progress(value).inspect_err(|error| interrupted = Some(error.clone()))
+        }),
+        None => artifact::verify(&root, expected),
+    }
     .map_err(|detail| {
-        format!("Встроенная среда выполнения повреждена: {detail}. Переустановите Enki.")
+        interrupted.unwrap_or_else(|| {
+            format!("Не удалось проверить файлы среды Enki: {detail}. Проверьте доступность диска. Если ошибка повторяется, переустановите Enki.")
+        })
     })?;
     for required in [
         "app/runtime-version.json",
@@ -846,6 +871,22 @@ fn start_once<T>(
     launch(&guard)
 }
 
+fn start_shared<T>(
+    start: &Mutex<()>,
+    progress: &startup::Startup,
+    until: Instant,
+    live: impl Fn() -> Result<Option<T>, String>,
+    launch: impl FnOnce(&std::sync::MutexGuard<'_, ()>) -> Result<T, String>,
+) -> Result<T, String> {
+    let observed = progress.observed();
+    start_once(start, until, live, |lock| {
+        if let Some(error) = progress.joined_failure(observed) {
+            return Err(error);
+        }
+        launch(lock)
+    })
+}
+
 impl RuntimeSupervisor {
     fn live(&self) -> Result<Option<Connection>, String> {
         let mut inner = self
@@ -879,12 +920,13 @@ impl RuntimeSupervisor {
 
     /// Idempotent: concurrent callers share one start; a live runtime is reused.
     pub fn ensure(&self, app: &tauri::AppHandle) -> Result<Connection, String> {
-        let until = Instant::now() + READY_DEADLINE;
+        let until = Instant::now() + START_WAIT;
         if self.halted() {
             return Err("Ядро Enki завершает работу".into());
         }
-        start_once(
+        start_shared(
             &self.start,
+            &self.startup,
             until,
             || {
                 self.reconcile_rotation(app)?;
@@ -898,6 +940,24 @@ impl RuntimeSupervisor {
     /// stop request (latched before it waits for the lock) aborts this start at
     /// every checkpoint, so no late ready commits a generation after cleanup.
     fn ensure_locked(
+        &self,
+        app: &tauri::AppHandle,
+        until: Instant,
+        _start: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<Connection, String> {
+        self.startup.begin(
+            crate::paths::app_data_dir()
+                .ok()
+                .map(|p| p.join("runtime-startup.log")),
+        );
+        let result = self.launch_locked(app, until, _start);
+        match &result {
+            Ok(_) => self.startup.progress("ready", 0, None),
+            Err(error) => self.startup.failed(error, self.halted()),
+        }
+        result
+    }
+    fn launch_locked(
         &self,
         app: &tauri::AppHandle,
         until: Instant,
@@ -984,10 +1044,24 @@ impl RuntimeSupervisor {
                 .map_err(|_| "Состояние ядра недоступно")? =
                 json!({"idle":false,"state":"starting","nativeGeneration":gate.generation});
         }
-        let artifact = locate(app)?;
-        if self.halted() || Instant::now() >= until {
-            return Err("Запуск ядра отменён или превысил время ожидания".into());
+        let verification_until = Instant::now() + VERIFY_DEADLINE;
+        let artifact = locate_observed(app, |p| {
+            if self.halted() {
+                return Err("Проверка среды Enki отменена".into());
+            }
+            if Instant::now() >= verification_until {
+                return Err("Проверка файлов среды Enki превысила 15 минут. Скопируйте диагностику запуска и проверьте доступность диска.".into());
+            }
+            self.startup.progress(p.phase, p.completed, p.total);
+            Ok(())
+        })?;
+        if self.halted() {
+            return Err("Запуск ядра отменён".into());
         }
+        self.startup
+            .verified(artifact.version.clone(), artifact.digest.clone());
+        let until = ready_deadline(Instant::now());
+        self.startup.progress("starting_node", 0, None);
         if let Ok(mut node) = BUNDLED_NODE.lock() {
             *node = Some(artifact.node.clone());
         }
@@ -1046,6 +1120,7 @@ impl RuntimeSupervisor {
             &json!({"type":"configure","requestId":configure_id,"generation":generation,
             "token":token,"origins":origins,"version":env!("CARGO_PKG_VERSION"),"executable":executable}),
         )?;
+        self.startup.progress("waiting_ready", 0, None);
         let ready = loop {
             if self.halted() || !gate.is_active() {
                 return Err("Запуск ядра прерван".into());
@@ -1490,13 +1565,16 @@ pub async fn runtime_status(app: tauri::AppHandle) -> Result<Value, String> {
     let supervisor = app.state::<RuntimeSupervisor>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let live = supervisor.live()?;
-        let artifact = locate(&app);
+        // Status is a cheap snapshot of the shared attempt. It must never
+        // start a second 29k-file integrity scan while startup is in progress.
+        let startup = supervisor.startup.snapshot();
         Ok(json!({
             "running": live.is_some(),
             "version": live.as_ref().map(|c| c.version.clone()),
-            "bundled": artifact.as_ref().ok().map(|a| &a.version),
-            "artifactDigest": artifact.as_ref().ok().map(|a| &a.digest),
-            "error": artifact.err(),
+            "bundled": startup["bundled"],
+            "artifactDigest": startup["artifactDigest"],
+            "error": startup["error"],
+            "startup": startup,
             "activity": supervisor.activity(),
         }))
     })
@@ -1581,6 +1659,70 @@ pub fn shutdown(app: &tauri::AppHandle) {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
+
+    #[test]
+    fn slow_integrity_verification_does_not_consume_node_ready_deadline() {
+        let start = Instant::now();
+        let verified = start + Duration::from_secs(180);
+        assert_eq!(
+            ready_deadline(verified).duration_since(verified),
+            READY_DEADLINE
+        );
+        assert!(START_WAIT > VERIFY_DEADLINE + READY_DEADLINE);
+    }
+
+    #[test]
+    fn callers_join_one_failed_verification_and_only_an_explicit_later_attempt_retries() {
+        let lock = Arc::new(Mutex::new(()));
+        let progress = Arc::new(startup::Startup::default());
+        let launches = Arc::new(AtomicU32::new(0));
+        let (entered, wait) = mpsc::channel();
+        let (l, p, n) = (lock.clone(), progress.clone(), launches.clone());
+        let leader = thread::spawn(move || {
+            start_shared::<u32>(
+                &l,
+                &p,
+                Instant::now() + Duration::from_secs(3),
+                || Ok(None),
+                |_| {
+                    n.fetch_add(1, Ordering::SeqCst);
+                    p.begin(None);
+                    entered.send(()).unwrap();
+                    thread::sleep(Duration::from_millis(100));
+                    p.failed("verification failed", false);
+                    Err("verification failed".into())
+                },
+            )
+        });
+        wait.recv_timeout(Duration::from_secs(1)).unwrap();
+        let joined = start_shared::<u32>(
+            &lock,
+            &progress,
+            Instant::now() + Duration::from_secs(3),
+            || Ok(None),
+            |_| {
+                launches.fetch_add(1, Ordering::SeqCst);
+                panic!("follower repeated full verification")
+            },
+        );
+        assert_eq!(leader.join().unwrap().unwrap_err(), "verification failed");
+        assert_eq!(joined.unwrap_err(), "verification failed");
+        assert_eq!(launches.load(Ordering::SeqCst), 1);
+        let retried = start_shared(
+            &lock,
+            &progress,
+            Instant::now() + Duration::from_secs(3),
+            || Ok(None),
+            |_| {
+                launches.fetch_add(1, Ordering::SeqCst);
+                progress.begin(None);
+                progress.progress("ready", 0, None);
+                Ok(2)
+            },
+        );
+        assert_eq!(retried.unwrap(), 2);
+        assert_eq!(launches.load(Ordering::SeqCst), 2);
+    }
 
     /// Production `ensure` seam with an own launch factory (no tauri app, no
     /// installed process): eight concurrent callers start exactly ONE runtime.

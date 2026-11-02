@@ -45,6 +45,26 @@ function shaFile(file: string): string {
 
 const sameFile = (a: string, b: string): boolean => { try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return false; } };
 
+/** Windows package redirection can make a junction's child unavailable even
+ * though both app-data roots resolve to the same physical directory. Accept
+ * only the exact former workshop path, only after verifying both roots and the
+ * current direct child; all other missing directories remain untouched. */
+export function verifiedLegacyWorkshopAlias(
+  directory: string, data: string, platform: NodeJS.Platform = process.platform,
+  resolve: (p: string) => string | null = canonicalExisting,
+): string | null {
+  if (platform !== "win32") return null;
+  const root = path.dirname(data);
+  const same = (a: string, b: string) => path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
+  if (path.basename(root).toLowerCase() !== "enki") return null;
+  const alias = path.join(path.dirname(root), "opencode-desktop");
+  if (!same(directory, path.join(alias, "workshop"))) return null;
+  const originalRoot = resolve(root), legacyRoot = resolve(alias), workshop = resolve(path.join(root, "workshop"));
+  if (!originalRoot || !legacyRoot || !workshop || !same(originalRoot, legacyRoot)
+    || !same(path.dirname(workshop), originalRoot)) return null;
+  return workshop;
+}
+
 export class SessionShards {
   constructor(private readonly db: Database, private readonly catalog: SessionCatalog, private readonly paths: RuntimePaths) {}
 
@@ -59,7 +79,7 @@ export class SessionShards {
       for (const row of this.db.all(`SELECT DISTINCT directory FROM ${table}`)) named.add(text(row, "directory"));
     const map = new Map<string, string>();
     for (const directory of named) {
-      const canonical = canonicalExisting(directory);
+      const canonical = canonicalExisting(directory) ?? verifiedLegacyWorkshopAlias(directory, this.paths.data);
       if (canonical && canonical !== directory) map.set(directory, canonical);
     }
     return map;

@@ -7,9 +7,9 @@
 import "fake-indexeddb/auto";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeFixture } from "./helpers/runtime-fixture";
-const hosts = vi.hoisted(() => ({ connect: null as null | ((target: { kind: string; host?: { id: string } }) => Promise<unknown>) }));
+const hosts = vi.hoisted(() => ({ connect: null as null | ((target: { kind: string; host?: { id: string } }, progress?: (value: unknown)=>void) => Promise<unknown>) }));
 vi.mock("../src/agent/registry", async (original) => ({ ...(await original<typeof import("../src/agent/registry")>()),
-  connectRuntime: vi.fn(async (target: { kind: string; host?: { id: string } }) => hosts.connect!(target)) }));
+  connectRuntime: vi.fn(async (target: { kind: string; host?: { id: string } }, progress?: (value: unknown)=>void) => hosts.connect!(target, progress)) }));
 let store: any, fx: RuntimeFixture, fixture: typeof import("./helpers/runtime-fixture"), chats: string[];
 const session = (id: string, directory: string) => ({ id, directory, title: id, projectID: "global", time: { created: 1, updated: 1 } });
 const defer = () => { let resolve!: (x: unknown) => void; const promise = new Promise<unknown>((r) => (resolve = r)); return { promise, resolve }; };
@@ -285,4 +285,21 @@ it("a workspace failure preserves the unassigned draft and never falls back to H
   expect(store.state.ui.sendError).toContain("disk unavailable");
   expect(fx.made("POST", "/sessions")).toEqual([]);
   expect(commands()).toEqual([]);
+});
+
+it('late local startup progress cannot replace the selected SSH host state', async () => {
+  const pending = defer(); let report!: (value: unknown)=>void;
+  const remote = runtime({ connection: { endpoint: "http://127.0.0.1:49999", token: "r".repeat(43) }, workspace: "ssh:host:4096" });
+  store.saveRemoteHost(remoteHost);
+  hosts.connect = async (target, progress) => {
+    if (target.kind === "local") { report = progress!; return pending.promise; }
+    return remote.backend;
+  };
+  const local = store.connectLocal();
+  await vi.waitFor(()=>expect(report).toBeTypeOf('function'));
+  expect(await store.connectHost('remote')).toBe(true);
+  report({phase:'hashing',completed:5,total:10});
+  expect(store.state.connection.startup).toBeUndefined();
+  pending.resolve(fx.backend); expect(await local).toBe(false);
+  expect(store.state.connection.endpoint).toBe('http://127.0.0.1:49999');
 });

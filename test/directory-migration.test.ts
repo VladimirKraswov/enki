@@ -29,3 +29,20 @@ it('a cyclic or invalid rename cannot hang or redirect relative preference keys'
  expect(migrateDirectoryPrefs(prefs,{'/a':'/b','/b':'/a','session:1':'/other'}).selectedDirectory).toBe('/a');
  expect(migrateDirectoryPrefs(prefs,{'session:1':'/other'}).drafts).toEqual(prefs.drafts);
 });
+it('reconciles Windows slash and case differences only at a directory boundary',()=>{
+ const prefs={...DEFAULT_PREFS,selectedDirectory:'c:\\Users\\Sprot\\AppData\\Local\\opencode-desktop\\workshop',
+  drafts:{'new::C:\\Users\\sprot\\AppData\\Local\\opencode-desktop\\workshop\\sub':'draft'}};
+ const from='C:/Users/sprot/AppData/Local/opencode-desktop/workshop';
+ const to='C:\\Users\\sprot\\AppData\\Local\\enki\\workshop';
+ const moved=migrateDirectoryPrefs(prefs,{[from]:to});
+ expect(moved.selectedDirectory).toBe(to);
+ expect(moved.drafts['new::'+to+'\\sub']).toBe('draft');
+ const unrelated={...prefs,selectedDirectory:prefs.selectedDirectory+'-other'};
+ expect(migrateDirectoryPrefs(unrelated,{[from]:to}).selectedDirectory).toBe(unrelated.selectedDirectory);
+ expect(migrateDirectoryPrefs(prefs,{[from]:to,[from.replace(/\//g,'\\')]:to+'-other'}).selectedDirectory).toBe(prefs.selectedDirectory);
+});
+it('keeps the committed Windows spelling and leaves real alias cycles unchanged',()=>{
+ const prefs={...DEFAULT_PREFS,selectedDirectory:'c:\\Users\\Sprot\\project'};
+ expect(migrateDirectoryPrefs(prefs,{'C:/Users/Sprot/project':'C:\\Users\\sprot\\project'}).selectedDirectory).toBe('C:\\Users\\sprot\\project');
+ expect(migrateDirectoryPrefs(prefs,{'c:/users/sprot/project':'C:/next','C:/next':'C:/USERS/SPROT/PROJECT'}).selectedDirectory).toBe(prefs.selectedDirectory);
+});
