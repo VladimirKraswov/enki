@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "githubCli": {
+    "version": "2.103.3",
+    "provenance": "Official cli/cli GitHub release API SHA256 asset digests over HTTPS; not a detached signature.",
+    "artifacts": {
+      "darwin-arm64": { "file": "gh_2.103.3_macOS_arm64.zip", "sha256": "d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062" },
+      "win32-x64": { "file": "gh_2.103.3_windows_amd64.zip", "sha256": "98d0cfa794721665d7973dd728c78aff7bd836d58f10f6d7a03568eccb0a22e0" },
+      "linux-x64": { "file": "gh_2.103.3_linux_amd64.tar.gz", "sha256": "4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d" }
+    }
+  }
+}

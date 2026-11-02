@@ -9,7 +9,9 @@ import { hubOrigin } from './identity';
 export interface HubConfig {endpoint:string;certificate:string;enabled:boolean;shareText:boolean;label:string;installed:Record<string,string>}
 export interface HubItem {id:string;kind:"skill"|"prompt"|"tool"|"template"|"runbook";title:string;description:string;revision:string;enabled:boolean}
 export interface HubPackage {path:string;sourcePath:string;manifest:{id:string;kind:HubItem["kind"];files:Record<string,string>;revision:string}}
-export interface Spool {origin:string;pending:number;dropped:number;records:HubRecord[];hashes:string[]}
+export interface WorkshopDiagnostic {requestId:string;agent:'desktop';session:string;level:'error';code:string;operation:string;detail:'';observed:number}
+export type HubSpoolRecord = HubRecord | {workshopLog:WorkshopDiagnostic};
+export interface Spool {origin:string;pending:number;dropped:number;records:HubSpoolRecord[];hashes:string[]}
 export const emptyConfig:HubConfig={endpoint:"",certificate:"",enabled:false,shareText:true,label:"",installed:{}};
 export async function config(value?:HubConfig,key?:string,expected?:HubConfig){
  const saved=await capabilityNative<HubConfig>("hub_config",{config:value??null,key:key??null,expected:expected??null});
@@ -22,8 +24,15 @@ export async function request<T>(path:string,body?:unknown,expected?:string):Pro
   safe: body === undefined || path === 'memory/retrieve',
  });
 }
-export const spool=(action:string,records?:HubRecord[],hashes?:string[],expected?:string)=>capabilityNative<Spool>("hub_spool",{action,records:records??null,hashes:hashes??null,expected:expected??null});
-export async function drain(){const batch=await spool("read");if(batch.records.length){await request("ingest",{appVersion:version,records:batch.records},batch.origin);return spool("ack",undefined,batch.hashes,batch.origin);}return batch;}
+export const spool=(action:string,records?:HubSpoolRecord[],hashes?:string[],expected?:string)=>capabilityNative<Spool>("hub_spool",{action,records:records??null,hashes:hashes??null,expected:expected??null});
+export async function drain(){
+ const batch=await spool("read");if(!batch.records.length)return batch;
+ const history=batch.records.filter((r):r is HubRecord=>!('workshopLog' in r));
+ if(history.length)await request("ingest",{appVersion:version,records:history},batch.origin);
+ for(const item of batch.records)if('workshopLog' in item)await request('workshop/logs',item.workshopLog,batch.origin);
+ // Partial success remains queued: both ingest and diagnostic IDs are idempotent.
+ return spool("ack",undefined,batch.hashes,batch.origin);
+}
 export function idle(){return Object.values(store.state.chat.sessions).every(s=>s.status.type==="idle")&&!store.state.ui.sending;}
 export const sourceId=(id:string)=>`hub-${id.slice(0,10)}-${signature(id).slice(0,12)}`;
 async function requireProfile(expected?: string): Promise<{ settings: HubConfig; origin: string }> {

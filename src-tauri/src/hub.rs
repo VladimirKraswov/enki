@@ -327,6 +327,7 @@ fn request(c: &Config, path: &str, body: Option<Value>) -> Result<Value, String>
         || path.starts_with("catalog/")
         || path.starts_with("metrics?")
         || path == "ingest"
+        || workshop_path(path, body.is_some())
         || memory_path(path)
         || path == "memory/retrieve";
     let model_control = model_control_path(path, body.as_ref());
@@ -342,6 +343,7 @@ fn request(c: &Config, path: &str, body: Option<Value>) -> Result<Value, String>
         && path != "ingest"
         && path != "memory"
         && path != "memory/retrieve"
+        && !workshop_path(path, true)
     {
         return Err("Unsupported Hub write operation".into());
     }
@@ -427,6 +429,28 @@ fn portable_uuid(value: &str) -> bool {
         && bytes[14] == b'4'
         && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
 }
+fn workshop_path(path: &str, write: bool) -> bool {
+    let route = path.split('?').next().unwrap_or("");
+    if write {
+        return matches!(
+            route,
+            "workshop/changes"
+                | "workshop/messages"
+                | "workshop/logs"
+                | "workshop/ack"
+                | "workshop/presence"
+        ) && !path.contains('?');
+    }
+    matches!(
+        route,
+        "workshop/status"
+            | "workshop/changes"
+            | "workshop/inbox"
+            | "workshop/messages"
+            | "workshop/logs"
+    ) || route.strip_prefix("workshop/changes/").is_some_and(hash_ok)
+}
+
 fn memory_path(path: &str) -> bool {
     path == "memory"
         || path
@@ -601,8 +625,8 @@ pub(crate) fn broker_identity() -> Result<Option<String>, String> {
     let c = load()?;
     Ok((c.enabled && !c.endpoint.is_empty()).then(|| scope(&c)))
 }
-/// Enki Runtime broker: model-service coordination only (catalog, prepare,
-/// status, release). Memory, packages, devices and releases stay UI-only. The
+/// Enki Runtime broker: model-service coordination and bounded owner-device
+/// exchange. Memory, packages, devices and releases stay UI-only. The
 /// device key never leaves this process.
 pub(crate) fn broker_request(
     path: &str,
@@ -610,10 +634,10 @@ pub(crate) fn broker_request(
     expected: &str,
 ) -> Result<Value, String> {
     let allowed = ["catalog", "prepare", "status", "release", "inspect"];
-    let Some(rest) = path.strip_prefix("model-services/") else {
-        return Err("Среда выполнения может обращаться только к сервисам моделей Hub".into());
-    };
-    if !allowed.contains(&rest) {
+    let models = path
+        .strip_prefix("model-services/")
+        .is_some_and(|rest| allowed.contains(&rest));
+    if !models && !workshop_path(path, body.is_some()) {
         return Err("Недопустимый запрос сервиса моделей".into());
     }
     let c = load()?;
@@ -963,6 +987,19 @@ pub fn cli() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workshop_paths_never_open_release_admin_or_arbitrary_transport_routes() {
+        assert!(workshop_path("workshop/status", false));
+        assert!(workshop_path("workshop/inbox?agent=enki&session=s", false));
+        assert!(workshop_path("workshop/messages", true));
+        assert!(workshop_path("workshop/presence", true));
+        assert!(!workshop_path("workshop/status", true));
+        assert!(!workshop_path("workshop/messages?recipient=other", true));
+        assert!(!workshop_path("workshop/../updates/device", true));
+        assert!(!workshop_path("workshop/devices/revoke", true));
+        assert!(!workshop_path("devices", false));
+        assert!(!workshop_path("https://other/status", false));
+    }
     #[test]
     fn model_coordinator_paths_accept_only_bounded_catalog_ids_and_ticket_operations() {
         let prepare = json!({"providerID":"local-artemis","modelID":"artemis31-v100","agent":"opencode","requestKey":"test-1","mode":"run"});

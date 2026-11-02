@@ -14,9 +14,9 @@ export function verifyEnvelope(envelope,digest,version,wrappedPublic){
  if(!message||!crypto.verify(null,message,key,sig.subarray(10))||!crypto.verify(null,Buffer.concat([sig.subarray(10),Buffer.from(comment)]),key,Buffer.from(lines[3]??'','base64')))throw Error('Release signature verification failed');
  return JSON.parse(raw);
 }
-export function deviceTransport(){
- if(process.env.ENKI_HUB_DEVICE_CONFIG){
-  const cfg=JSON.parse(privateFile(process.env.ENKI_HUB_DEVICE_CONFIG));const origin=new URL(cfg.endpoint);
+export function deviceTransport({configFile=process.env.ENKI_HUB_DEVICE_CONFIG}={}){
+ if(configFile){
+  const cfg=JSON.parse(privateFile(configFile));const origin=new URL(cfg.endpoint);
   if(origin.protocol!=='https:'||origin.pathname!=='/'||origin.search||origin.hash||origin.username||origin.password)throw Error('Device Hub requires HTTPS origin');
   const key=privateFile(cfg.keyFile).trim(),ca=fs.readFileSync(cfg.certificateFile);if(key.length<20||key.length>256||/[\r\n]/.test(key))throw Error('Invalid device key');
   const request=(route,body)=>new Promise((resolve,reject)=>{
@@ -25,14 +25,18 @@ export function deviceTransport(){
     let n=0;const parts=[];r.on('data',b=>{n+=b.length;if(n>64*1048576)r.destroy(Error('Hub response too large'));else parts.push(b);});r.on('error',reject);r.on('end',()=>{try{if(r.statusCode!==200)throw Error('Hub HTTP '+r.statusCode+'; publication not confirmed');resolve(JSON.parse(Buffer.concat(parts)));}catch(e){reject(e);}});
    });q.on('error',()=>reject(Error('Hub connection failed; publication not confirmed')));q.on('timeout',()=>q.destroy(Error('Hub timeout')));q.end(raw);
   });
-  return {head:channel=>request('/api/updates/enki/'+channel),publish:body=>request('/api/updates/device',body),artifact:digest=>request('/api/updates/artifacts/'+digest)};
+  return {identity:async()=>hash(origin.origin+'\0'+ca.toString('utf8')+'\0'+key),head:channel=>request('/api/updates/enki/'+channel),publish:body=>request('/api/updates/device',body),artifact:digest=>request('/api/updates/artifacts/'+digest),workshop:(route,body)=>request('/api/workshop/'+route,body)};
  }
  const candidates=[process.env.ENKI_NATIVE_EXECUTABLE,...(process.platform==='darwin'?['/Applications/Enki.app/Contents/MacOS/enki']:process.platform==='win32'?[path.join(process.env.LOCALAPPDATA??'','Enki','enki.exe'),path.join(process.env.LOCALAPPDATA??'','Programs','Enki','enki.exe')]:['/usr/bin/enki','/usr/local/bin/enki'])];
  const exe=candidates.find(p=>p&&path.isAbsolute(p)&&fs.existsSync(p));if(!exe)throw Error('Set ENKI_NATIVE_EXECUTABLE to installed Enki0.2.104+ or configure a paired headless device');
  const call=(...args)=>JSON.parse(execFileSync(exe,args,{encoding:'utf8',maxBuffer:64*1048576,timeout:180000,windowsHide:true}));
  const status=call('--hub-update-status');const v=status.nativeVersion?.split('.').map(Number);if(!v||v.some(x=>!Number.isInteger(x))||v[0]===0&&(v[1]<2||v[1]===2&&v[2]<104))throw Error('Install native Enki0.2.104+ first; device publication is unavailable in older binaries');
  let identity;
- return {head:async channel=>{const r=call('--hub-release','head',channel,identity??'');if(!/^[0-9a-f]{64}$/.test(r.identity)||(identity&&identity!==r.identity))throw Error('Hub profile changed');identity=r.identity;return r.head;},artifact:async digest=>call('--hub-release','artifact',digest,identity),publish:async body=>{
+ return {identity:async()=>{if(!identity){const r=call('--hub-release','head','stable','');if(!/^[0-9a-f]{64}$/.test(r.identity))throw Error('Invalid Hub identity');identity=r.identity;}return identity;},head:async channel=>{const r=call('--hub-release','head',channel,identity??'');if(!/^[0-9a-f]{64}$/.test(r.identity)||(identity&&identity!==r.identity))throw Error('Hub profile changed');identity=r.identity;return r.head;},artifact:async digest=>call('--hub-release','artifact',digest,identity),workshop:async(route,body)=>{
+  if(!identity){const r=call('--hub-release','head','stable','');identity=r.identity;}
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'enki-workshop-'));const file=path.join(dir,'request.json');
+  try{fs.chmodSync(dir,0o700);fs.writeFileSync(file,JSON.stringify({path:'workshop/'+route,body:body??null}),{mode:0o600});return call('--hub-release','workshop',file,identity);}finally{fs.rmSync(dir,{recursive:true,force:true});}
+ },publish:async body=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'enki-device-release-'));fs.chmodSync(dir,0o700);const file=path.join(dir,'candidate.json');
   try{fs.writeFileSync(file,JSON.stringify(body),{mode:0o600});return call('--hub-release','publish',file,identity);}finally{fs.rmSync(dir,{recursive:true,force:true});}
  }};

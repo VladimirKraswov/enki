@@ -31,6 +31,10 @@ _cache_spec = importlib.util.spec_from_file_location('enki_build_cache', Path(__
 _cache_module = importlib.util.module_from_spec(_cache_spec)
 _cache_spec.loader.exec_module(_cache_module)
 
+_workshop_spec = importlib.util.spec_from_file_location('enki_workshop', Path(__file__).with_name('workshop.py'))
+_workshop_module = importlib.util.module_from_spec(_workshop_spec)
+_workshop_spec.loader.exec_module(_workshop_module)
+
 MAX_BODY = 2 * 1024 * 1024
 KINDS = {'skill', 'prompt', 'tool', 'template', 'runbook'}
 KEY = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
@@ -202,6 +206,7 @@ class Hub:
             ''')
         os.chmod(self.db, 0o600)
         self.memory = _memory_module.Memory(self.connection, self.lock, scrub, Fault)
+        self.workshop = _workshop_module.Workshop(self.connection, self.lock, scrub, Fault)
         self.releases = _release_module.Releases(root, self.lock, Fault)
         self.native_updates = _native_module.NativeUpdates(self.releases, _device_module.sign)
         self.build_cache = _cache_module.BuildCache(root / 'build-cache')
@@ -447,6 +452,8 @@ class Hub:
             'note':'Категории эвристические. Отказы и отмены не означают поломку. Статус completed не гарантирует успешный exit code; сырые выводы не собираются. Скорость и качество моделей по этим данным не оцениваются.'}
 
     def api(self, method, path, query, actor, data):
+        if path.startswith('/api/workshop/'):
+            return self.workshop.api(method, path.removeprefix('/api/workshop/'), query, actor, data)
         if path.startswith('/api/model-services/'):
             return self.model_services.api(method, path.removeprefix('/api/model-services/'), actor, data)
         if path == '/api/updates/device' and method == 'POST':
@@ -567,6 +574,7 @@ class Hub:
         with self.lock, self.connection() as c:
             keep=json.loads(c.execute('SELECT value FROM settings WHERE id="retention"').fetchone()[0])
             cutoff=now-keep['textDays']*86400000
+            self.workshop.maintain(cutoff)
             for row in c.execute('SELECT id,tools FROM records WHERE created<?', (cutoff,)).fetchall():
                 steps=json.loads(row['tools'])
                 for step in steps: step['error']=''

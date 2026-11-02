@@ -27,6 +27,10 @@ immutable-публикацию (Hub хранит publication.commit, и квит
 
 ## Выпуск через Hub
 
+Для передачи ещё не выпущенного коммита другой Мастерской используйте
+[обмен исходниками и сообщениями](WORKSHOP-EXCHANGE.md). `workshop push`
+не меняет stable; выпуск и ревью остаются отдельными действиями.
+
 ```sh
 npm run release:local -- stable
 ```

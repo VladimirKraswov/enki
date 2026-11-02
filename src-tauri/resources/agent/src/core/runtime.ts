@@ -11,6 +11,7 @@ import type { Broker, CapabilitiesScope } from "../control/broker.ts";
 import { Dispatcher } from "../execution/dispatcher.ts";
 import { ToolJournal } from "../execution/tools.ts";
 import { enkiExtensions } from "../extensions/enki.ts";
+import { hubExchangeExtension } from "../extensions/hub-exchange.ts";
 import type { ServerStatus } from "../../../shared/pi-extension.ts";
 import { InteractionBroker } from "../interaction/broker.ts";
 import type { DefaultPolicy } from "../interaction/access.ts";
@@ -452,6 +453,7 @@ export class Runtime {
             this.mcpReports.set(record.id, snapshot);
             this.journal.append(record.directory, record.id, { type: "mcp.status", properties: { sessionID: record.id, servers: snapshot.servers, ...(error ? { error } : {}) } });
           } }),
+        hubExchangeExtension(this.config.broker, record.id),
         ...(this.config.extraExtensions?.({ sessionID: record.id, directory: record.directory }) ?? []),
       ],
       // Owner-chosen files only; a path that no longer exists is skipped (and

@@ -6,6 +6,7 @@
 // published declarations of @earendil-works/pi-coding-agent 0.85.1.
 
 import { syncOwnedFile } from "../platform/owned-sync.ts";
+import { withShellTimeout } from "./shell-timeout.ts";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -279,8 +280,16 @@ export async function openAgentSession(options: OpenSessionOptions): Promise<Ope
     const projectShells: SdkExtension = pi => {
       const spawnHook = <T extends { env: NodeJS.ProcessEnv }>(context: T): T =>
         ({ ...context, env: projectToolEnvironment(context.env) });
-      pi.registerTool(createBashToolDefinition(cwd, { spawnHook }));
-      pi.registerTool(createPowerShellToolDefinition(cwd, { spawnHook }));
+      for (const tool of [createBashToolDefinition(cwd, { spawnHook }), createPowerShellToolDefinition(cwd, { spawnHook })]) {
+        const execute = tool.execute;
+        pi.registerTool({
+          ...tool,
+          description: `${tool.description} Enki applies a 1800-second timeout when omitted; set timeout explicitly for longer tasks.`,
+          parameters: { ...tool.parameters, properties: { ...tool.parameters.properties,
+            timeout: { ...tool.parameters.properties.timeout, description: "Timeout in seconds; defaults to 1800. Set explicitly for longer tasks." } } },
+          execute: (id, input, signal, onUpdate, context) => execute.call(tool, id, withShellTimeout(input), signal, onUpdate, context),
+        });
+      }
     };
     const resourceLoader = new ScopedResources(cwd, options.agentDir, qualifiedResourceSpec(options.resources),
       [{ name: "<enki-host:project-shells>", factory: projectShells }, ...hostPrelude]);

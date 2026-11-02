@@ -65,6 +65,11 @@ Full restore: `pct restore NEW_ID ARCHIVE --storage STORAGE`, check address/MAC/
 
 ## API and maintenance
 
+Owner-device source exchange, addressed agent inbox/ACK and bounded critical
+session diagnostics use `/api/workshop/*`. Deploy `workshop.py` with `server.py`;
+tables live in the existing backed-up `hub.sqlite`. Source snapshots are review
+data, never execution or releases. See [operator/client procedure](../../docs/WORKSHOP-EXCHANGE.md).
+
 Public `GET /health` service/API version only. Bearer device key: `GET /api/me`, `/catalog`, `/catalog/ID?revision=HASH`, `/metrics?device=ID&days=30`, `/devices`, `/sessions`, `/sessions/ID`, `/issues`, `/settings`; `POST /api/ingest` max50records/2MiB. Device-readable `GET /api/model-catalog` returns the shared model catalog (version, per-engine provider definitions); admin `POST /api/model-catalog` publishes the whole catalog with server-side validation and atomic version increment. Devices merge it into local engine configuration and keep selections/exclusions on the device. Admin-only writes `/catalog` CAS `expectedRevision`, `/devices`, `/devices/revoke`, `/sessions/review`, `/issues/review`, `/settings`; admin `GET /api/export` JSONL wrapped in JSON.
 
 `/sessions?limit=50&cursor=...` returns newest sessions with `nextCursor` (max100/page). `/sessions/ID?direction=older&limit=50&cursor=...` opens latest messages; `newer` walks from the beginning. Pages always return chronological records, `total`, and `nextCursor` (max200/page). Cursors are scoped to session/direction, with timestamp+ID tie-breaking. Web UI loads older pages without replacing review-note drafts; review still applies to the whole session. Closing/logout clears private detail and rejects late responses.

@@ -62,9 +62,9 @@ async function foundation(t: TestContext, options: { files?: string[]; inline?: 
   });
   const open = async () => { const worker = await SessionWorker.open(catalog.get(record.id)!, deps); workers.add(worker); return worker; };
   /** Real SDK turn: the faux model calls `tool`; returns the persisted tool output. */
-  const runTool = async (worker: SessionWorker, tool: string, command: string): Promise<string> => {
+  const runTool = async (worker: SessionWorker, tool: string, command: string, timeout?: number): Promise<string> => {
     const id = randomUUID(), call = `call_${id.slice(0, 8)}`;
-    faux.setResponses([fauxAssistantMessage([fauxToolCall(tool, { command }, { id: call })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    faux.setResponses([fauxAssistantMessage([fauxToolCall(tool, { command, ...(timeout === undefined ? {} : { timeout }) }, { id: call })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
     const begun = { id, kind: "prompt" as const, sessionID: record.id, directory: cwd, payload: { parts: [{ type: "text" as const, text: `run ${tool}` }], model: { providerID: faux.provider.id, modelID: "a" } } };
     ledger.begin(begun); await worker.startPrompt(begun);
     const stop = Date.now() + 5000;
@@ -112,11 +112,14 @@ test("an inline Bash override wins and keeps the same collision result across re
 });
 
 test("without overrides the host Bash fallback spawns with the original environment, PI_SESSION metadata and HOME", async t => {
+  const delays: number[] = [], schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (...args: Parameters<typeof setTimeout>) => { delays.push(args[1] ?? 0); return schedule(...args); });
   const f = await foundation(t), worker = await f.open();
   // Git Bash converts HOME to an MSYS path; compare its native spelling, not
   // a byte format the shell itself changes before executing any command.
   const home = process.platform === "win32" ? '$(cygpath -w "${HOME-unset}")' : '${HOME-unset}';
   const output = await f.runTool(worker, "bash", `printf '%s|%s|%s|%s|%s' "\${PI_CODING_AGENT_DIR-unset}" "\${PI_OFFLINE-unset}" "\${GOOGLE_APPLICATION_CREDENTIALS-unset}" "${home}" "\${PI_SESSION_ID-unset}"`);
+  assert.ok(delays.includes(1_800_000), "real SDK shell did not arm the Enki default deadline");
   const env = projectToolEnvironment(process.env);
   const expected = [env.PI_CODING_AGENT_DIR ?? "unset", env.PI_OFFLINE ?? "unset", env.GOOGLE_APPLICATION_CREDENTIALS ?? "unset", process.env.HOME ?? "unset", f.record.id].join("|");
   assert.ok(output.includes(expected), `fallback output ${output} lacks ${expected}`);
@@ -124,4 +127,16 @@ test("without overrides the host Bash fallback spawns with the original environm
   if (profile) assert.ok(!output.split("|")[0].includes(profile), "SDK bundled profile leaked into the project shell");
   const { opened, of } = await f.resolution();
   assert.deepEqual(of(opened.session), { fallbacks: ["bash", "powershell"], shadowed: [] });
+});
+
+test("an explicit short Bash deadline terminates the command through the real SDK", async t => {
+  const f = await foundation(t), worker = await f.open();
+  const output = await f.runTool(worker, "bash", "sleep 10", 0.1);
+  assert.match(output, /timed out after 0\.1 seconds/);
+});
+
+test("an explicit PowerShell deadline terminates the real Windows SDK command", { skip: process.platform !== "win32" }, async t => {
+  const f = await foundation(t), worker = await f.open();
+  const output = await f.runTool(worker, "powershell", "Start-Sleep -Seconds 10", 0.1);
+  assert.match(output, /timed out after 0\.1 seconds/);
 });

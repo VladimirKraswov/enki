@@ -6,6 +6,7 @@ import { assessmentIndex } from '../outcomes/sharing';
 import { iterateHubRecords } from './collection';
 import { enqueueChangedRecords } from './incremental';
 import { hubOrigin } from './identity';
+import { pendingTransportFailures, acknowledgeTransportFailures, watchTransportFailures, setTransportOrigin } from './transportDiagnostics';
 
 export function HubRuntime() {
   useEffect(() => {
@@ -18,15 +19,21 @@ export function HubRuntime() {
       busy = true;
       try {
         const settings = await config();
-        if (disposed || !settings.enabled) return;
+        if (disposed || !settings.enabled) { setTransportOrigin(null); return; }
         const [assessments, origin] = await Promise.all([assessmentIndex(), hubOrigin(settings)]);
         if (disposed) return;
+        setTransportOrigin(origin);
         const state = store.state;
         const scope = JSON.stringify([origin, state.prefs.workspaceKey ?? state.prefs.endpoint]);
         if (scope !== collectionScope) { observed = new WeakMap(); lastCatalog = 0; collectionScope = scope; }
         await enqueueChangedRecords(iterateHubRecords(state,assessments,settings.shareText), observed,
           batch=>spool('enqueue',batch,undefined,origin),()=>!disposed);
         if (disposed) return;
+        const transportFailures=pendingTransportFailures(origin).slice(0,20);
+        if(transportFailures.length){
+          await spool('enqueue',transportFailures.map(workshopLog=>({workshopLog})),undefined,origin);
+          acknowledgeTransportFailures(transportFailures.map(log=>log.requestId));
+        }
         await drain();
         failures = 0;
         next = Date.now() + 10000;
@@ -46,8 +53,9 @@ export function HubRuntime() {
       } finally { busy = false; }
     }
     const timer = setInterval(() => void tick(), 10000);
+    const unwatch = watchTransportFailures(()=>{next=0;void tick();});
     void tick();
-    return () => { disposed = true; clearInterval(timer); };
+    return () => { disposed = true; clearInterval(timer); unwatch(); };
   }, []);
   return null;
 }

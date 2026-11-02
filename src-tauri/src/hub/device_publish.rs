@@ -74,6 +74,22 @@ pub fn cli() -> Result<(), String> {
             }
             serde_json::from_slice(&bytes).map_err(|_| "Некорректный ответ Hub")?
         }
+        "workshop" => {
+            let data = checked_input(Path::new(value))?;
+            let path = data["path"].as_str().ok_or("Нужен маршрут обмена")?;
+            let body = data.get("body").filter(|b| !b.is_null()).cloned();
+            if data.as_object().is_none_or(|o| o.len() > 2)
+                || !workshop_path(path, body.is_some())
+                || data.to_string().len() > 2 * 1024 * 1024
+            {
+                return Err("Некорректный запрос обмена".into());
+            }
+            let c = load()?;
+            if !c.enabled {
+                return Err("Hub disabled".into());
+            }
+            request(&c, path, body)?
+        }
         _ => return Err("Неизвестная операция публикации".into()),
     };
     if release_identity()? != identity {

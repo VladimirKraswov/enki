@@ -3442,8 +3442,11 @@ class Store {
           },
         }));
         if (state === "open") void this.resyncAfterReconnect(directory, gen);
-        if (state === "error" && detail) {
+        if ((state === "error" || state === "reconnecting" && detail === "stream ended") && detail) {
           // Keep chat; report transport trouble without claiming the model is dead.
+          const session = this.state.activeSessionId;
+          void import('../hub/transportDiagnostics').then(({ reportTransportFailure }) =>
+            reportTransportFailure(session, detail, "event-stream")).catch(() => {});
         }
       },
     });

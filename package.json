@@ -1,9 +1,12 @@
 {
   "name": "enki",
   "private": true,
-  "version": "2.0.31",
+  "version": "2.0.32",
   "type": "module",
   "scripts": {
+    "dev:setup": "node scripts/dev-tools.mjs setup",
+    "dev:run": "node scripts/dev-tools.mjs run",
+    "workshop": "node scripts/workshop.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",

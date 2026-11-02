@@ -28,7 +28,9 @@ function errorText(value:unknown):string {
 }
 export function record(engine:HubRecord["engine"],session:Pick<Session,"id"|"title"|"directory">,m:Message,parts:MessagePart[],shareText:boolean):HubRecord|null {
  if(m.role==="assistant"&&m.summary)return null;
- if(m.role==="assistant"&&!m.time.completed&&!m.error)return null;
+ // A failed tool is diagnostic evidence even while the model is still running
+ // or parked on another tool; do not wait indefinitely for the final answer.
+ if(m.role==="assistant"&&!m.time.completed&&!m.error&&!parts.some(p=>p.type==="tool"&&p.state?.status==="error"))return null;
  // Intermediate text accompanying tools is not a final answer. No reasoning/file/raw input/output is serialized.
  const tools=parts.filter(p=>p.type==="tool"&&p.state).slice(0,128).map(p=>({id:p.callID??p.id,name:redact(p.tool,160),status:p.state!.status,durationMs:Math.max(0,positive(p.state!.time?.end)-positive(p.state!.time?.start)),error:errorText(p.state!.error)}));
  const visible=parts.filter(p=>p.type==="text"&&!p.synthetic&&!p.ignored).map(p=>p.text??"").join("\n");

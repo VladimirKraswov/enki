@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 
 // Apply privacy at enqueue, queue read and final HTTP send, including older queued cards.
 pub(super) fn strip_text(r: &mut Value) {
+    if r.get("workshopLog").is_some() {
+        return;
+    }
     if let Some(o) = r.as_object_mut() {
         o.insert("text".into(), json!(""));
         o.insert("title".into(), json!(""));
@@ -22,6 +25,41 @@ pub(super) fn upload_batch(pending: &[Value]) -> Vec<Value> {
         .collect()
 }
 pub(super) fn prepare_record(mut r: Value, share_text: bool) -> Result<Value, String> {
+    if let Some(log) = r.get("workshopLog") {
+        let identity = |key: &str| {
+            log[key].as_str().is_some_and(|s| {
+                !s.is_empty()
+                    && s.len() <= 160
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+            })
+        };
+        if r.as_object().is_none_or(|o| o.len() != 1)
+            || log.as_object().is_none_or(|o| o.len() != 8)
+            || !["requestId", "session", "operation"]
+                .iter()
+                .all(|k| identity(k))
+            || log["agent"] != "desktop"
+            || log["level"] != "error"
+            || log["detail"] != ""
+            || !log["observed"]
+                .as_u64()
+                .is_some_and(|n| n > 0 && n < 9_000_000_000_000_000)
+            || !matches!(
+                log["code"].as_str(),
+                Some(
+                    "stream.timeout"
+                        | "stream.http"
+                        | "stream.protocol"
+                        | "stream.transport"
+                        | "stream.ended"
+                )
+            )
+        {
+            return Err("Invalid structured transport diagnostic".into());
+        }
+        return Ok(r);
+    }
     if let Some(diagnostic) = r.get("diagnostics") {
         if r["role"] != "user" || !valid_diagnostics(diagnostic) {
             return Err("Invalid numeric task diagnostics".into());
@@ -127,6 +165,28 @@ pub(super) fn verify_origin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transport_diagnostics_are_durable_without_opening_a_text_side_channel() {
+        let log = json!({"workshopLog":{"requestId":"id-1","agent":"desktop","session":"s-1","level":"error",
+            "code":"stream.timeout","operation":"event-stream","detail":"","observed":1793650000000u64}});
+        assert_eq!(prepare_record(log.clone(), false).unwrap(), log);
+        let mut stripped = log.clone();
+        strip_text(&mut stripped);
+        assert_eq!(stripped, log);
+        for (key, value) in [
+            ("detail", json!("private")),
+            ("code", json!("https://secret")),
+            ("observed", json!(-1)),
+            ("session", json!("/Users/private")),
+        ] {
+            let mut bad = log.clone();
+            bad["workshopLog"][key] = value;
+            assert!(prepare_record(bad, true).is_err());
+        }
+        let mut bad = log.clone();
+        bad["workshopLog"]["extra"] = json!("private");
+        assert!(prepare_record(bad, true).is_err());
+    }
     fn diagnostic() -> Value {
         json!({"schema":1,"source":"observed","state":"ended","usageComplete":false,
             "wallMs":4000,"queueMs":null,"preparationMs":0,"firstResponseMs":50,

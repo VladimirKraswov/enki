@@ -2,6 +2,31 @@
 
 ## Подготовка
 
+Локальные Node и GitHub CLI можно установить в ignored `.local/tools`:
+
+```sh
+npm run dev:setup
+npm run dev:run -- npm test
+npm run dev:run -- npm run build:macos
+npm run dev:run -- npm run release:local -- stable
+npm run dev:run -- npm run release:packages -- stable
+```
+
+Node берётся из существующего runtime lock, GitHub CLI — из
+`scripts/dev-tools.json`; архивы проверяются по SHA256 до распаковки. Wrapper
+проверяет хеши executable, задаёт heap768MiB и Cargo jobs2, отдельные npm cache/
+config, Cargo cache и GH_CONFIG_DIR. NODE_PATH другого проекта исключается.
+Системные CLI, shell profiles и настройки моделей не меняются. Rust/Cargo и
+системный SDK остаются установленными предпосылками; их версии выводятся setup.
+На этом Mac ими уже собрана нативная Enki. Windows/Linux пакеты требуют своей
+ОС и SDK либо штатного GitHub Actions workflow, а не macOS cross-build.
+
+Доступ к GitHub Actions настраивается отдельно:
+`npm run dev:run -- gh auth login --hostname github.com --web --git-protocol https`.
+Это обычное подтверждение владельцем в GitHub; ключ Hub его не заменяет.
+Credential/config не входят в исходники и пакеты. Git remote/credential helper
+автоматически не меняются. Установка инструментов сама по себе ничего не публикует.
+
 Используйте проверенные lockfiles, Node из `scripts/runtime/sdk-contract.mjs`,
 Rust/Cargo и системные зависимости [своей платформы](PLATFORMS.md).
 Если окружение задаёт `NODE_PATH` из другого проекта, исключите его из запуска.
