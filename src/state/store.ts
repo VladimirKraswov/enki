@@ -2064,6 +2064,7 @@ class Store {
     if (this.isWorkshopDirectory(directory)) { await this.openWorkshop(); return this.state.prefs.workshop?.session ?? null; }
     if (!this.engineReady()) { this.patchUi({ toast: "Среда выполнения Enki не подключена." }); return null; }
     const gen = this.directoryGeneration;
+    const selection = this.selectionGeneration;
     const endpoint = this.backend.endpoint;
     const choice = this.getModelChoice();
     try {
@@ -2093,7 +2094,10 @@ class Store {
         sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
       }));
       this.updateSidebarSession(session);
-      await this.selectSession(session.id);
+      // Creation may finish after the owner selected another chat in this
+      // SAME directory (or selected away and back). Keep the new chat listed,
+      // but never let a stale completion take over the owner's newer view.
+      if (selection === this.selectionGeneration) await this.selectSession(session.id);
       return session;
     } catch (e) {
       if (gen === this.directoryGeneration)

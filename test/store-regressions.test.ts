@@ -75,6 +75,22 @@ it("R3: a late session creation from project A is not selected inside project B"
   expect(fx.made("POST", "/sessions")[0].body).toMatchObject({ directory: "/test/A" });
 });
 
+it('a late chat creation cannot replace a newer selection in the same project, including an away-and-back selection', async () => {
+  sessions['/test/A'] = [session('ses_reading'), session('ses_other')];
+  await store.setDirectory('/test/A');
+  await store.selectSession('ses_reading');
+  let resolve!: (value: unknown) => void;
+  fx.on('POST', '/sessions', () => new Promise(r => { resolve = r; }));
+  const pending = store.createSessionNow('Slow browser setup');
+  await vi.waitFor(() => expect(fx.made('POST', '/sessions')).toHaveLength(1));
+  await store.selectSession('ses_other');
+  await store.selectSession('ses_reading');
+  resolve(session('ses_late'));
+  expect((await pending)?.id).toBe('ses_late');
+  expect(store.state.activeSessionId).toBe('ses_reading');
+  expect(store.state.sessions.some((s: { id: string }) => s.id === 'ses_late')).toBe(true);
+});
+
 it("R4: a reconnect replaces stale busy status with the runtime's authoritative idle", async () => {
   sessions["/test/A"] = [session("ses_a")];
   fx.emit({ type: "session.status", properties: { sessionID: "ses_a", status: { type: "busy" } } } as never, "/test/A");
