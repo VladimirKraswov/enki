@@ -16,7 +16,11 @@ Node берётся из существующего runtime lock, GitHub CLI —
 `scripts/dev-tools.json`; архивы проверяются по SHA256 до распаковки. Wrapper
 проверяет хеши executable, задаёт heap768MiB и Cargo jobs2, отдельные npm cache/
 config, Cargo cache и GH_CONFIG_DIR. NODE_PATH другого проекта исключается.
-Системные CLI, shell profiles и настройки моделей не меняются. Rust/Cargo и
+Системные CLI, shell profiles и настройки моделей не меняются.
+На macOS wrapper держит `caffeinate -i` только до завершения своей команды,
+чтобы автоматический idle sleep не обрывал загрузки/проверки; явный сон и
+закрытие крышки не блокируются, глобальные настройки питания не меняются.
+Rust/Cargo и
 системный SDK остаются установленными предпосылками; их версии выводятся setup.
 На этом Mac ими уже собрана нативная Enki. Windows/Linux пакеты требуют своей
 ОС и SDK либо штатного GitHub Actions workflow, а не macOS cross-build.

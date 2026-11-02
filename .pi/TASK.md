@@ -64,3 +64,15 @@ NODE_OPTIONS=--max-old-space-size=768, CARGO_BUILD_JOBS<=2. Никакой GPU i
 После этого checkpoint исходники/документы не менять до release:packages на
 том же HEAD. Сначала проверять actual .local/releases/2.0.32-stable.json и
 операционные записи: отсутствие tracked DONE не означает отсутствия квитанции.
+
+## Операционный checkpoint 03.11 перед повторным publisher
+Первый gate: npm ECONNRESET, восстановлен exact lock с bounded retries/4sockets
+в локальном npm config. Повторный gate:436/438 Runtime tests,2alias tests
+не уложились в wall-clock; pmset подтвердил сон/пробуждение внутри прогона.
+Тот же файл без изменения утверждений:26/26passed. Wrapper теперь держит
+scoped caffeinate -i на время своей команды; глобальное питание не меняется.
+Final Mac32 app собран через .local/tools/Cargo cache. Нужны manifest/fingerprint
+check финального app и publisher с бодрствующим хостом; stable32 ещё НЕ выпущен.
+Source exchange:39files,902KiB, обратное чтение/digest verified (ab576ec);
+реальный сетевой отказ записан/прочитан по operator session через Hub logs.
+Fixture private-key marker исправлен конкатенацией, запрет ключей сохранён.

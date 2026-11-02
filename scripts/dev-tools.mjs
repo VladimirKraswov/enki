@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {spawnSync} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
 const root=path.resolve(import.meta.dirname,'..'),tools=path.join(root,'.local/tools');
@@ -93,4 +93,13 @@ export async function main(argv){
   run(r.node.path,[path.join(home,process.platform==='win32'?'node_modules/npm/bin/npm-cli.js':'lib/node_modules/npm/bin/npm-cli.js'),...rest],{env});
  }else run(command==='node'?r.node.path:command==='gh'?r.gh.path:command,rest,{env});
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv.slice(2)).catch(e=>{console.error(e.message);process.exitCode=1;});
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+ // A sleeping host advances wall-clock test deadlines without executing the
+ // queued work. Hold only an idle-sleep assertion for THIS wrapper's lifetime;
+ // do not change power preferences or prevent explicit sleep/lid closure.
+ const awake=process.platform==='darwin'&&fs.existsSync('/usr/bin/caffeinate')
+  ?spawn('/usr/bin/caffeinate',['-i','-w',String(process.pid)],{stdio:'ignore'}):undefined;
+ awake?.on('error',()=>console.error('Build idle-sleep assertion unavailable'));
+ awake?.unref();
+ main(process.argv.slice(2)).catch(e=>{console.error(e.message);process.exitCode=1;}).finally(()=>awake?.kill());
+}
