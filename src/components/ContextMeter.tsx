@@ -30,7 +30,7 @@ export function ContextMeter() {
             r="9"
             fill="none"
             stroke={
-              c.used !== null && c.used >= c.threshold
+              c.limit > 0 && c.used !== null && c.used >= c.threshold
                 ? "var(--warn)"
                 : "currentColor"
             }
@@ -42,7 +42,7 @@ export function ContextMeter() {
         <span>
           {c.compacting
             ? "Сжатие…"
-            : c.used === null
+            : c.used === null || !c.limit
               ? "Контекст"
               : `${c.percent}%`}
         </span>
@@ -60,9 +60,11 @@ export function ContextMeter() {
           <span>Автосжатие</span>
           <b>{c.auto === false ? "Выключено" : "Включено"}</b>
         </div>
+        {c.auto && c.limit > 0 && <p className="muted">Сжатие запускается между шагами при заполнении около {Math.round(c.threshold / c.limit * 100)}% окна. Остальное зарезервировано для ответа. Сжатие истории и кэш вычислений — разные механизмы.</p>}
         {store.conversation().capabilities.compaction && <button
           className="btn small"
           disabled={!s.activeSessionId || store.isRunning() || c.compacting}
+          title={store.isRunning() ? 'Сжатие вручную доступно после завершения текущего ответа агента' : 'Создать выжимку истории; исходная переписка сохранится'}
           onClick={() =>
             s.activeSessionId && void store.compactSession(s.activeSessionId)
           }

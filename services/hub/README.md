@@ -10,6 +10,14 @@ Proxmox `pve`, unprivileged Debian12 CT206 `enki-hub`: 1vCPU,1024MiB RAM,256MiB 
 
 Code `/opt/enki-hub`; SQLite `/var/lib/enki-hub/hub.sqlite`; TLS `/etc/enki-hub/server.crt` and private `server.key`. systemd service runs as dedicated unprivileged user with filesystem restrictions,512MiB memory ceiling and16request workers. Unused Debian template logind/networkd units masked; headless CT uses ifupdown/DHCP and pct management. Nesting not enabled. Restart verified service/network/autostart.
 
+Model-service private configuration may declare `promptProgress` as a map from
+target IDs to `"prompt-progress-v1"`. Advertise it only after verifying that target's
+Chat Completions backend accepts `return_progress` and emits request-scoped
+`prompt_progress` SSE counters. The public authenticated route carries only
+this capability, never the gateway URL or key. Omitted/unknown capabilities
+do not enable vendor request fields. A mixed-engine service can declare this
+for NInfer targets while leaving llama.cpp or other targets unmodified.
+
 ## Source downloads for legacy clients
 
 Unauthenticated LAN-only HTTPS `GET /downloads/latest/source.zip` downloads the

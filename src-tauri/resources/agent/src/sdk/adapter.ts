@@ -43,6 +43,9 @@ import { ScopedResources } from "../plugin-ui/scoped-resources.ts";
 import { SDK_VERSION } from "../protocol.ts";
 import { projectToolEnvironment } from "../platform/environment.ts";
 import { applyHeaders, type ConfigProjection } from "../models/config.ts";
+import { InferenceObserver, stableTools } from './inference-transport.ts';
+import type { InferenceProgress } from '../inference-progress.ts';
+import { compactionBudget } from '../context-budget.ts';
 
 export type SdkSession = AgentSession;
 export type SdkSessionRuntime = AgentSessionRuntime;
@@ -154,6 +157,8 @@ export interface ResourceSpec {
   noDiscoveredExtensions: boolean;
   /** Decision for project-local `.pi` resources; undecided projects are not trusted. */
   projectTrusted: (cwd: string) => Promise<boolean>;
+  /** Finish bounded host tool discovery BEFORE SDK snapshots its base prompt. */
+  preparePrompt?(): Promise<void>;
 }
 
 /** Validate an explicit Enki resource selection without discovering the owner's
@@ -195,6 +200,7 @@ export interface OpenSessionOptions {
   tools?: string[];
   /** In-memory, tool-less session that leaves no transcript (model access checks). */
   ephemeral?: boolean;
+  inference?: { supported(model: SdkModel): boolean; update(progress: InferenceProgress): void };
 }
 
 export interface OpenedSession {
@@ -203,6 +209,15 @@ export interface OpenedSession {
   diagnostics: string[];
   extensionErrors: Array<{ path: string; error: string }>;
   modelFallback?: string;
+}
+
+const compactionPolicies = new WeakMap<SdkSession, (settings: NonNullable<SettingsSpec['compaction']>) => void>();
+/** Public SDK settings, applied to a live session without replacing its loop,
+ * transcript, tools, model or Hub reservation. Reloads keep the same policy. */
+export function setSessionCompaction(session: SdkSession, settings: NonNullable<SettingsSpec['compaction']>): void {
+  const apply = compactionPolicies.get(session);
+  if (!apply) throw new Error('Политика сжатия SDK не привязана к сессии.');
+  apply(settings);
 }
 
 function settingsFor(options: OpenSessionOptions): SettingsManager {
@@ -248,6 +263,7 @@ export async function openAgentSession(options: OpenSessionOptions): Promise<Ope
   fs.mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
   const cwd = fs.realpathSync(options.cwd);
   let activeSession: SdkSession | undefined;
+  let compactionPolicy = options.settings.compaction;
   const factory: CreateAgentSessionRuntimeFactory = async (input) => {
     // Replacement commands stay inside the same Enki project. Switching project
     // is handled by the registry, with a fresh resource/access scope.
@@ -294,6 +310,50 @@ export async function openAgentSession(options: OpenSessionOptions): Promise<Ope
       ...(options.tools ? { tools: options.tools } : {}),
       ...(options.ephemeral ? { noTools: "all" as const } : {}),
     });
+    // The SDK's fixed 16k reserve was smaller than a local model's 32k answer.
+    // Keep its OWN auto-compaction loop, but fit the reserve to the selected
+    // model at every call (including tool continuations and model switches).
+    const stream = created.session.agent.streamFunction;
+    const applyBudget = (model: SdkModel) => {
+      const { reserveTokens, keepRecentTokens } = compactionBudget(model, compactionPolicy);
+      settingsManager.applyOverrides({ compaction: { ...compactionPolicy, reserveTokens, keepRecentTokens } });
+    };
+    const applyPolicy = (policy: NonNullable<SettingsSpec['compaction']>) => {
+      compactionPolicy = { ...policy };
+      created.session.setAutoCompactionEnabled(policy.enabled !== false);
+      // The SDK setter persists/rebuilds its settings. Apply the derived model
+      // budget afterwards so that rebuild cannot restore an outdated reserve.
+      if (created.session.model) applyBudget(created.session.model);
+    };
+    compactionPolicies.set(created.session, applyPolicy);
+    if (compactionPolicy) applyPolicy(compactionPolicy);
+    created.session.agent.streamFunction = (model, context, request) => {
+      applyBudget(model);
+      return stream(model, context, request);
+    };
+    if (options.inference) {
+      const observer = new InferenceObserver(options.inference.update);
+      const stream = created.session.agent.streamFunction;
+      created.session.agent.streamFunction = (model, context, request) => {
+        const supported = model.api === 'openai-completions' && options.inference!.supported(model);
+        let observed: ReturnType<InferenceObserver['begin']> | undefined;
+        return stream(model, context, { ...request,
+          onPayload: async (original, selected) => {
+            const modified = await request?.onPayload?.(original, selected);
+            let payload = modified === undefined ? original : modified;
+            if (supported && payload && typeof payload === 'object') {
+              payload = { ...stableTools(payload) as object, return_progress: true };
+            }
+            observed?.end(); observed = observer.begin(payload, request?.signal);
+            return payload;
+          },
+          ...(supported ? { fetch: async (...args: Parameters<typeof fetch>) => {
+            const perform = request?.fetch ?? globalThis.fetch;
+            return observed ? observed.wrap(perform)(...args) : perform(...args);
+          } } : {}),
+        });
+      };
+    }
     activeSession = created.session;
     return { ...created, services, diagnostics: [] };
   };

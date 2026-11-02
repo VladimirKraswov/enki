@@ -48,9 +48,10 @@ export interface SessionDTO {
   time: { created: number; updated: number; archived?: number | null };
 }
 
+export type { InferenceProgress } from './inference-progress.ts';
 export type SessionStatusDTO =
   | { type: "idle" }
-  | { type: "busy" }
+  | { type: "busy"; inference?: import('./inference-progress.ts').InferenceProgress }
   | { type: "retry"; attempt?: number; message?: string; next?: number }
   | { type: "waiting"; message?: string };
 

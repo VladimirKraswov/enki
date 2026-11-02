@@ -1,27 +1,49 @@
-# TASK checkpoint (2026-11-02, session 8a5e5bd7)
+# TASK checkpoint (2026-11-02, Codex)
 
 ## Цель
-2.0.29: перезапуск после source-обновления перестаёт выглядеть падением.
-Квитанция `last-install.json` получает `ts`; первый запуск после свежей
-подтверждённой установки показывает штатный toast (версия + «данные
-сохранены»); `desktop_updates status` отдаёт `installedVersion`.
+2.0.30: системная проверка Hub/Runtime/UI по зависшему запросу, кэшу,
+автосжатию и исчезающей выбранной модели. В Мастерскую задания не передавать:
+владелец поручил выполнить работу самостоятельно. Не выбирать/переключать его
+чаты, не прерывать чужие агенты и inference. Выпустить Hub/main, установить
+штатно через desktop_updates с ожиданием авторитетного простоя.
 
 ## Ограничения
-TMPDIR ВНЕ репозитория: /Volumes/Extend/work/enki-release-tmp (0700, Extend;
-внутри .local project-map падает — git-ignore-aware). NODE_OPTIONS≤1024
-(768), cargo jobs ≤2. Не трогать d1e46f3/eecb774, opencode.json, Eridu.
-Часы машины могли давать скачок (timed шагал −2ч36м за перезапуск 2.0.28):
-notice молчит для будущих/устаревших/бессоюзных receipt — неannounce заново.
+TMPDIR вне репозитория: /Volumes/Extend/work/enki-release-tmp; Node 24.22.1
+из установленного bundle в PATH; heap 768 MiB, Cargo jobs <=2.
+ОС identity, исходная история, ключи и режимы доступа сохраняются.
 
-## Проверенные факты
-- freshApplyNotice: mount-тест + таблица (свежий/устаревший/будущий/без ts/
-  interrupted) — test/update-applied-notice.test.ts 4/4; прежний код: 3/4
-  падали (proof .local/catalog-apply-audit/old-code-proof-2.0.29.log).
-- bridge installedVersion — agent-control-updates 6/6.
-- Rust receipt ts — hub_updates 26/26, lib 286/286, clippy -D warnings, fmt.
-- UI vitest 201 файлов EXIT=0; runtime 416/416; sdk-compat fail 0; tsc/build;
-  architecture 217; check:bundle OK.
+## Подтверждённые причины и исправления
+- Запрос V100 #157: 226904 входных токена, cache=0, TTFT=803.2 с; GPU работал.
+  #156 и #158 использовали кэш. Это не потеря пользовательского задания.
+- Поздняя регистрация браузерных tools меняла system prompt после его снимка.
+  Подготовка до бюджетирования/prompt и стабильные объявления tools исправлены.
+- SDK/UI использовали разные пороги. Общий бюджет: max output +4096;
+  262144/32768 => порог225280. Включение сжатия ранее не меняло живой SDK.
+  Теперь применяется без пересоздания чата; история не удаляется.
+- Сохранённая модель больше не стирается из-за ошибки discovery/auth.
+- SSE прогресс наблюдается публичным per-request fetch SDK, без второго loop,
+  без повторов inference, с отменой, изоляцией сессии и ограничением памяти.
+  Hub объявляет capability только для проверенных NInfer targets.
+- Последний GPU Mesh -> Eridu переход вызван нашим desktop_select при диагностике;
+  не считать его доказательством новой ошибки продукта. Больше не вызывать select.
+
+## Проверки до финального выпуска
+- Реальный SDK browser-prefix regression: старый код fail, исправленный pass.
+- Live auto-compaction: старый код fail; исправленный pass, два user turn и
+  исходный ответ сохранены, SDK worker тот же.
+- UI1248/203; runtime Vitest423/70; SDK node170; Hub109 pass/1 Windows skip
+  до последнего исправления применения settings; канонический выпуск повторит.
+- sdk:check, tsc, build, архитектура218, docs66/202 — прошли до version bump.
+- Настоящий V100 через собственную Hub reservation: повторный короткий префикс
+  TTFT1.758 ->0.269/0.267 с; это не замер ускорения 226k истории.
+- Hub model_services.py и приватные per-target capabilities развёрнуты атомарно,
+  service active, pinned-TLS каталог проверен; бэкенды/модели не перезапускались.
+- Изолированная визуальная проверка реального компонента выполнена, вкладка
+  закрыта, собственный Vite11645 остановлен. Рабочие чаты не использовались.
 
 ## Следующий шаг
-release:local stable 2.0.29 → квитанция/head/пакеты → push → авто-apply
-(desktop_updates). Наблюдателю после apply: toast «Enki обновлён до 2.0.29…».
+Финальный diff, release:local stable2.0.30 (все gate), сверка квитанции/commit/
+head/обоих пакетов ->push того же HEAD ->release:packages ->prepare/poll/apply.
+После установки read-only проверка версии, истории и состояния runtime;
+операционные итоги после publish только в .local/private receipts.
+Windows/Linux живую приёмку не объявлять выполненной на Mac.

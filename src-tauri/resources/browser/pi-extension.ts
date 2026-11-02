@@ -99,13 +99,14 @@ export interface BrowserOptions {
 }
 
 /** Loader injection keeps lifecycle/permission tests independent of a browser. */
-export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: BrowserLoader = loadBrowser): void {
+export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: BrowserLoader = loadBrowser): () => Promise<void> {
   let generation = 0;
   let closed = true;
   let connection: BrowserConnection | undefined;
   let initialization: AbortController | undefined;
   let discovery: Promise<void> | undefined;
   let recovered = false;
+  let context: ExtensionContext | undefined;
   const closing = new WeakMap<BrowserConnection, Promise<void>>();
   const close = (owned?: BrowserConnection): Promise<void> => {
     if (!owned) return Promise.resolve();
@@ -190,6 +191,7 @@ export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: B
   };
 
   pi.on("session_start", (_event, ctx) => {
+    context = ctx;
     initialization?.abort();
     initialization = new AbortController();
     const epoch = ++generation;
@@ -202,7 +204,9 @@ export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: B
   });
   // Metadata startup stays detached, but a real turn waits for its tool inventory.
   // Recover failed discovery once; never retry a browser action or model prompt.
-  pi.on("before_agent_start", async (_event, ctx) => {
+  const prepareTurn = async () => {
+    const ctx = context;
+    if (!ctx) return;
     const epoch = generation;
     await discovery;
     if (epoch === generation && !closed && !connection && !recovered && initialization) {
@@ -210,7 +214,8 @@ export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: B
       discovery = start(ctx, generation, initialization.signal);
       await discovery;
     }
-  });
+  };
+  pi.on("before_agent_start", prepareTurn);
   pi.on("session_shutdown", async () => {
     closed = true;
     generation++;
@@ -219,4 +224,5 @@ export function attachBrowser(pi: ExtensionAPI, options: BrowserOptions, load: B
     connection = undefined;
     await close(owned);
   });
+  return prepareTurn;
 }

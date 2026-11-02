@@ -28,6 +28,8 @@ interface TransientEntry { envelope: EventEnvelope; size: number; key: string | 
  * characters until the count cap.
  */
 export function transientKey(sessionID: string | null, event: ServerEventDTO): string | null {
+  if (event.type === 'session.status' && (event.properties?.status as { inference?: unknown } | undefined)?.inference)
+    return `inference\u0000${sessionID ?? ''}`;
   if (event.type === "session.sdk_queue") return `queue\u0000${sessionID ?? ""}`;
   if (event.type !== "message.part.updated") return null;
   const part = event.properties?.part as { id?: unknown } | undefined;

@@ -15,18 +15,19 @@ export function chooseModel(state: AppState, context: {
       // the existing default contract rather than erasing the owner's choice.
       return !model?.access || model.access.state === "available";
     };
-    const configured = (pid: string, mid: string) => state.connectedProviderIds.includes(pid) ||
-      state.providers.some(p => p.id === pid && p.source === "config" && Boolean(p.models[mid])) ||
-      state.prefs.modelServices?.some(s => s.providerID === pid && Boolean(s.bindings[mid]));
     const sessionChoice = sessionId
       ? legacyModelChoice(state, `session:${sessionId}`)
       : undefined;
-    if (sessionChoice && configured(sessionChoice.providerID, sessionChoice.modelID))
+    // Identity is durable; availability is a separate, changing observation.
+    // Losing discovery/auth must never silently replace a chat's chosen model
+    // with a provider default (or make a running conversation look model-less).
+    // Runtime admission still validates auth, routing and exact readiness.
+    if (sessionChoice)
       return sessionChoice;
     const active = sessionId
       ? context.activeModel
       : undefined;
-    if (active?.id && configured(active.providerID, active.id)) {
+    if (active?.id) {
       return {
         providerID: active.providerID,
         modelID: active.id,
@@ -34,7 +35,7 @@ export function chooseModel(state: AppState, context: {
       };
     }
     const stored = legacyModelChoice(state, dir || "*") ?? legacyModelChoice(state, "*");
-    if (stored && configured(stored.providerID, stored.modelID))
+    if (stored)
       return stored;
     const configuredDefault = state.configModel?.split("/");
     if (

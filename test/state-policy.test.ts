@@ -32,23 +32,25 @@ it('keeps session override, server session model, folder and defaults in order',
  s.configModel='local/family/model';expect(chooseModel(s,context)).toEqual({providerID:'local',modelID:'family/model',variant:'medium'});
  s.configModel=null;s.providerDefaults={local:'default'};expect(chooseModel(s,context)?.modelID).toBe('default');
 });
-it('projectless policy and disconnected providers cannot select a stale saved model', () => {
+it('projectless scopes stay separate and disconnected discovery cannot erase an explicit choice', () => {
  const s=fresh();s.directory='/one';s.connectedProviderIds=['local'];s.prefs.modelChoice={'/one':{providerID:'gone',modelID:'old'},'@chats':{providerID:'local',modelID:'chat'},'*':{providerID:'local',modelID:'global'}};
  expect(chooseModel(s,{...context,projectless:true})?.modelID).toBe('chat');
- expect(chooseModel(s,context)).toBeNull(); // Per-folder unusable entry preserves existing priority; provider defaults may follow.
- s.providerDefaults={local:'usable'};expect(chooseModel(s,context)?.modelID).toBe('usable');
- // A server session model of a disconnected provider is not used either.
+ // An explicit selection is identity, not permission to infer. Runtime
+ // admission handles availability; a disconnected catalog must not choose a
+ // different provider behind the owner's back.
+ expect(chooseModel(s,context)?.modelID).toBe('old');
+ s.providerDefaults={local:'usable'};expect(chooseModel(s,context)?.modelID).toBe('old');
  s.activeSessionId='s1';s.providerDefaults=null;
- expect(chooseModel(s,{...context,activeModel:{providerID:'gone',id:'x'}})).toBeNull();
+ expect(chooseModel(s,{...context,activeModel:{providerID:'gone',id:'x'}})?.modelID).toBe('x');
 });
-it('former Pi chats keep their saved choice; a plain key wins and an unconfigured provider is never chosen', () => {
+it('former Pi chats keep their saved choice; a plain key wins even during a connection failure', () => {
  const s=fresh();s.activeSessionId='s1';s.directory='/one';s.connectedProviderIds=['local'];
  s.prefs.modelChoice={'pi::session:s1':{providerID:'local',modelID:'pi-era',variant:'high'}};
  expect(chooseModel(s,context)).toEqual({providerID:'local',modelID:'pi-era',variant:'high'});
  s.prefs.modelChoice[modelScope('pi','session:s1')]={providerID:'local',modelID:'current'};
  expect(chooseModel(s,context)?.modelID).toBe('current');
  s.prefs.modelChoice={'session:s1':{providerID:'offline',modelID:'m'},'pi::/one':{providerID:'local',modelID:'folder-era'}};
- expect(chooseModel(s,context)?.modelID).toBe('folder-era');
+ expect(chooseModel(s,context)?.modelID).toBe('m');
  // Config-file providers and model-service bindings count as configured without a connection.
  s.connectedProviderIds=[];s.prefs.modelChoice={'session:s1':{providerID:'cfg',modelID:'m'}};
  s.providers=[{id:'cfg',source:'config',models:{m:{id:'m'}}} as any];

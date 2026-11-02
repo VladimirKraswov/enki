@@ -114,9 +114,15 @@ class ModelServices:
                 for mid in ids:
                     if mid in control["bindings"]:
                         sid = control["service"]
-                        routes.append(dict(service=sid, label=services.get(sid, {}).get("label", sid),
+                        route = dict(service=sid, label=services.get(sid, {}).get("label", sid),
                             providerID=engine["providerId"], modelID=mid, agent=agent,
-                            target=control["bindings"][mid]))
+                            target=control["bindings"][mid])
+                        # Explicit per-target transport capability. Never guess
+                        # from a provider's display name or expose private URLs.
+                        progress = services.get(sid, {}).get("promptProgress", {})
+                        if isinstance(progress, dict) and progress.get(route["target"]) == "prompt-progress-v1":
+                            route["promptProgress"] = "prompt-progress-v1"
+                        routes.append(route)
         return routes
 
     def route(self, data):

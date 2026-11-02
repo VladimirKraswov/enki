@@ -10,6 +10,7 @@ import type {
   ServerEvent,
   SessionStatus,
 } from "../api/types";
+import { normalizeStatusType } from '../api/types';
 
 import { observeTask, type DispatchTiming, type TaskObservation } from '../diagnostics/tasks';
 import { describeMessageError } from '../chat/errors';
@@ -242,7 +243,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
     case "session.status": {
       if (!sessionID) break;
       const slot = sessionSlot(root, sessionID);
-      slot.status = (props.status as SessionStatus) ?? { type: "idle" };
+      slot.status = normalizeStatusType(props.status);
       if (slot.status.type === "busy") { slot.lastError = null; slot.lastOutcome = null; }
       changed = true;
       break;

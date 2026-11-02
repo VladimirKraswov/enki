@@ -10,6 +10,7 @@ import { steeringText } from "../policy/prompt.ts";
 import {
   ownedSessionFile, appendRecoveryToolResult, bindSessionUi, openSessionReader, contextUsage, estimateSessionContext, findModel, isThinkingLevel, openAgentSession, sessionReaderOf, shutdownSession,
   IMAGE_TOKEN_ALLOWANCE, type SessionContextEstimate,
+  setSessionCompaction,
   type SdkAssistantMessage, type SdkEvent, type SdkImage, type SdkModel, type SdkModelRuntime, type SdkSession, type SdkSessionRuntime, type SdkCommandActions, type ResourceSpec, type SettingsSpec,
 } from "../sdk/adapter.ts";
 import { entriesPage, entriesToMessages } from "../sdk/history.ts";
@@ -35,6 +36,7 @@ export interface WorkerDeps {
   sessionDir(directory: string, sessionID?: string): string;
   settings(): SettingsSpec;
   resources(record: SessionRecord): Promise<ResourceSpec>;
+  promptProgress?(model: SdkModel): boolean;
   /** Session settled (idle, nothing queued in the SDK): drain queues, release leases. */
   onSettled(sessionID: string, outcome: RunOutcome): void;
   /** Steering text the SDK had not yet delivered when the user pressed Stop. */
@@ -260,6 +262,7 @@ export class SessionWorker {
   private unsubscribe: (() => void) | undefined;
   private operationEpoch = 0;
   private preparing = false;
+  private resourceAbort = new AbortController();
   private surface: SessionUi | undefined;
   private commands: SdkCommandActions | undefined;
   private sdkStarted = false;
@@ -273,7 +276,8 @@ export class SessionWorker {
   private initializing = true;
   private uiCommands = 0;
 
-  private constructor(readonly id: string, readonly directory: string, private session: SdkSession, private readonly deps: WorkerDeps, private readonly runtime: SdkSessionRuntime) {}
+  private constructor(readonly id: string, readonly directory: string, private session: SdkSession, private readonly deps: WorkerDeps, private readonly runtime: SdkSessionRuntime,
+    private readonly prepareResources: () => Promise<void> = async () => {}) {}
 
   static async open(record: SessionRecord, deps: WorkerDeps, ready?: (worker: SessionWorker) => void): Promise<SessionWorker> {
     const sessionDir = deps.sessionDir(record.directory, record.id);
@@ -281,6 +285,8 @@ export class SessionWorker {
     // loads the transcript, so the agent state sees every call paired.
     recoverInterruptedTools(record, sessionDir, deps);
     const model = record.model ? findModel(deps.modelRuntime, record.model.providerID, record.model.modelID) : undefined;
+    const resources = await deps.resources(record);
+    let instance: SessionWorker | undefined;
     const opened = await openAgentSession({
       cwd: record.directory,
       agentDir: deps.agentDir,
@@ -288,12 +294,18 @@ export class SessionWorker {
       ...(record.sessionFile && fs.existsSync(record.sessionFile) ? { sessionFile: record.sessionFile } : { newSessionId: record.id }),
       modelRuntime: deps.modelRuntime,
       settings: deps.settings(),
-      resources: await deps.resources(record),
+      resources,
+      inference: { supported: model => deps.promptProgress?.(model) === true, update: inference => {
+        if (!instance || instance.closed || instance.invalidating || !instance.busy()) return;
+        instance.status = { type: 'busy', inference: { ...inference, ...(instance.session.isCompacting ? { task: 'compaction' as const } : {}) } };
+        deps.journal.append(record.directory, record.id, { type: 'session.status', properties: { sessionID: record.id, status: instance.status } }, true);
+      } },
       ...(model ? { model } : {}),
       ...(record.model?.variant && isThinkingLevel(record.model.variant) ? { thinking: record.model.variant } : {}),
     });
-    const worker = new SessionWorker(record.id, record.directory, opened.session, deps, opened.runtime);
+    const worker = instance = new SessionWorker(record.id, record.directory, opened.session, deps, opened.runtime, () => resources.preparePrompt?.() ?? Promise.resolve());
     try {
+      worker.applyCompaction(deps.settings().compaction ?? { enabled: true });
       worker.extensionErrors = opened.extensionErrors;
       worker.commands = worker.commandActions();
       opened.runtime.setBeforeSessionInvalidate(() => {
@@ -307,6 +319,9 @@ export class SessionWorker {
         worker.invalidating = false;
       });
       await worker.bind(record, ready);
+      // Settings may have changed while the SDK/UI was opening, before the
+      // registry published this worker to live settings subscribers.
+      worker.applyCompaction(deps.settings().compaction ?? { enabled: true });
       worker.initializing = false;
       for (const error of opened.extensionErrors)
         deps.journal.append(record.directory, record.id, { type: "extension.error", properties: { sessionID: record.id, path: error.path, event: "load", error: error.error.slice(0, 500) } });
@@ -452,6 +467,18 @@ export class SessionWorker {
     };
     this.unsubscribe = session.subscribe(event => {
       this.lastActivity = Date.now();
+      // All providers expose SDK deltas, even when their HTTP protocol has no
+      // prefill extension. Never leave "waiting for server" under a streaming
+      // answer; known NInfer metadata and these phases share the same request.
+      if (event.type === 'message_update' && this.status.type === 'busy' && this.status.inference) {
+        const type = event.assistantMessageEvent.type;
+        const phase = type === 'thinking_delta' ? 'reasoning' : type === 'text_delta' || type === 'toolcall_delta' ? 'answer' : null;
+        const previous = this.status.inference;
+        if (phase && phase !== previous.phase && !(previous.phase === 'answer' && phase === 'reasoning')) {
+          this.status = { type: 'busy', inference: { ...previous, phase } };
+          this.deps.journal.append(this.directory, this.id, { type: 'session.status', properties: { sessionID: this.id, status: this.status } }, true);
+        }
+      }
       if (this.runFacts) observeRun(this.runFacts, event);
       if (event.type === "agent_start") { this.sdkStarted = true; this.surface?.setRunning(true); }
       if (event.type === "agent_settled") {
@@ -493,6 +520,10 @@ export class SessionWorker {
 
   streaming(): boolean {
     return this.session.isStreaming;
+  }
+
+  applyCompaction(settings: NonNullable<SettingsSpec['compaction']>): void {
+    if (!this.closed) setSessionCompaction(this.session, settings);
   }
 
   /** A dispatched SDK turn is in progress (from dispatch until it settles);
@@ -674,6 +705,7 @@ export class SessionWorker {
    * `reason` (e.g. a lost Hub reservation) becomes the truthful receipt text. */
   async abort(reason?: string): Promise<void> {
     this.operationEpoch++;
+    this.resourceAbort.abort(); this.resourceAbort = new AbortController();
     this.abortNote = reason ? { epoch: this.operationEpoch, text: reason } : null;
     // Bound to the exact active run; a settled turn or a later retry is unaffected.
     if (this.activeCommand) this.stopRequested = { command: this.activeCommand, cause: "stop", text: reason ?? null };
@@ -788,6 +820,19 @@ export class SessionWorker {
       throw new ContextTransitionError("cancelled", `${note}Подготовка отменена; модель не переключена, запрос не отправлен.`, [], result.compacted);
     };
     const original = { providerID: target.providerID, modelID: target.modelID };
+    // A detached browser startup can register tools AFTER before_agent_start
+    // captured the system prompt. The first turn then has an old preamble,
+    // the next a new one: the entire KV prefix is lost. Finish discovery here,
+    // before both budgeting and the SDK's prompt snapshot, without delaying
+    // read-only metadata or keeping idle workers/processes alive indefinitely.
+    const stop = AbortSignal.any([this.resourceAbort.signal, AbortSignal.timeout(PREFLIGHT_MS)]);
+    await new Promise<void>((resolve, reject) => {
+      const cancelled = () => reject(new Error('Подготовка инструментов отменена или превысила время ожидания. Запрос модели не отправлен.'));
+      if (stop.aborted) { cancelled(); return; }
+      stop.addEventListener('abort', cancelled, { once: true });
+      this.prepareResources().then(resolve, reject).finally(() => stop.removeEventListener('abort', cancelled));
+    });
+    fenced();
     let targetModel = findModel(this.deps.modelRuntime, target.providerID, target.modelID);
     if (!targetModel && readiness?.resolve) {
       let canonical: ModelRef;
@@ -927,6 +972,7 @@ export class SessionWorker {
     if (this.activeCommand && this.stopRequested?.command !== this.activeCommand)
       this.stopRequested = { command: this.activeCommand, cause: "close", text: null };
     this.closed = true; this.operationEpoch++;
+    this.resourceAbort.abort();
     this.deps.interactions.cancelSession(this.id);
     this.surface?.beginShutdown();
     this.unsubscribe?.(); this.unsubscribe = undefined;

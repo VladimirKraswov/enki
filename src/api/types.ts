@@ -3,6 +3,7 @@
 // compatible with histories imported from OpenCode, which the runtime serves
 // read-only. Parsers below tolerate additive/optional fields.
 import type { SessionOrigin } from "../../src-tauri/resources/agent/src/protocol";
+import { parseInferenceProgress } from "../../src-tauri/resources/agent/src/inference-progress";
 
 export interface HealthInfo {
   healthy: boolean;
@@ -51,7 +52,7 @@ export interface Session {
 
 export type SessionStatus =
   | { type: "idle" }
-  | { type: "busy" }
+  | { type: "busy"; inference?: import('../../src-tauri/resources/agent/src/inference-progress').InferenceProgress }
   | { type: "retry"; attempt?: number; message?: string; next?: number }
   | { type: "waiting"; message?: string };
 
@@ -345,17 +346,20 @@ export function normalizeMessage(raw: Record<string, unknown>): Message | null {
 export function normalizeStatusType(raw: unknown): SessionStatus {
   const t = (raw as { type?: string })?.type;
   switch (t) {
-    case "busy":
-      return { type: "busy" };
+    case "busy": {
+      const inference = parseInferenceProgress((raw as Record<string, unknown>).inference);
+      return { type: "busy", ...(inference ? { inference } : {}) };
+    }
     case "retry":
       return {
         type: "retry",
         attempt: asNumber((raw as Record<string, unknown>).attempt),
         message:
           asString((raw as Record<string, unknown>).message) || undefined,
+        next: asNumber((raw as Record<string, unknown>).next),
       };
     case "waiting":
-      return { type: "waiting" };
+      return { type: "waiting", message: asString((raw as Record<string, unknown>).message) || undefined };
     default:
       return { type: "idle" };
   }

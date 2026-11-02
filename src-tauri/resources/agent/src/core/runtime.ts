@@ -298,6 +298,7 @@ export class Runtime {
     const next = { ...requested, ...EFFECTIVE_DISCOVERY };
     const before = this.settings();
     this.db.run("INSERT INTO meta(key,value) VALUES('settings',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(next));
+    if (JSON.stringify(before.compaction) !== JSON.stringify(next.compaction)) this.registry?.applyCompaction(next.compaction);
     this.journal.append(null, null, { type: "runtime.settings", properties: { settings: next } });
     // Switches that select worker resources apply to open chats at their next idle use.
     const resources = (s: RuntimeSettings) => JSON.stringify([s.extensionPaths, s.skillPaths ?? [], s.promptPaths ?? [], s.packagePaths ?? [], s.browserEnabled, s.lspEnabled]);
@@ -419,6 +420,7 @@ export class Runtime {
 
   private async resources(record: SessionRecord): Promise<ResourceSpec> {
     const epoch = {};
+    const preparations = new Map<string, () => Promise<void>>();
     this.mcpReports.delete(record.id); this.mcpReports.set(record.id, { epoch, servers: [] });
     while (this.mcpReports.size > 256) this.mcpReports.delete(this.mcpReports.keys().next().value!);
     const settings = this.settings();
@@ -436,12 +438,14 @@ export class Runtime {
     const packages = (settings.packagePaths ?? []).map((root) => resolveLocalPackage(root));
     const fromPackages = (type: "extensions" | "skills" | "prompts" | "themes") => packages.flatMap((resolved) => resolved[type]);
     return qualifiedResourceSpec({
+      preparePrompt: async () => { for (const prepare of preparations.values()) await prepare(); },
       extensions: [
         ...enkiExtensions({
           sessionID: record.id, directory: record.directory,
           rules: () => this.catalog.get(record.id)?.permission ?? [],
           workshop: () => this.catalog.get(record.id)?.workshop ?? false,
         }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
+          registerPreparation: (key, prepare) => preparations.set(key, prepare),
           reportMcp: (servers, error) => {
             if (this.mcpReports.get(record.id)?.epoch !== epoch) return;
             const snapshot = { epoch, servers: servers.map(s => ({ ...s, tools: [...s.tools] })), ...(error ? { error } : {}) };
@@ -610,6 +614,7 @@ export class Runtime {
       modelRuntime: this.modelRuntime, agentDir: this.paths.agentDir, settings: () => this.sdkSettings(),
       sessionDir: (d, sessionID) => { const record = sessionID ? this.catalog.get(sessionID) : null; return record ? this.sessionDirOf(record) : this.sessionDir(d); },
       resources: (record) => this.resources(record),
+      promptProgress: model => this.hub.route(model.provider, model.id)?.promptProgress === 'prompt-progress-v1',
       ui: {
         db: this.db, hostId: this.hostId,
         authorize: (principal, sessionID, directory) => this.authorizeUi(principal, sessionID, directory),

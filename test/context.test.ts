@@ -6,7 +6,7 @@ const model = {
   providerID: "local",
   limit: { context: 131072, input: 114688, output: 16384 },
 };
-it("matches Qwen engine threshold and cache-aware last-turn usage without summing history", () => {
+it("uses the SDK window reserve once and cache-aware last-turn usage without summing history", () => {
   const chat = emptySessionChat();
   chat.messageOrder = ["a", "b"];
   chat.messages = {
@@ -32,18 +32,20 @@ it("matches Qwen engine threshold and cache-aware last-turn usage without summin
   };
   expect(contextUsage(chat, model, { reserved: 32768 })).toMatchObject({
     used: 63000,
-    threshold: 81920,
-    remaining: 18920,
+    // limit.input belonged to the retired engine. Do not subtract its output
+    // reserve a second time; SDK compaction uses contextWindow - reserve.
+    threshold: 98304,
+    remaining: 35304,
     limit: 131072,
     auto: true,
   });
   chat.messages.b = {
     ...chat.messages.b,
     role: "assistant",
-    tokens: { total: 81920, input: 60000, output: 5000 },
+    tokens: { total: 98304, input: 60000, output: 5000 },
   };
   expect(contextUsage(chat, model, { reserved: 32768 })).toMatchObject({
-    used: 81920,
+    used: 98304,
     remaining: 0,
   });
 });

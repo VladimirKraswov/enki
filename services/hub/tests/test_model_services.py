@@ -38,6 +38,16 @@ class Gateway:
 
 
 class Coordination(unittest.TestCase):
+    def test_prompt_progress_is_explicit_per_target_and_never_guessed(self):
+        self.assertTrue(all('promptProgress' not in r for r in self.broker.routes()))
+        config = json.loads(self.config.read_text())
+        config['services']['v100']['promptProgress'] = {'qwen': 'prompt-progress-v1', 'artemis': 'unknown-vendor'}
+        self.config.write_text(json.dumps(config))
+        rows = {r['target']: r for r in self.broker.routes()}
+        self.assertEqual(rows['qwen']['promptProgress'], 'prompt-progress-v1')
+        self.assertNotIn('promptProgress', rows['artemis'])
+        self.assertNotIn('tokenFile', json.dumps(rows))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)

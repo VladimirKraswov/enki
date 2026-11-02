@@ -12,7 +12,7 @@ import type { Broker } from "../control/broker.ts";
 import type { ModelRef } from "../protocol.ts";
 import { text, type Database } from "../store/db.ts";
 
-export interface HubRoute { service: string; label: string; providerID: string; modelID: string; agent: string; target: string }
+export interface HubRoute { service: string; label: string; providerID: string; modelID: string; agent: string; target: string; promptProgress?: string }
 /** A fresh catalog's exact equivalence, kept only for this transition. */
 export interface HubModelAlias {
   from: ModelRef; model: ModelRef; scope: string; service: string; target: string;
@@ -30,7 +30,8 @@ interface Lease { ticket: string; owner: string; route: HubRoute; scope: string;
 export function validRoute(value: unknown): value is HubRoute {
   if (!value || typeof value !== "object") return false;
   const r = value as HubRoute;
-  return [r.service, r.label, r.providerID, r.modelID, r.target, r.agent].every((v) => typeof v === "string" && v.length > 0 && v.length <= 200);
+  return (r.promptProgress === undefined || typeof r.promptProgress === 'string' && r.promptProgress.length <= 80)
+    && [r.service, r.label, r.providerID, r.modelID, r.target, r.agent].every((v) => typeof v === "string" && v.length > 0 && v.length <= 200);
 }
 
 export function validStatus(value: unknown): value is SwitchStatus {

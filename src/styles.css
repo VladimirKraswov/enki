@@ -3372,3 +3372,13 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .dialog-text-input { position:relative; display:flex; flex-direction:column; gap:10px; padding-bottom:6px; }
 .dialog-text-input > input, .dialog-text-input > textarea { width:100%; box-sizing:border-box; }
 .dialog-text-input .voice-recording { position:relative; inset:auto; width:100%; }
+
+/* Request-scoped inference progress; only measured token counts fill the bar. */
+.inference-status { margin: 10px 0 18px; max-width: 560px; color: var(--text-dim); font-size: 13px; }
+.inference-status .status-line { margin-bottom: 6px; color: var(--text-dim); }
+.inference-elapsed { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.inference-status progress { display: block; appearance: none; width: 100%; height: 4px; accent-color: var(--accent); background: var(--border); border: none; border-radius: 4px; overflow: hidden; }
+.inference-status progress::-webkit-progress-bar { background: var(--border); }
+.inference-status progress::-webkit-progress-value { background: var(--accent); }
+.inference-status progress::-moz-progress-bar { background: var(--accent); }
+.inference-detail { margin-top: 6px; font-size: 12px; line-height: 1.5; }

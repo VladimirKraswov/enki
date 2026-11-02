@@ -21,6 +21,9 @@ import { SessionRegistry } from "../src/sessions/registry.ts";
 import { branchSessionFile, openAgentSession, openSessionReader } from "../src/sdk/adapter.ts";
 import { shutdownPluginUi } from "../src/plugin-ui/runtime.ts";
 import type { PromptCommand } from "../src/protocol.ts";
+import { attachBrowser } from '../../browser/pi-extension.ts';
+import http from 'node:http';
+import type { InferenceProgress } from '../src/inference-progress.ts';
 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(accept => { resolve = accept; }); return { promise, resolve }; }
 async function until(check: () => boolean, label: string) { const stop = Date.now() + 3000; while (!check()) { if (Date.now() > stop) throw new Error(`Timeout ${label}`); await new Promise(resolve => setTimeout(resolve, 5)); } }
@@ -117,6 +120,90 @@ test("a real SDK run settles once and correlates its receipt with the actual per
   const file = worker.sessionFile(); assert.ok(file);
   assert.ok(openSessionReader(file, f.sessionDir).all().some(entry => entry.id === receipt.entryId));
   assert.equal(worker.busy(), false);
+});
+
+test('delayed browser inventory is included in the FIRST system prompt and does not invalidate the next turn prefix', async t => {
+  let prepareBrowser = async () => {};
+  const f = await foundation(t, [pi => {
+    // Same ordering as production: Enki's policy returns a prompt override,
+    // then the detached browser completes tool registration in its hook.
+    pi.on('before_agent_start', event => ({ systemPrompt: event.systemPrompt + '\nENKI_POLICY' }));
+  }, pi => {
+    prepareBrowser = attachBrowser(pi, { command: () => '/abs/enki', access: () => 'full' }, async () => ({
+      connect: async () => { await new Promise(resolve => setTimeout(resolve, 25)); },
+      listTools: async () => ({ tools: [{ name: 'browser_navigate', description: 'CACHE_STABLE_BROWSER', inputSchema: { type: 'object', properties: {} } }] }),
+      callTool: async () => ({ content: [{ type: 'text', text: 'unused' }] }), close: async () => {},
+    }));
+  }]);
+  const resources = f.deps.resources;
+  f.deps.resources = async record => ({ ...await resources(record), preparePrompt: () => prepareBrowser() });
+  const prompts: string[] = [];
+  const capture = async (context: { systemPrompt?: string }) => { prompts.push(context.systemPrompt ?? ''); return fauxAssistantMessage('acknowledged'); };
+  f.faux.setResponses([capture, capture]);
+  const worker = await f.open();
+  for (let i = 0; i < 2; i++) {
+    const command = f.command(); f.ledger.begin(command); await worker.startPrompt(command);
+    await until(() => f.ledger.get(command.id)?.state === 'completed', 'cache-stable turn');
+  }
+  assert.equal(prompts.length, 2);
+  assert.ok(prompts[0].includes('CACHE_STABLE_BROWSER'), 'the first turn must include the discovered browser instructions');
+  assert.equal(prompts[0], prompts[1], 'a second user message must not replace the full system prefix');
+});
+
+test('Stop cancels a resource preparation without waiting for discovery or sending inference', async t => {
+  const f = await foundation(t), entered = deferred<void>(), discovery = deferred<void>();
+  const resources = f.deps.resources;
+  f.deps.resources = async record => ({ ...await resources(record), preparePrompt: async () => { entered.resolve(); await discovery.promise; } });
+  const worker = await f.open(), command = f.command(); f.ledger.begin(command);
+  const pending = worker.startPrompt(command); await entered.promise;
+  await worker.abort();
+  const result = await Promise.race([pending, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('resource stop hung')), 1000).unref())]);
+  assert.equal(result.state, 'cancelled'); assert.equal(f.faux.state.callCount, 0);
+  discovery.resolve();
+});
+
+test('real SDK HTTP transport preserves replies and usage while request progress reaches the scoped journal', async t => {
+  const f = await foundation(t), bodies: Record<string, unknown>[] = [], progress: InferenceProgress[] = [];
+  const server = http.createServer(async (req, res) => {
+    const data: Buffer[] = []; for await (const part of req) data.push(Buffer.from(part));
+    bodies.push(JSON.parse(Buffer.concat(data).toString()));
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const chunk = (extra: object) => res.write(`data: ${JSON.stringify({ id: 'chat-fixture', object: 'chat.completion.chunk', created: 1, model: 'wire', ...extra })}\n\n`);
+    chunk({ choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
+    chunk({ choices: [{ index: 0, delta: {}, finish_reason: null }], prompt_progress: { total: 100, processed: 50, cache: 50, time_ms: 0 } });
+    chunk({ choices: [{ index: 0, delta: {}, finish_reason: null }], prompt_progress: { total: 100, processed: 100, cache: 50, time_ms: 10 } });
+    chunk({ choices: [{ index: 0, delta: { content: 'Реальный SDK ответ' }, finish_reason: null }] });
+    chunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 50 } } });
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const provider = `wire-${randomUUID()}`;
+  f.runtime.registerProvider(provider, { baseUrl: `http://127.0.0.1:${address.port}/v1`, api: 'openai-completions', apiKey: 'fixture-only',
+    models: [{ id: 'wire', name: 'Wire fixture', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 512 }] });
+  f.catalog.update(f.record.id, { model: { providerID: provider, modelID: 'wire' } });
+  let capability = true;
+  f.deps.promptProgress = () => capability;
+  const unsubscribe = f.journal.subscribe({ directory: f.cwd, sessionID: f.record.id }, event => {
+    const status = event.event.properties.status as { inference?: InferenceProgress } | undefined;
+    if (status?.inference) progress.push(status.inference);
+  }); t.after(unsubscribe);
+  const worker = await f.open();
+  for (let i = 0; i < 2; i++) {
+    const command = f.command(); command.payload.model = { providerID: provider, modelID: 'wire' };
+    f.ledger.begin(command); await worker.startPrompt(command);
+    await until(() => f.ledger.get(command.id)?.state === 'completed', 'observed HTTP completion');
+    capability = false;
+  }
+  assert.equal(bodies[0].return_progress, true);
+  assert.equal(bodies[1].return_progress, undefined, 'never send vendor options to an unadvertised backend');
+  assert.ok(progress.some(p => p.phase === 'prefill' && p.cached === 50 && p.processed === 100), JSON.stringify(progress));
+  assert.equal(new Set(progress.filter(p => p.phase === 'prefill').map(p => p.requestID)).size, 1);
+  assert.equal(worker.history().filter(m => m.parts.some(p => p.text?.includes('Реальный SDK ответ'))).length, 2);
+  const replies = worker.history().filter(m => m.info.role === 'assistant');
+  assert.equal(replies.at(-1)?.info.tokens?.cache?.read, 50);
+  assert.equal(worker.status.type, 'idle');
 });
 
 test("staged UI is attachable during session_start, viewer cannot control input and detach does not stop work", async t => {

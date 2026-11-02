@@ -275,6 +275,10 @@ export class SessionRegistry {
     this.sweeper = undefined;
   }
 
+  applyCompaction(settings: NonNullable<ReturnType<WorkerDeps['settings']>['compaction']>): void {
+    for (const worker of this.workers.values()) worker.applyCompaction(settings);
+  }
+
   async shutdown(): Promise<void> {
     this.closing = true; this.stopSweeper();
     // Do not let a late open repopulate the registry after shutdown. Early UI

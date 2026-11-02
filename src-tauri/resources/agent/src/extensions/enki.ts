@@ -38,6 +38,7 @@ export interface ExtensionDeps {
   defaultPolicy(): DefaultPolicy;
   capabilities: CapabilitiesScope | null;
   reportMcp?(servers: ServerStatus[], error?: string): void;
+  registerPreparation?(key: string, prepare: () => Promise<void>): void;
 }
 
 /** Full access in the session rules is the only way the browser leaves project scope. */
@@ -139,7 +140,10 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
   if (caps?.browser && path.isAbsolute(caps.executable)) {
     out.push({
       name: "enki-browser",
-      factory: (pi) => attachBrowser(pi, { command: () => caps.executable, access: () => browserAccess(scope.rules(), deps.defaultPolicy()) }),
+      factory: (pi) => {
+        const prepare = attachBrowser(pi, { command: () => caps.executable, access: () => browserAccess(scope.rules(), deps.defaultPolicy()) });
+        deps.registerPreparation?.('browser', prepare);
+      },
     });
   }
   if (caps?.lspConfig) {

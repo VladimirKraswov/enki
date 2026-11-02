@@ -9,6 +9,7 @@ import { dayKey, dayLabel } from '../chat/time';
 import { Icon } from './Icon';
 import { platform } from '../native/platform';
 import { sessionBannerError } from '../chat/errors';
+import { InferenceStatus } from './InferenceStatus';
 
 const positions = new Map<string, { position: ReadingPosition; first?: string; progress?: Record<string, boolean> }>();
 export function ChatView() {
@@ -212,7 +213,8 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
         {bannerError && <div className="msg-error" role="alert">{bannerError}</div>}
         {/* Without a live stream the alert below replaces the spinner: running is unconfirmed. */}
         {!unconfirmed && (question || permission) && <div className="status-line waiting-for-user" role="status">{permission ? 'Ожидает вашего разрешения' : 'Ожидает вашего ответа'}</div>}
-        {!unconfirmed && !question && !permission && slot?.status.type === 'busy' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{activeTool?.tool === 'bash'
+        {!unconfirmed && !question && !permission && slot?.status.type === 'busy' && !activeTool && slot.status.inference && <InferenceStatus progress={slot.status.inference} />}
+        {!unconfirmed && !question && !permission && slot?.status.type === 'busy' && (activeTool || !slot.status.inference) && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{activeTool?.tool === 'bash'
           ? 'Выполняется команда. Агент ждёт её результат.' : activeTool ? `Выполняется инструмент: ${activeTool.tool ?? 'инструмент'}` : 'Агент работает…'}</div>}
         {!unconfirmed && !question && !permission && slot?.status.type === 'retry' && <div className="status-line" role="status"><span className="tool-spinner" aria-hidden />{slot.status.message ?? 'Повтор подключения…'}</div>}
         {!unconfirmed && !question && !permission && slot?.status.type === 'waiting' && <div className="status-line" role="status">{slot.status.message ?? 'Ожидание следующего шага'}</div>}

@@ -1,5 +1,6 @@
 import type { AssistantMessage, ModelInfo } from "../api/types";
 import type { SessionChatState } from "./chatReducer";
+import { compactionBudget } from '../../src-tauri/resources/agent/src/context-budget';
 export interface CompactionConfig {
   auto?: boolean;
   prune?: boolean;
@@ -7,19 +8,16 @@ export interface CompactionConfig {
   preserve_recent_tokens?: number;
   tail_turns?: number;
 }
-/** Mirrors OpenCode 1.18.18 session/overflow.ts, NOT the sum of conversation usage. */
+/** Current working context, not the sum of historical usage. Budget is shared
+ * with the pinned SDK adapter rather than a retired engine's policy. */
 export function contextUsage(
   chat: SessionChatState | undefined,
   model: ModelInfo | null | undefined,
   config: CompactionConfig = {},
 ) {
   const limit = model?.limit?.context ?? 0;
-  const output = Math.min(model?.limit?.output || 32000, 32000);
-  const reserved = config.reserved ?? Math.min(20000, output);
-  const threshold = Math.max(
-    0,
-    model?.limit?.input ? model.limit.input - reserved : limit - output,
-  );
+  const threshold = limit ? compactionBudget({ contextWindow: limit, maxTokens: model?.limit?.output || 32000 },
+    { reserveTokens: config.reserved, keepRecentTokens: config.preserve_recent_tokens }).triggerTokens : 0;
   // Rendered on every streamed delta: walk back from the tail without copying
   // the whole transcript; the newest measured reply is usually the last one.
   let latest: AssistantMessage | undefined;
