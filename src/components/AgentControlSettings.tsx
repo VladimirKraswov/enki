@@ -1,3 +1,4 @@
+import { hasActiveSessions } from "../state/activity";
 import { SettingHelp } from "./SettingHelp";
 import { useEffect, useState } from "react";
 import { store, useAppState } from "../state/store";
@@ -19,8 +20,7 @@ export function AgentControlSettings() {
   const [notice, setNotice] = useState("");
   const native = "__TAURI_INTERNALS__" in window;
   const local = !store.currentHost();
-  const running = [...Object.values(state.activityStatuses), ...Object.values(state.statuses)]
-    .some((item) => item.type === "busy" || item.type === "retry");
+  const running = hasActiveSessions(state);
 
   const refresh = async () => {
     if (!native) return;

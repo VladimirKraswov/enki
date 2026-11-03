@@ -81,3 +81,34 @@ test('unknown target and malformed platform metadata fail before deletion', t =>
   assert.throws(() => compactDependencies(root, 'darwin-arm64'), /selector/);
   assert.ok(fs.existsSync(foreign));
 });
+
+test('development metadata is byte-preserved in one archive while executable code and assets stay unchanged', async t => {
+  const { packDevelopmentMetadata } = await import('./compact.mjs');
+  const { gunzipSync } = await import('node:zlib');
+  const root = fixture(t), directory = pkg(root, 'library');
+  const metadata = ['index.d.ts', 'index.d.mts', 'index.d.cts', 'index.js.map', 'index.d.ts.map'];
+  const runtime = ['index.ts', 'index.mts', 'index.cts', 'data.json', 'LICENSE', 'addon.node'];
+  for (const name of [...metadata, ...runtime]) fs.writeFileSync(path.join(directory, name), Buffer.from([0, 255, 10, 42]));
+  fs.mkdirSync(path.join(root, 'dist')); fs.writeFileSync(path.join(root, 'dist/main.js.map'), 'Enki stack map');
+  const result = await packDevelopmentMetadata(root);
+  assert.equal(result.packedFiles, metadata.length);
+  const archive = JSON.parse(gunzipSync(fs.readFileSync(path.join(root, 'development-metadata.json.gz'))));
+  for (const name of metadata) {
+    assert.equal(fs.existsSync(path.join(directory, name)), false);
+    assert.deepEqual(Buffer.from(archive.files['node_modules/library/' + name], 'base64'), Buffer.from([0, 255, 10, 42]));
+  }
+  for (const name of runtime) assert.deepEqual(fs.readFileSync(path.join(directory, name)), Buffer.from([0, 255, 10, 42]));
+  assert.equal(fs.readFileSync(path.join(root, 'dist/main.js.map'), 'utf8'), 'Enki stack map');
+  assert.equal(execFileSync(process.execPath, ['-e', "console.log(require('library'))"], { cwd: root, encoding: 'utf8' }).trim(), '42');
+  await assert.rejects(packDevelopmentMetadata(root), /already exists/);
+});
+
+test('metadata packaging rejects a linked tree before removing any declaration', async t => {
+  const { packDevelopmentMetadata } = await import('./compact.mjs');
+  const root = fixture(t), outside = fixture(t), directory = pkg(root, 'library');
+  const declaration = path.join(directory, 'index.d.ts'); fs.writeFileSync(declaration, 'type A = string');
+  fs.symlinkSync(outside, path.join(root, 'node_modules/escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(packDevelopmentMetadata(root), /package links/);
+  assert.ok(fs.existsSync(declaration));
+  assert.equal(fs.existsSync(path.join(root, 'development-metadata.json.gz')), false);
+});

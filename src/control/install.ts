@@ -1,3 +1,4 @@
+import { hasActiveSessions } from "../state/activity";
 import { store } from "../state/store";
 import { AGENT_CONTROL_SERVER, setReservedServer } from "../capabilities/reserved";
 import type { AgentControlStatus } from "../state/agentControl";
@@ -14,8 +15,7 @@ export async function installAgentControlMcp(enabled: boolean): Promise<string> 
   if (store.currentHost())
     throw new Error("Для регистрации локальной команды выберите «Этот компьютер».");
   if (
-    [...Object.values(store.state.activityStatuses), ...Object.values(store.state.statuses)]
-      .some((item) => item.type === "busy" || item.type === "retry")
+    hasActiveSessions(store.state)
   )
     throw new Error("Дождитесь завершения работающего агента перед изменением подключений.");
   const status = await invoke<AgentControlStatus>("agent_control_status");

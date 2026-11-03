@@ -207,3 +207,12 @@ describe("live stream", () => {
     expect(t.translate({ type: "message_update", assistantMessageEvent: { type: "future_delta", contentIndex: 0 } } as never)).toEqual([]);
   });
 });
+
+it('restores image references after reopening SDK history without exposing model-only instructions', async()=>{
+ const {imageReferenceText}=await import('../src/policy/image-reference.ts');
+ const marker=imageReferenceText({version:1,name:'photo.png',mime:'image/png',available:true},'Use image_inputs; do not claim to see pixels.');
+ const messages=history([message('image-user',{role:'user',content:[{type:'text',text:'Describe it\n\n'+marker}],timestamp:1})]);
+ const parts=messages[0].parts;
+ expect(parts.filter(p=>p.type==='text'&&!p.synthetic).map(p=>p.text)).toEqual(['Describe it']);
+ expect(parts.find(p=>p.synthetic)?.metadata).toEqual({enkiImageReference:{version:1,name:'photo.png',mime:'image/png',available:true}});
+});

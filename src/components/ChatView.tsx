@@ -204,7 +204,7 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
           <div className="history-message" key={`not-sent-${n.id}`}>
             <div className="msg-user"><div className="msg-body"><div className="msg-text">{n.text.length > 4000 ? `${n.text.slice(0, 4000)}…` : n.text}</div></div></div>
             <div className="status-line" role="alert">
-              {n.state === 'refused' ? `Запрос не отправлен: ${n.reason}` : `Запрос отменён до выполнения: ${n.reason}`}
+              {n.state === 'refused' ? `Запрос не отправлен: ${n.reason}` : `Запрос остановлен: ${n.reason}`}
               {' '}<button className="btn small" onClick={() => void store.returnNotSent(sessionId, n.record)}>Вернуть в черновик</button>{' '}
               <button className="btn small ghost" onClick={() => store.dismissNotSent(sessionId, n.id)}>Скрыть</button>
             </div>

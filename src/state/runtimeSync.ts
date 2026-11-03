@@ -131,8 +131,9 @@ export function routeRuntimeEvent(event: ServerEvent, host: RuntimeSyncHost, dia
       // The ledger's terminal answer about one command. A refusal or
       // cancellation before dispatch must reach the delivery surfaces, not
       // vanish with the event stream.
-      const receipt = p.receipt as { id?: unknown; sessionID?: unknown; state?: unknown; error?: unknown } | undefined;
+      const receipt = p.receipt as { id?: unknown; sessionID?: unknown; state?: unknown; error?: unknown; entryId?: unknown } | undefined;
       if (receipt && typeof receipt.id === "string" && typeof receipt.sessionID === "string"
+        && !(typeof receipt.entryId === "string" && receipt.entryId.length > 0)
         && (receipt.state === "rejected" || receipt.state === "cancelled"))
         host.commandRefused({ id: receipt.id, sessionID: receipt.sessionID, state: receipt.state, error: typeof receipt.error === "string" ? receipt.error : undefined });
       return true;

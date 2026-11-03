@@ -1,3 +1,4 @@
+import { hasActiveSessions } from "../state/activity";
 import {flushDictationCapture} from '../voice/capture';
 import {watchUpdateChecks} from './checks';
 import {keepRuntimeAwake} from './background';
@@ -14,7 +15,7 @@ import {makeBackup} from '../operations/backups';
 import {store} from '../state/store';
 import {savePrefs,flushPrefs} from '../state/prefs';
 const call=<T,>(action:string,extra:Record<string,unknown>={})=>invoke<T>('hub_update',{action,channel:null,data:null,digest:null,...extra});
-export function agentsRunning(){const s=store.getSnapshot();return s.ui.sending||s.ui.workspacePreparing||Object.values({...s.statuses,...s.activityStatuses}).some(s=>s.type!=='idle')||Object.keys(s.chat.permissions).length>0||Object.keys(s.chat.questions).length>0||!!s.ui.agentDialog;}
+export function agentsRunning(){const s=store.getSnapshot();return s.ui.sending||s.ui.workspacePreparing||hasActiveSessions(s)||Object.keys(s.chat.permissions).length>0||Object.keys(s.chat.questions).length>0||!!s.ui.agentDialog;}
 /** Authoritative runtime activity (all folders): owned shells, questions and work this window does not show. */
 export async function runtimeBlocker():Promise<string|null>{
   const backend=store.maybeBackend();if(!backend)return null;

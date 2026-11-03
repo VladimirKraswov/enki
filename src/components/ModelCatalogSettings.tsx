@@ -1,3 +1,4 @@
+import { hasActiveSessions } from "../state/activity";
 // Настройки «Модели (Hub)»: общий каталог моделей хранится на Hub (там же, где
 // обновления), а это устройство решает, применять ли каталог, какие модели
 // исключить и когда перечитать модели среды выполнения. Локальные провайдеры
@@ -243,10 +244,7 @@ export function ModelCatalogSettings() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const isBusyNow = () =>
-    [...Object.values(store.state.activityStatuses), ...Object.values(store.state.statuses)].some(
-      (status) => status.type === "busy" || status.type === "retry",
-    );
+  const isBusyNow = () => hasActiveSessions(store.state);
   const busySession = isBusyNow();
   // Transient lock notice (not an error): cleared automatically once no agent
   // is working, so a refusal cannot outlive its cause.

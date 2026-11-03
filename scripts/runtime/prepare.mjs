@@ -10,7 +10,7 @@ import { PLATFORMS, MANIFEST, REMOTE_LAUNCHER, buildManifest, hostPlatform, list
 import { runBuildJob, trustedRunner } from './native-port.mjs';
 import { bootstrapRunner, discardRunner } from './build-runner.mjs';
 import { assertSdkContract } from './sdk-contract.mjs';
-import { compactDependencies } from './compact.mjs';
+import { compactDependencies, packDevelopmentMetadata } from './compact.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SKIP = new Set(['node_modules', 'dist', 'coverage', '.vite', 'runtime-version.json', 'test', '.DS_Store', '.npmrc']);
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -402,11 +402,13 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
     await run(node, ['build.mjs'], { cwd: app, env, signal });
     await run(node, [npm, 'prune', '--omit=dev', '--ignore-scripts'], { cwd: app, env, signal }); pruneForeignNative(app, platform);
     const compaction = compactDependencies(app, platform);
+    const developmentMetadata = await packDevelopmentMetadata(app);
     console.log(`Runtime compaction: ${compaction.removed.length} packages, ${compaction.savedBytes} bytes removed for ${platform}`);
     const info = JSON.parse(fs.readFileSync(path.join(app, 'runtime-version.json'), 'utf8')), version = `${lock.sdk.version}-${info.version}`, artifact = path.join(work, 'artifact');
     fs.mkdirSync(path.join(artifact, 'app'), { recursive: true }); fs.renameSync(nodeHome, path.join(artifact, 'node'));
     for (const name of ['package.json', 'package-lock.json', 'runtime-lock.json', 'runtime-version.json']) fs.copyFileSync(path.join(app, name), path.join(artifact, 'app', name));
-    fs.writeFileSync(path.join(artifact, 'app/packaging-report.json'), JSON.stringify({ schema: 1, ...compaction }, null, 2) + '\n');
+    fs.writeFileSync(path.join(artifact, 'app/packaging-report.json'), JSON.stringify({ schema: 1, ...compaction, developmentMetadata }, null, 2) + '\n');
+    fs.renameSync(path.join(app, 'development-metadata.json.gz'), path.join(artifact, 'app/development-metadata.json.gz'));
     for (const name of ['dist', 'node_modules']) fs.renameSync(path.join(app, name), path.join(artifact, 'app', name));
     await stageTools(lock, platform, path.join(artifact, 'app'), cache, work, env, signal);
     for (const name of ['include', 'share', 'README.md', 'CHANGELOG.md']) fs.rmSync(path.join(artifact, 'node', name), { recursive: true, force: true });

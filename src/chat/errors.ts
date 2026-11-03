@@ -14,8 +14,8 @@ function rawError(error: unknown): string {
 /** A model transport failure is separate from engine connectivity or HTTP rejection. */
 export function isModelConnectionError(error: unknown): boolean {
   const e = record(error), data = record(e.data);
-  if (e.name !== "APIError" || typeof data.statusCode === "number" && data.statusCode >= 400) return false;
-  return /Cannot connect to API|Unable to connect|\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT)\b|fetch failed|socket (?:closed|hang up)/i.test(rawError(error));
+  if (!["APIError", "ProviderError"].includes(String(e.name)) || typeof data.statusCode === "number" && data.statusCode >= 400) return false;
+  return /^Connection error\.?$|Cannot connect to API|Unable to connect|\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT)\b|fetch failed|socket (?:closed|hang up)/i.test(rawError(error));
 }
 
 export function describeMessageError(error: unknown): string {

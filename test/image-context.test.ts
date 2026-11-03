@@ -34,3 +34,16 @@ it('limits references without dropping unsupported files from the actual prompt'
 // runtime: `pi-shared-tools.test.ts` › "binds image calls…", "every image tool…",
 // "a model-supplied image identity never reaches another server" and "an
 // invalid SDK session identity is refused before any image call".
+
+it('keeps non-vision service instructions out of visible user text across a transcript round trip', async()=>{
+ const {splitImageReferenceText}=await import('../src-tauri/resources/agent/src/policy/image-reference');
+ const parts=imagePromptParts([{type:'text',text:'Что на фото?'},source],false,true);
+ expect(parts[1]).toMatchObject({type:'text',synthetic:true});
+ const persisted=parts.filter(p=>p.type==='text').map(p=>p.text).join('\n\n');
+ const display=splitImageReferenceText(persisted);
+ expect(display.text).toBe('Что на фото?');
+ expect(display.references).toEqual([{version:1,name:'photo.png',mime:'image/png',available:true}]);
+ expect(persisted).toContain('не видит пиксели');
+ const unrecognized='<enki-image-reference-v1>{"name":"fake"}</enki-image-reference-v1>';
+ expect(splitImageReferenceText(unrecognized).text).toBe(unrecognized);
+});

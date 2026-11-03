@@ -1,4 +1,5 @@
 import {turnImageResults} from "../images/results";
+import { imageReference } from '../../src-tauri/resources/agent/src/policy/image-reference';
 import { partsPresentation } from '../chat/presentation';
 import { executionEvidence, executionLabel, type ExecutionEvidence } from '../chat/execution';
 import { lazy, Suspense, memo, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -197,16 +198,20 @@ function usePartsPresentation(sessionId: string, messageIds: readonly string[]) 
 export const AssistantMessageView = memo(function AssistantMessageView({
   sessionId,
   message,
+  active = false,
 }: {
   sessionId: string;
   message: AssistantMessage;
+  active?: boolean;
 }) {
   const ids = useMemo(() => [message.id], [message.id]);
   const snapshot = usePartsPresentation(sessionId, ids);
   const parts = visibleParts(snapshot.parts);
   const { status, connected } = snapshot;
   const terminal = !!message.time.completed && !["tool-calls", "tool_calls"].includes(message.finish ?? "");
-  const evidence = executionEvidence(terminal, status === "busy" || status === "retry", connected, snapshot.waitingForUser);
+  // Session activity belongs to the current turn. A pending tool preserved in
+  // older history must not start spinning again when the next request begins.
+  const evidence = executionEvidence(terminal || !active, status === "busy" || status === "retry", connected, snapshot.waitingForUser);
   const running = !message.time.completed && evidence === "active";
   const errText = message.error ? describeMessageError(message.error) : null;
   const finishBad =
@@ -235,7 +240,7 @@ export const AssistantMessageView = memo(function AssistantMessageView({
         ? <Suspense fallback={<div className="msg-meta finish-note" role="status">Достигнут лимит ответа модели.</div>}>
           <OutputLimitNotice sessionId={sessionId} message={message} parts={parts}/>
         </Suspense>
-        : finishBad && <div className="msg-meta finish-note" role="status">Завершено со статусом: {message.finish}</div>}
+        : finishBad && !message.error && <div className="msg-meta finish-note" role="status">Завершено со статусом: {message.finish}</div>}
 
 
     </div>
@@ -259,6 +264,14 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
   useEffect(() => { if (progressState && progressKey) progressState[progressKey] = expanded; }, [progressState, progressKey, expanded]);
   const progress = hasFinal ? messages.slice(0, -1) : messages;
   const allParts = snapshot.parts;
+  // The SDK records each transport retry as an assistant step. Keep the
+  // original history, but show one failure with the actual attempt count when
+  // every step failed identically without producing text or tool activity.
+  const repeatedConnectionFailures = messages.length > 1 && messages.every(m =>
+    !!m.time.completed && m.providerID === last.providerID && m.modelID === last.modelID
+    && isModelConnectionError(m.error) && describeMessageError(m.error) === describeMessageError(last.error)
+    && visibleParts(allParts.filter(p => p.messageID === m.id)).length === 0
+    && !allParts.some(p => p.messageID === m.id && p.type === 'file'));
   const generated = turnImageResults(allParts);
   const actions = allParts.filter(p => p.type === 'tool').length;
   const errors = allParts.filter(p => p.type === 'tool' && p.state?.status === 'error').length;
@@ -282,7 +295,8 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
       {errors > 0 && <span className="turn-tool-errors">Ошибок инструментов: {errors}</span>}
     </button>}
     <div id={regionId} className="turn-content">
-      {messages.map(m => {
+      {repeatedConnectionFailures && <p className="msg-meta">Не удалось подключиться к модели. Попыток: {messages.length}.</p>}
+      {(repeatedConnectionFailures ? [last] : messages).map(m => {
         const isFinal = hasFinal && m.id === last.id;
         // Message failures and output limits must remain visible even if the user folded progress.
         const problem = !!m.error || (!!m.finish && !['stop','end_turn','stop_sequence','tool-calls','tool_calls'].includes(m.finish));
@@ -290,7 +304,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
         if (visible) visited.current.add(m.id);
         return <div key={m.id} id={`${regionId}-${m.id}`} data-message-id={m.id} className={isFinal ? `turn-answer${progress.length ? ' after-progress' : ''}` : 'turn-step'}
           hidden={!isFinal && !expanded && !problem}>
-          {(visible || visited.current.has(m.id)) && <AssistantMessageView sessionId={sessionId} message={m} />}
+          {(visible || visited.current.has(m.id)) && <AssistantMessageView sessionId={sessionId} message={m} active={active && !terminal} />}
         </div>;
       })}
     </div>
@@ -326,15 +340,22 @@ export function UserMessageView({ message }: { message: UserMessage }) {
     (p) => p.type === "text" && !p.synthetic && !p.ignored,
   );
   const files = attachmentParts(allParts);
+  const imageReferences = allParts.flatMap(p => {
+    const ref = imageReference(p.metadata?.enkiImageReference);
+    return ref ? [{ ...ref, id: p.id }] : [];
+  });
   const text = parts
     .map((p) => p.text ?? "")
     .join("\n")
     .trim();
-  if (!text && !files.length) return null;
+  if (!text && !files.length && !imageReferences.length) return null;
   const steering = parts.some(p => p.metadata?.arvelaSteering === 1);
   return <div className={`user-message ${steering ? "user-message-steering" : ""}`} data-scroll-anchor={`message:${message.id}`}>
     {steering && <span className="steering-label">↳ Уточнение</span>}
     {text && <div className="msg-user">{text}</div>}
+    {imageReferences.map(ref => <div className="msg-meta" key={ref.id}>{ref.name} · {ref.available
+      ? 'Изображение сохранено для редактора. Выбранная модель не видит изображения.'
+      : 'Изображение недоступно выбранной модели и редактору.'}</div>)}
     {files.length > 0 && <div className="message-file-list">{files.map(file => <button className="message-file" key={file.id} onClick={()=>setViewedFile(file.id)}><AttachmentThumbnail file={{key:file.id,name:file.filename||"Вложение",mime:file.mime,url:file.url}}/>{file.filename || "Вложение"}</button>)}</div>}
     {viewedFile && <MessageAttachmentViewer sessionId={message.sessionID} initialKey={viewedFile} onClose={()=>setViewedFile(null)}/>}
     <div className="message-footer"><MessageTimestamp value={message.time.created}/><CopyButton text={text} label="Копировать сообщение" compact/><MessageEdit message={message} text={text}/></div>

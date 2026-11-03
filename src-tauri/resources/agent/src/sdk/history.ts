@@ -7,6 +7,7 @@
 
 import type { MessageDTO, MessageInfoDTO, MessagePartDTO, ToolStateDTO } from "../protocol.ts";
 import { splitArchiveText } from "../policy/archive.ts";
+import { splitImageReferenceText } from "../policy/image-reference.ts";
 import { isSteeringText, visiblePromptText } from "../policy/prompt.ts";
 import type { SdkAssistantMessage, SdkEntry, SdkMessage, SdkToolResultMessage } from "./adapter.ts";
 
@@ -68,8 +69,13 @@ export function userParts(sessionID: string, id: string, message: { content?: un
     if (block.type === "text" && typeof block.text === "string") {
       const steering = isSteeringText(block.text, sessionID);
       const attached = splitAttachedFiles(visiblePromptText(block.text, sessionID));
-      const split = splitArchiveText(attached.text);
+      const imageSplit = splitImageReferenceText(attached.text);
+      const split = splitArchiveText(imageSplit.text);
       parts.push({ ...base, type: "text", text: split.text, ...(steering ? { metadata: { arvelaSteering: 1 } } : {}) });
+      imageSplit.references.forEach((reference, n) => parts.push({
+        ...base, id: `${base.id}-image-reference-${n}`, type: "text", synthetic: true,
+        text: "", metadata: { enkiImageReference: reference },
+      }));
       split.references.forEach((reference, n) => parts.push({
         ...base, id: `${base.id}-archive-${n}`, type: "text", synthetic: true,
         text: "", metadata: { arvelaAttachment: reference },

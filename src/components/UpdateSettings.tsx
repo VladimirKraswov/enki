@@ -28,7 +28,7 @@ export function UpdateSettings(){
   const releaseDescription=hot?'Обновление интерфейса без остановки агентов'
     :u.release?.binary?.state==='ready'?'Готовое приложение с GitHub. Скачайте пакет, затем обновите и перезапустите Enki.'
     :[u.release?.version?`Enki ${u.release.version}.`:'',u.release?.binary?.message??'Проверяем готовность установщика.',
-      u.release?.binary?.state==='pending'?'Уведомление появится, когда установщик будет готов.':''].filter(Boolean).join(' ');
+      'Можно собрать подписанные исходники Hub на этом компьютере, не ожидая установщика.'].filter(Boolean).join(' ');
   return <section className="setting-group quality-settings"><h2>Enki {u.status?.hot.uiVersion??version}</h2>
     {u.status&&u.status.nativeVersion!==u.status.hot.uiVersion&&<p className="muted">Нативная версия {u.status.nativeVersion}</p>}
     <SettingField label="Канал"><select value={u.channel} disabled={disabled||u.waiting||compiling} onChange={e=>{const channel=e.target.value==='preview'?'preview':'stable';updates.setChannel(channel);localStorage.setItem('arvela.update.channel',channel);}}><option value="stable">Стабильный</option><option value="preview">Предварительный</option></select></SettingField>
@@ -41,8 +41,8 @@ export function UpdateSettings(){
     </div>
     {u.release?.available&&<p className={`update-kind ${hot?'hot':''}`}>{releaseDescription}</p>}
     {u.waiting&&<p role="status">Обновление Enki {u.release?.version??''} готово к установке. Enki перезапустится сам, как только все агенты завершат работу; черновики, очереди и настройки сохраняются. Можно закрыть настройки и продолжить работу.</p>}
-    {u.release?.available&&!hot&&!built&&!compiling&&<details><summary>Собрать из исходников</summary>
-      <p className="muted">Дополнительный вариант, если хотите установить выпуск до готовности пакета. Сборка занимает время и выполняется в отдельной папке. Чаты остаются доступны.</p>
+    {u.release?.available&&!hot&&!built&&!compiling&&<details key={u.release.binary?.state??'unknown'} open={u.release.binary?.state!=='ready'}><summary>Собрать из исходников</summary>
+      <p className="muted">Исходники загружаются с Hub и проверяются по подписи. Вход в GitHub не нужен. Для загрузки инструментов и зависимостей нужен интернет. Сборка выполняется в отдельной папке; чаты остаются доступны. Установка дождётся завершения активных задач.</p>
       {prerequisites?.available?<button className="btn" disabled={disabled} onClick={()=>void updates.build()}>{u.busy==='build'?'Подготавливаю исходники…':'Собрать на этом компьютере'}</button>:<p className="muted">{prerequisites?.reason??'Проверяем Node.js/npm, Rust и системные инструменты…'}</p>}
     </details>}
     {!hot&&stage&&(stage!=='ready'||built)&&stages[stage]&&<p role="status">{stages[stage]}</p>}

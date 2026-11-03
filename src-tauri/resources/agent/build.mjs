@@ -61,9 +61,12 @@ const lock = readFileSync(path.join(root, "package-lock.json"));
 const runtimeLock = readFileSync(path.join(root, "runtime-lock.json"));
 const bundle = readFileSync(path.join(root, "dist/main.js"));
 const control = readFileSync(path.join(root, "dist/daemon-control.js"));
-const id = createHash("sha256").update(runtimeLock).update(lock).update(bundle).update(control).digest("hex").slice(0, 16);
+// Packaging changes need a distinct runtime identity even when executable JS
+// is unchanged. prepare.mjs stores dependency development metadata as an archive.
+const packaging = "development-metadata-archive-v1";
+const id = createHash("sha256").update(runtimeLock).update(lock).update(bundle).update(control).update(packaging).digest("hex").slice(0, 16);
 mkdirSync(path.join(root, "dist"), { recursive: true });
-writeFileSync(path.join(root, "runtime-version.json"), JSON.stringify({ version: id, sdk: PINNED_SDK,
+writeFileSync(path.join(root, "runtime-version.json"), JSON.stringify({ version: id, sdk: PINNED_SDK, packaging,
   node: runtimePin.node.version, contract: PINNED_CONTRACT, dataSchema: PINNED_DATA_SCHEMA,
   dependencyLockSha256: createHash("sha256").update(lock).digest("hex"),
   runtimeLockSha256: createHash("sha256").update(runtimeLock).digest("hex"),

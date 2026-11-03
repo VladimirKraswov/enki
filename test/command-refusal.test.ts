@@ -75,6 +75,9 @@ describe("command.updated routing", () => {
     expect(refused).toHaveBeenLastCalledWith({ id: "m2", sessionID: "s1", state: "cancelled", error: undefined });
     routeRuntimeEvent(refusal("m3", "s1", "completed") as never, host, new AgentDialogs());
     routeRuntimeEvent({ type: "command.updated", properties: {} } as never, host, new AgentDialogs());
+    const delivered = refusal("m4", "s1", "cancelled");
+    delivered.properties.receipt.entryId = "sdk-user-entry" as never;
+    routeRuntimeEvent(delivered as never, host, new AgentDialogs());
     expect(refused).toHaveBeenCalledTimes(2);
   });
 });

@@ -14,17 +14,17 @@ function show(release: Release | null, prepared = false, downloaded = false) {
 }
 afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; vi.unstubAllGlobals(); });
 
-it("stays quiet while a native package is unknown, building or unavailable", () => {
+it("offers signed source while a native package is unknown, building or unavailable", () => {
   for (const binary of [undefined, { state: "pending" as const }, { state: "unavailable" as const }]) {
     show({ available: true, version: "2.0.9", kind: "source", binary });
-    expect(document.querySelector("button")).toBeNull();
+    expect(document.querySelector("button")?.title).toContain("подписанные исходники");
   }
   show(null); expect(document.querySelector("button")).toBeNull();
 });
 
 it("appears when the current platform package becomes ready, and only opens settings", () => {
   const release: Release = { available: true, version: "2.0.9", kind: "source", binary: { state: "pending" } };
-  show(release); expect(document.querySelector("button")).toBeNull();
+  show(release); expect(document.querySelector("button")?.title).toContain("подписанные исходники");
   const open = show({ ...release, binary: { state: "ready" } });
   const button = document.querySelector("button")!;
   expect(button.title).toBe("Готовое обновление доступно для загрузки · 2.0.9");

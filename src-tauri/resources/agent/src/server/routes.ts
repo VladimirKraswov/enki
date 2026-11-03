@@ -556,6 +556,10 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
   r("PUT", "/config/models", (request) => {
     const body = object(request.body);
     if (importedGeneration()) throw new HttpError(409, "CONFIG_IMPORTED_READ_ONLY: активны импортированные настройки моделей. Их нельзя перезаписать здесь: это отключило бы перенесённые заголовки и ключи. Изменения не сохранены.");
+    // The window's status snapshot is only a hint. Check every runtime-owned
+    // source of work here; no await separates this check and the CAS write.
+    if (!runtime.activity({ currentHttpRequest: true }).idle)
+      throw new HttpError(409, "Агенты ещё работают. Настройки моделей не изменены; дождитесь завершения задач.");
     const file = path.join(runtime.paths.agentDir, "models.json");
     const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
     if (typeof body.expected !== "string" || body.expected !== current) throw new HttpError(409, "Настройки моделей изменились на диске. Обновите и повторите.");

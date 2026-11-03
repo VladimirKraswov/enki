@@ -3,11 +3,50 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createGzip } from 'node:zlib';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const TARGETS = new Set(['darwin-arm64', 'linux-x64', 'win32-x64']);
 const DEPENDENCIES = ['dependencies', 'optionalDependencies', 'peerDependencies'];
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const contained = (root, file) => file === root || file.startsWith(root + path.sep);
+
+/** Type declarations and dependency source maps are development metadata, not
+ * runtime entry points. Preserve their exact bytes in one signed archive rather
+ * than making activation open thousands of small files. Executable JS/TS,
+ * package metadata, native helpers, licenses and the Enki bundle maps stay put.
+ * This is packaging only: the runtime verifier still verifies EVERY shipped
+ * file, including this archive, on EVERY activation. */
+export async function packDevelopmentMetadata(app) {
+  const root = path.resolve(app); inspect(root);
+  const archive = path.join(root, 'development-metadata.json.gz');
+  if (fs.existsSync(archive)) throw Error('Development metadata archive already exists');
+  const entries = [];
+  const walk = directory => {
+    for (const item of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
+      const file = path.join(directory, item.name);
+      if (item.isDirectory()) walk(file);
+      else if (item.isFile() && /(?:\.d\.(?:ts|mts|cts)|\.(?:js|mjs|cjs|d\.ts|d\.mts|d\.cts)\.map)$/.test(item.name)) {
+        const name = path.relative(root, file).split(path.sep).join('/');
+        entries.push({ name, file });
+      }
+    }
+  };
+  walk(path.join(root, 'node_modules'));
+  // Write and close the complete archive before removing any source file.
+  function* json() {
+    yield '{"schema":1,"encoding":"base64","files":{';
+    for (let i = 0; i < entries.length; i++) {
+      const { name, file } = entries[i];
+      yield (i ? ',' : '') + JSON.stringify(name) + ':' + JSON.stringify(fs.readFileSync(file).toString('base64'));
+    }
+    yield '}}';
+  }
+  await pipeline(Readable.from(json()), createGzip({ level: 9 }), fs.createWriteStream(archive, { flags: 'wx' }));
+  for (const { file } of entries) fs.unlinkSync(file);
+  return { packedFiles: entries.length, archiveBytes: fs.statSync(archive).size };
+}
 
 /** Refuse links/special files before any deletion, except npm .bin links whose
  * resolved file stays in this staging tree. Bound both entry count and depth. */

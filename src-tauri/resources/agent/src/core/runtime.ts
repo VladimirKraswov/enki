@@ -744,7 +744,7 @@ export class Runtime {
     this.tools.prune(Date.now() - 30 * 24 * 3600_000);
   }
 
-  activity() {
+  activity(options: { currentHttpRequest?: boolean } = {}) {
     const registry = this.registry?.activity() ?? { opening: 0, closing: 0, busy: 0, ui: 0 };
     const queues = this.queue.sessions();
     const queued = queues.reduce((sum, q) => sum + q.items.length, 0);
@@ -758,7 +758,10 @@ export class Runtime {
     const pending = this.interactions.pendingPermissions().length + this.interactions.pendingDialogs().length + questions;
     const mcp = this.pool.activity();
     const preparing = this.dispatcher?.preparingCount() ?? 0;
-    const operations = this.admission.active();
+    // A synchronous config-write handler may exclude only its own admitted
+    // HTTP operation. All other requests, tools and lifecycle work still block.
+    const ownHttp = options.currentHttpRequest && (this.admission.counts().http ?? 0) > 0 ? 1 : 0;
+    const operations = this.admission.active() - ownHttp;
     const hub = this.hub.activeCount();
     // An owned shell blocks maintenance until it is explicitly closed and its
     // exit observed; a quiet terminal may still be running a long command.

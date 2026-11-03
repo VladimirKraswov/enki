@@ -1,5 +1,6 @@
 import type { PromptRequest } from '../api/types';
 import { isNative } from '../native/platform';
+import { imageReferenceText } from '../../src-tauri/resources/agent/src/policy/image-reference';
 
 /** Input bytes come only from prepared USER attachments, never Markdown, paths,
  * model output or tool arguments. The native command binds them to this request. */
@@ -31,12 +32,14 @@ export function imagePromptParts(parts: PromptRequest['parts'], supportsVision: 
     if (part.type !== 'file' || !part.mime.startsWith('image/')) return part;
     const source = sources.images.find(image => part.url === `data:${image.mime};base64,${image.data}`);
     const name = part.filename ?? 'image';
+    const reference = { version: 1 as const, name, mime: part.mime, available: !!source };
     return {
       type: 'text',
-      text: source
+      synthetic: true,
+      text: imageReferenceText(reference, source
         ? `Приложено исходное изображение ${JSON.stringify(name)}. Проверь его доступность через image_inputs; Enki сохраняет поддерживаемые оригиналы для edit_image. Текущая модель не поддерживает Vision: она может передать этот исходник генератору для правки по просьбе пользователя, но не видит пиксели и не должна заявлять о визуальной проверке. Для анализа картинки выберите модель с Vision.`
-        : `Приложено изображение ${JSON.stringify(name)}. Текущая модель не поддерживает Vision; исходник недоступен редактору: ${sources.unsupported.find(image => image.name === name)?.reason ?? 'формат или размер не поддерживается.'}`,
-      metadata: { enkiImageReference: { name, mime: part.mime } },
+        : `Приложено изображение ${JSON.stringify(name)}. Текущая модель не поддерживает Vision; исходник недоступен редактору: ${sources.unsupported.find(image => image.name === name)?.reason ?? 'формат или размер не поддерживается.'}`),
+      metadata: { enkiImageReference: reference },
     };
   });
 }

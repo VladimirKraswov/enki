@@ -1755,10 +1755,16 @@ class Store {
         if ((this.state.prefs.dismissedOperations ?? []).includes(record.id)) continue;
         // Positive proof in the transcript outranks everything: the message is there.
         if (chat?.messageOrder.includes(record.id)) continue;
-        const fallback = record.state === 'cancelled' ? 'отменено до выполнения' : 'отклонено до выполнения';
+        const fallback = record.state === 'cancelled' ? 'запрос остановлен' : 'отклонено до выполнения';
         let reason = this.notSentReasons.get(record.id)?.trim() || undefined;
-        if (reason === undefined && ledgerAuthority(record) === here && here) {
-          try { const receipt = await this.backend.client.receipt(record.id); reason = typeof receipt.error === 'string' && receipt.error.trim() ? receipt.error.trim() : undefined; }
+        if (ledgerAuthority(record) === here && here) {
+          try {
+            const receipt = await this.backend.client.receipt(record.id);
+            // SDK entry ids differ from client command ids. A persisted entry
+            // proves delivery even if an older UI marked cancellation unsent.
+            if (typeof receipt.entryId === 'string' && receipt.entryId) continue;
+            reason ??= typeof receipt.error === 'string' && receipt.error.trim() ? receipt.error.trim() : undefined;
+          }
           catch { /* the durable refusal stands; only the wording degrades */ }
         }
         out.push({ id: record.id, text: record.text, state: record.state, reason: reason ?? fallback, record });

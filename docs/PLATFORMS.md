@@ -6,7 +6,7 @@
 
 | Платформа CI | Пакет | Команда на этой ОС |
 |---|---|---|
-| macOS 14, ARM64 | `.app` и `.dmg` | `npm run build:macos` |
+| macOS 15, ARM64 | `.app` и `.dmg` | `npm run build:macos` |
 | Windows 2022, x64 | NSIS `.exe`, текущий пользователь | `npm.cmd run build:windows` |
 | Ubuntu 24.04, x64 | `.deb` | `npm run build:linux` |
 

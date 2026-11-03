@@ -34,3 +34,10 @@ it("deduplicates only the last visible assistant error and accepts legacy raw ba
   expect(sessionBannerError(raw, [])).toBe(raw);
   expect(sessionBannerError(null, [failed])).toBeNull();
 });
+it('recognizes the pinned SDK ProviderError connection failure without masking other failures',()=>{
+ const error={name:'ProviderError',message:'Connection error.'};
+ expect(isModelConnectionError(error)).toBe(true);
+ expect(describeMessageError(error)).toContain('Нет соединения с API модели');
+ expect(isModelConnectionError({...error,message:'401 Unauthorized'})).toBe(false);
+ expect(isModelConnectionError({...error,data:{statusCode:401}})).toBe(false);
+});

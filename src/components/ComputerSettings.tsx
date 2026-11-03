@@ -1,3 +1,4 @@
+import { hasActiveSessions } from "../state/activity";
 import { SettingHelp } from "./SettingHelp";
 import { platform } from "../native/platform";
 import {useEffect,useState} from "react";
@@ -12,7 +13,7 @@ export function ComputerSettings(){
   const [status,setStatus]=useState<ComputerStatus|null>(null),[connection,setConnection]=useState("");
   const [busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
   const native="__TAURI_INTERNALS__" in window,local=isLocalComputer(s.prefs.endpoint,!!store.currentHost());
-  const running=[...Object.values(s.activityStatuses),...Object.values(s.statuses)].some(x=>x.type!=="idle");
+  const running=hasActiveSessions(s);
   const refresh=async()=>{
     if(!native)return;
     setStatus(await invoke<ComputerStatus>("computer_status"));

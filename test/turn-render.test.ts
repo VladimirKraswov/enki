@@ -128,3 +128,22 @@ it('does not serialize a large tool input while its card is closed',()=>{
  act(()=>(document.querySelector('.tool .fold-head') as HTMLButtonElement).click());
  expect(serialize).toHaveBeenCalledOnce();expect(document.querySelector('.fold-body')?.textContent).toContain('large data');
 });
+
+it('a new active request cannot revive pending tools from an older turn',()=>{
+ parts('old',[{type:'tool',tool:'bash',state:{status:'running',time:{start:1000}}}]);
+ data.status='busy';data.connected=true;
+ mount([{...message('old'),time:{created:1000}}],false);
+ expect(document.querySelector('.tool-spinner')).toBeNull();
+ expect(document.querySelector('.tool-activity')).toBeNull();
+ expect(document.body.textContent).toContain('выполнение не подтверждено сервером');
+});
+
+it('shows one SDK transport failure with the real retry count but preserves distinct failures',()=>{
+ const failures=['a','b','c','d'].map(id=>({...message(id,'error'),error:{name:'ProviderError',message:'Connection error.'}}));
+ mount(failures);
+ expect(document.querySelectorAll('.msg-error')).toHaveLength(1);
+ expect(document.body.textContent).toContain('Попыток: 4');
+ parts('a',[{text:'Partial output that must survive'}]);mount(failures.map(m=>({...m})));
+ expect(document.querySelectorAll('.msg-error')).toHaveLength(4);
+ expect(document.body.textContent).toContain('Partial output that must survive');
+});

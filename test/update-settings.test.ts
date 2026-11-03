@@ -26,7 +26,7 @@ it('offers a ready GitHub download as primary, with explicit build inside the op
 it('explains pending CI and hides local build when prerequisites are absent',async()=>{
  f.state.release.binary={state:'pending',message:'Пакет ещё собирается.'};f.prerequisites={available:false,reason:'Не установлен Cargo.'};await render();
  expect(document.body.textContent).toContain('Пакет ещё собирается.');expect(document.body.textContent).toContain('Не установлен Cargo.');
- expect(document.body.textContent).toContain('Enki 2.0.6.');expect(document.body.textContent).toContain('Уведомление появится, когда установщик будет готов.');
+ expect(document.body.textContent).toContain('Enki 2.0.6.');expect(document.querySelector('details')?.open).toBe(true);expect(document.body.textContent).toContain('Вход в GitHub не нужен.');
  expect(buttons().some(b=>b.textContent?.includes('Скачать')||b.textContent==='Собрать на этом компьютере')).toBe(false);
 });
 it('a native package transfer shows byte progress and cancellation without offering another build',async()=>{
@@ -34,4 +34,11 @@ it('a native package transfer shows byte progress and cancellation without offer
  expect(document.querySelector('progress')?.value).toBe(1024);expect(document.querySelector('select')?.disabled).toBe(true);
  const cancel=buttons().find(b=>b.textContent==='Отменить подготовку')!;await act(async()=>cancel.click());expect(f.cancel).toHaveBeenCalledTimes(1);
  expect(buttons().some(b=>b.textContent==='Собрать на этом компьютере')).toBe(false);
+});
+
+it('offers local build without waiting for GitHub, only after an explicit click',async()=>{
+ f.state.release.binary={state:'unavailable'};await render();
+ expect(document.querySelector('details')?.open).toBe(true);expect(f.build).not.toHaveBeenCalled();
+ const build=buttons().find(b=>b.textContent==='Собрать на этом компьютере')!;
+ await act(async()=>build.click());expect(f.build).toHaveBeenCalledTimes(1);expect(f.download).not.toHaveBeenCalled();
 });
