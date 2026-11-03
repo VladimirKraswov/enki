@@ -42,7 +42,9 @@ def healthy(pid):
         children = {p.exe() for p in psutil.Process(pid).children(recursive=True) if p.is_running()}
     except psutil.Error:
         return False
-    return {"/opt/strata/bin/strata", "/opt/strata/bin/strata-vision"} <= children
+    # Control 0.1.56 starts Vision lazily and stops it after idle timeout.
+    # Its absence is healthy; the owned text engine must still be running.
+    return "/opt/strata/bin/strata" in children
 
 
 def main():

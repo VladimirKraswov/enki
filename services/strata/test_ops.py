@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch, MagicMock
+import sys
 
 
 def module(name):
@@ -13,6 +15,23 @@ w, r, g = (module(n) for n in ("watchdog", "ready", "gateway_config"))
 
 
 class Recovery(unittest.TestCase):
+    def test_elastic_vision_absence_does_not_restart_healthy_engine(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"status":"ok","loaded":true,"model":"qwen38-flash-next"}'
+        psutil = MagicMock()
+        psutil.Error = RuntimeError
+        child = MagicMock()
+        child.exe.return_value = "/opt/strata/bin/strata"
+        child.is_running.return_value = True
+        psutil.Process.return_value.children.return_value = [child]
+        with patch.dict(sys.modules, {"psutil": psutil}), patch.object(w.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = response
+            self.assertTrue(w.healthy(123))
+            child.exe.return_value = "/opt/strata/bin/strata-vision"
+            self.assertFalse(w.healthy(123))
+            child.is_running.return_value = False
+            self.assertFalse(w.healthy(123))
+
     def test_three_observations_then_only_one_restart(self):
         state = {}
         for i in range(2):
