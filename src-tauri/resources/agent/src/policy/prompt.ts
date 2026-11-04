@@ -6,6 +6,7 @@
 // user's text is stored exactly as typed. Steering and wake markers remain in
 // the user message because they describe that specific message.
 import { legacyToolWorkflowReminder, legacyV2ToolWorkflowReminder, toolWorkflowReminder } from "./toolWorkflow.ts";
+import { workQualityReminder } from "./workQuality.ts";
 import { workshopReminder, workshopVisibleText } from "./workshop.ts";
 
 export const RESPONSE_LANGUAGE_CONTEXT = `Язык общения Enki: все сообщения пользователю, пояснения, вопросы, отчёты об ошибках и итоговые ответы пиши на русском языке. Не переходи на украинский язык вслед за историей, выводом инструментов или документами. Размышления допускаются на английском. Код, команды, пути и собственные имена сохраняй без перевода. Это правило языка, а не разрешение выполнять дополнительные действия.`;
@@ -29,6 +30,7 @@ export function sessionPolicyBlocks(sessionId: string, directory: string, worksh
   return [
     languageReminder(sessionId),
     toolWorkflowReminder(sessionId),
+    workQualityReminder(sessionId),
     userWaitReminder(sessionId),
     scheduleReminder(sessionId, directory),
     ...(workshop ? [workshopReminder(sessionId)] : []),
