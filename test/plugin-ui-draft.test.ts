@@ -4,6 +4,7 @@
 // only one mutation is in flight (ordered).
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DraftCasSync, type DraftHost, type DraftSessionPort } from "../src/agent/runtime/pluginUi/draftSync";
+import { ApiError } from "../src/api/http";
 import type { DraftSnapshot } from "../src/agent/runtime/pluginUi/types";
 
 const snap = (revision: number, text: string): DraftSnapshot => ({ revision, text, selection: { start: text.length, end: text.length }, updatedAt: revision });
@@ -19,10 +20,11 @@ function setup(sessionID = `chat-${Math.random()}`) {
     return { ok: true, result: { replayed: false, snapshot: snap(mutation.baseRevision + 1, mutation.text) } };
   });
   const refresh = vi.fn<() => Promise<{ draft: DraftSnapshot } | null>>(async () => null);
-  const session: DraftSessionPort = { sessionID, directory: "/p", client: { uiDraft }, refresh };
+  const authorityLost = vi.fn<(retry: boolean) => void>();
+  const session: DraftSessionPort = { sessionID, directory: "/p", client: { uiDraft }, refresh, authorityLost };
   const host: DraftHost = { read: () => text, write: value => { text = value; }, composing: () => composing };
   const sync = new DraftCasSync(session, host, () => `m-${++ids}`);
-  return { sync, sent, uiDraft, refresh, setText: (value: string) => { text = value; }, text: () => text, compose: (value: boolean) => { composing = value; } };
+  return { sync, sent, uiDraft, refresh, authorityLost, setText: (value: string) => { text = value; }, text: () => text, compose: (value: boolean) => { composing = value; } };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -111,4 +113,27 @@ it("a returning tab with unsent text on the same base pushes it instead of disca
   again.sync.hydrate(snap(7, "seen"));
   await vi.advanceTimersByTimeAsync(10);
   expect(again.sent).toEqual([{ id: expect.any(String), baseRevision: 7, text: "seen + typed offline" }]);
+});
+
+
+it("a lost UI authority reconnects once, holds the exact draft until hello and never spins on 403", async () => {
+  const t = setup();
+  t.sync.hydrate(snap(2, ""));
+  t.uiDraft.mockRejectedValue(new ApiError(403, "UI disconnected"));
+  t.setText("keep this draft"); t.sync.localChanged();
+  await vi.advanceTimersByTimeAsync(300);
+  const mutation = { ...t.uiDraft.mock.calls[0][2] };
+  expect(t.authorityLost).toHaveBeenLastCalledWith(true);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(t.uiDraft).toHaveBeenCalledTimes(1);
+  t.sync.hydrate(snap(2, "")); await vi.advanceTimersByTimeAsync(1);
+  expect(t.uiDraft.mock.calls[1][2]).toEqual(mutation);
+  expect(t.authorityLost).toHaveBeenLastCalledWith(false);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(t.uiDraft).toHaveBeenCalledTimes(2);
+  expect(t.text()).toBe("keep this draft");
+  t.uiDraft.mockResolvedValue({ ok: true, result: { replayed: true, snapshot: snap(3, "keep this draft") } });
+  t.sync.hydrate(snap(3, "keep this draft")); await vi.advanceTimersByTimeAsync(1);
+  expect(t.uiDraft.mock.calls[2][2]).toEqual(mutation);
+  expect(t.sync.getState()).toEqual({ kind: "synced", revision: 3 });
 });

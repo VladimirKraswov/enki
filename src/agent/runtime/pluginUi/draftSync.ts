@@ -8,6 +8,7 @@
 // - nothing is sent or applied during an IME composition;
 // - attachments are not part of the text draft and are never touched here.
 import type { RuntimeClient } from "../client";
+import { ApiError } from "../../../api/http";
 import type { DraftSnapshot } from "./types";
 
 /** What the draft sync needs from the session UI connection (PluginUiSession implements it). */
@@ -17,6 +18,8 @@ export interface DraftSessionPort {
   readonly client: Pick<RuntimeClient, "uiDraft">;
   /** Principal-specific snapshot re-read; null when the surface changed or is gone. */
   refresh(): Promise<{ draft: DraftSnapshot } | null>;
+  /** Re-establish stream-owned authority; false exposes a manual retry after one failed recovery. */
+  authorityLost?(retry: boolean): void;
 }
 
 export interface DraftHost {
@@ -46,6 +49,7 @@ export class DraftCasSync {
   private readonly listeners = new Set<() => void>();
   private live = false;
   private disposed = false;
+  private authorityRecoveryId: string | null = null;
   /** Text replaced by "take theirs", offered back to the user instead of being lost. */
   stash: string | null = null;
 
@@ -136,6 +140,14 @@ export class DraftCasSync {
     try { result = await this.session.client.uiDraft(this.session.sessionID, this.session.directory, mutation); }
     catch (error) {
       if (this.disposed || this.inflight !== mutation) return;
+      if (error instanceof ApiError && error.status === 403 && this.session.authorityLost) {
+        const retry = this.authorityRecoveryId !== mutation.id;
+        this.authorityRecoveryId = mutation.id;
+        this.offline(); // preserve the exact mutation; only the next hello may resend it
+        this.session.authorityLost(retry);
+        return;
+      }
+      if (!this.live) return; // a late rejection must not revive a disconnected draft
       // Unknown outcome: the SAME mutation is retried; nothing newer is sent before it.
       this.set({ kind: "retrying", message: error instanceof Error ? error.message : "Нет связи с Enki Runtime." });
       if (this.live) this.timer = setTimeout(() => { this.timer = null; void this.send(mutation, attempt + 1); }, Math.min(10_000, 500 * 2 ** attempt));
@@ -144,6 +156,7 @@ export class DraftCasSync {
     if (this.inflight !== mutation) return;
     this.inflight = null;
     if (result.ok) {
+      this.authorityRecoveryId = null;
       this.acknowledge(result.result.snapshot.revision, mutation.text);
       if (this.host.read() !== mutation.text) this.schedule(0);
       else this.set({ kind: "synced", revision: result.result.snapshot.revision });

@@ -13,6 +13,12 @@ const users = async (sid: string) => (await h.request<{ messages: Array<{ info: 
 describe("runOutcome (pure)", () => {
   const facts = (...events: unknown[]): RunFacts => { const f: RunFacts = { produced: false, compaction: null, retryError: null }; for (const e of events) observeRun(f, e as never); return f; };
   const end = (stopReason: string, content: unknown[] = [{ type: "text", text: "ok" }]) => ({ type: "message_end", message: { role: "assistant", stopReason, content } });
+  it("earlier tools or progress do not turn a reasoning-only final stop into an answer", () => {
+    for (const earlier of [[{ type: "toolCall", id: "t", name: "bash", arguments: {} }], [{ type: "text", text: "Working…" }]]) {
+      const outcome = runOutcome("c", facts(end("toolUse", earlier), end("stop", [{ type: "thinking", thinking: "Starting edits now" }])), true);
+      expect(outcome).toMatchObject({ state: "failed", reason: "no_answer" });
+    }
+  });
   it("the LAST assistant of this run decides; an SDK-recovered length is a success", () => {
     expect(runOutcome("c", facts(end("length"), { type: "compaction_end", result: {}, aborted: false }, end("stop")), true)).toMatchObject({ state: "completed", reason: "answered" });
     expect(runOutcome("c", facts(end("length")), true)).toMatchObject({ state: "failed", reason: "length", error: expect.stringContaining(OUTPUT_LIMIT_TEXT) });
@@ -102,4 +108,21 @@ it("an individual recovered tool error is not a task failure", async () => {
   h.scripted.setResponses([fauxAssistantMessage([fauxToolCall("read", { path: "missing.txt" })], { stopReason: "toolUse" }), fauxAssistantMessage("файла нет, вот вывод")]);
   await h.command(promptCommand(h, "tool-1", sid, dir, "read it"));
   expect((await h.waitReceipt("tool-1", ["completed", "failed", "rejected", "cancelled"])).state).toBe("completed");
+});
+
+it("a reasoning-only final stop after a tool is failed without replaying the tool or the user prompt", async () => {
+  h = await harness();
+  const dir = h.project("reasoning-final"), sid = await newSession(h, dir, { permission: [{ permission: "*", pattern: "*", action: "allow" }] });
+  const client = stream(h, `directory=${encodeURIComponent(dir)}`); await client.hello;
+  h.scripted.setResponses([
+    fauxAssistantMessage([fauxToolCall("read", { path: "missing.txt" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([{ type: "thinking", thinking: "Now I will make the edits." }], { stopReason: "stop" }),
+    fauxAssistantMessage("must not be replayed"),
+  ]);
+  await h.command(promptCommand(h, "reasoning-final-1", sid, dir, "inspect and edit"));
+  expect((await h.waitReceipt("reasoning-final-1", ["completed", "failed", "rejected", "cancelled"]))).toMatchObject({ state: "failed", error: expect.stringContaining("не дала ответа") });
+  expect(h.scripted.calls()).toBe(2);
+  expect((await users(sid)).filter(m => m.info.role === "user")).toHaveLength(1);
+  const outcome = await client.waitFor(e => e.event.type === "session.outcome");
+  expect(outcome.event.properties).toMatchObject({ state: "failed", reason: "no_answer", finish: "stop" });
 });

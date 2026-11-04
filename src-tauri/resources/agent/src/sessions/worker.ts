@@ -235,7 +235,7 @@ export function runOutcome(commandId: string, facts: RunFacts, modelStarted: boo
     const recovery = facts.compaction && !facts.compaction.ok && facts.compaction.error ? ` Сжатие: ${facts.compaction.error}` : "";
     return { commandId, state: "failed", error: `${OUTPUT_LIMIT_TEXT}${recovery}`, reason: "length" };
   }
-  if (!last || !facts.produced) {
+  if (!last || !facts.produced || (last.stopReason === "stop" && !hasContent(last))) {
     const recovery = facts.compaction && !facts.compaction.ok ? ` Восстановление сжатием не удалось${facts.compaction.error ? `: ${facts.compaction.error}` : ""}.` : "";
     return { commandId, state: "failed", error: `Модель не дала ответа в этом запросе.${recovery} История сохранена; автоматического повтора не было.`, reason: "no_answer" };
   }

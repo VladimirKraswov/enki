@@ -51,6 +51,16 @@ export class PluginUiSession implements SurfacePort {
   /** "Подключиться снова" after an error. */
   retry(): void { this.restart(); }
 
+  /** A draft HTTP rejection can reveal a dead SSE lease before reader.read() settles. */
+  authorityLost(retry: boolean): void {
+    if (this.disposed) return;
+    this.closeSurfaces("Подключение интерфейса утрачено.");
+    if (retry) { this.restart(); return; }
+    this.runGeneration++;
+    this.abort?.abort(); this.abort = null;
+    this.patch({ phase: "error", detail: "Не удалось восстановить подключение интерфейса. Черновик сохранён. Нажмите «Подключиться снова»." });
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

@@ -1,29 +1,24 @@
-# TASK — 2026-11-03: Strata VM5200
+# TASK — 2026-11-05: Enki 2.0.34 / Strata reasoning-only stop
 
-## Текущее поручение
-Владелец явно поручил обновить отдельный Strata на PVE192.168.31.2/VM5200
-с замерами до/после. Это разрешает изменение именно этой inference-службы.
-Затем уточнил: без снижения качества. Делегации не было.
+Поручение: исправить остановку и потерю UI-связи на подходящей стороне Enki/Strata.
+Диагностика: 04.11 23:48:10 MSK последний SDK assistant reasoning-only/stop;
+ранние tools дали facts.produced=true, ошибочный session.outcome answered.
+После пользовательского хода23:54 агент снова выполнял команды; текущий ход
+не останавливать/не переотправлять. Сессия b83e2411-9514-4942-94a3-47dd4a234e72.
 
-Продолжение по TTFT завершено с ограничением: первое сохранение длинной
-ветки всё ещё ~1с. Причина — park ~940мс/1.17ГБ; KV resize522–725мс.
-Обычное продолжение не паркуется; исходный тест был перегенерацией.
-Установлен штатный --conversation-cache-park-gain1024, остальные параметры
-прежние. Следующий повтор short0.105с / long0.146с; после переключений long
-0.421/0.145/0.144с, decode107.5/126.3/99.4ток/с (разброс, не гарантия равенства).
-Между двумя чатами reuse52536/52541 сохранён. JSON/logic PASS.
-POOL4 снят: длинный TTFT0.95–1.33с и decode хуже в этой серии; TRACE снят.
-Watchdog исправлен и установлен: постоянный strata-vision несовместим с lazy
-Vision0.1.56, приводил к ложному рестарту/start-limit-hit. API восстановлен,
-watchdog включён; healthy проверяется в его штатном venv с psutil.
-Резерв config VM upgrade-20261103/model-before-latency.json, watchdog-before-elastic.py.
-Приёмка VM upgrade-20261103/latency-accepted.json; частные логи/скрипты
-.local/strata-latency/, данные .local/strata-upgrade/latency-*.
-Команды: python3 -m unittest discover -s services/strata -p 'test_*.py'
-(8PASS/3SKIP без nginx); npm run check:docs (67/208PASS), git diff --check.
-Изменена только VM-служба и её operator/watchdog файлы; Enki UI/runtime
-не менялись, выпуск Enki не требуется. Подробные пределы замеров в README Strata.
+Реализовано: last stop без текста/tool не success даже после предыдущих tools;
+403 черновика → offline, один reconnect SSE, повтор того же CAS только послеhello;
+повторный403 → видимая ошибка/manual retry. Поздняя ошибка offline не оживляетretry.
+Целевые frontend9PASS, runtime9PASS, build/typecheck/sdk PASS на рабочем дереве.
+Штатные Strata ReasoningCloseRetry4PASS в bundledPython без GPU. Включение
+reasoning_close_retry разрешено владельцем, ждём освобождения Hublease (агентработает).
+Полный canonical gate/publish ещё предстоит; версия34 зарезервирована вmanifest.
+После коммита: dev-tools run npm run release:local -- stable, квитанция/подписи/
+фактические файлы, затем desktop_updates status→prepare→poll→apply последнимдействием.
+GitHub packages отложены владельцем; новых разрешений не спрашивать.
+Логи .local/turn-recovery/. Ключи/владельческие истории не публиковать.
 
+## Предыдущая работа и сохранённые ограничения
 ## Результат
 VM5200 RTX5090/160GiB/NUMA0 проверена. Релиз v0.2.10, Control/engine0.1.56
 скачаны из upstream release, проверены SHA256. Старый0.1.45.3 сохранён.
