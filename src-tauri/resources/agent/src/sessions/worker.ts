@@ -14,6 +14,7 @@ import {
   type SdkAssistantMessage, type SdkEvent, type SdkImage, type SdkModel, type SdkModelRuntime, type SdkSession, type SdkSessionRuntime, type SdkCommandActions, type ResourceSpec, type SettingsSpec,
 } from "../sdk/adapter.ts";
 import { entriesPage, entriesToMessages } from "../sdk/history.ts";
+import type { ModelSlotQueue } from "../sdk/inference-transport.ts";
 import { StreamTranslator } from "../sdk/translate.ts";
 import type { CommandLedger } from "../store/commands.ts";
 import type { EventJournal } from "../store/events.ts";
@@ -37,6 +38,10 @@ export interface WorkerDeps {
   settings(): SettingsSpec;
   resources(record: SessionRecord): Promise<ResourceSpec>;
   promptProgress?(model: SdkModel): boolean;
+  /** FIFO tracking of single-slot model services: lets a chat honestly say
+   * "the model is answering another chat" instead of going silent. */
+  modelSlots?: ModelSlotQueue;
+  modelSlotKey?(model: SdkModel): string | undefined;
   /** Session settled (idle, nothing queued in the SDK): drain queues, release leases. */
   onSettled(sessionID: string, outcome: RunOutcome): void;
   /** Steering text the SDK had not yet delivered when the user pressed Stop. */
@@ -299,7 +304,7 @@ export class SessionWorker {
         if (!instance || instance.closed || instance.invalidating || !instance.busy()) return;
         instance.status = { type: 'busy', inference: { ...inference, ...(instance.session.isCompacting ? { task: 'compaction' as const } : {}) } };
         deps.journal.append(record.directory, record.id, { type: 'session.status', properties: { sessionID: record.id, status: instance.status } }, true);
-      } },
+      }, ...(deps.modelSlots ? { slots: deps.modelSlots, ...(deps.modelSlotKey ? { slotKey: deps.modelSlotKey } : {}) } : {}) },
       ...(model ? { model } : {}),
       ...(record.model?.variant && isThinkingLevel(record.model.variant) ? { thinking: record.model.variant } : {}),
     });

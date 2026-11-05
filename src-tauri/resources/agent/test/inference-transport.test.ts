@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { InferenceObserver, stableTools } from '../src/sdk/inference-transport.ts';
+import { expect, it, vi } from 'vitest';
+import { InferenceObserver, ModelSlotQueue, stableTools } from '../src/sdk/inference-transport.ts';
 import { parseInferenceProgress, type InferenceProgress } from '../src/inference-progress.ts';
 import { compactionBudget } from '../src/context-budget.ts';
 
@@ -81,4 +81,50 @@ it('reserves a full answer for SDK compaction and bounds the retained tail on sm
   expect(small.reserveTokens).toBeGreaterThanOrEqual(512);
   expect(small.keepRecentTokens).toBeLessThan(small.triggerTokens);
   expect(compactionBudget({ contextWindow: 262144, maxTokens: 32768 }, { reserveTokens: 65536 }).reserveTokens).toBe(65536);
+});
+it('orders single-slot model requests FIFO and releases a slot on every completion path', () => {
+  const slots = new ModelSlotQueue();
+  const a = slots.enter('svc\u0000m'), b = slots.enter('svc\u0000m'), c = slots.enter('other\u0000m');
+  expect([slots.behind(a), slots.behind(b), slots.behind(c)]).toEqual([false, true, false]);
+  slots.release(a); slots.release(a);
+  expect([slots.behind(b), slots.behind(c)]).toEqual([false, false]);
+  slots.release(b); slots.release(c);
+  const d = slots.enter('svc\u0000m');
+  expect(slots.behind(d)).toBe(false);
+});
+it('names a queued request behind a live one, clears the claim when the slot frees, and never blames another service', async () => {
+  vi.useFakeTimers();
+  try {
+    const slots = new ModelSlotQueue();
+    const a: InferenceProgress[] = [], b: InferenceProgress[] = [], other: InferenceProgress[] = [];
+    const first = new InferenceObserver(p => a.push(p), () => 1000).begin(payload, undefined, { slots, key: 'svc' });
+    expect(a[0].queued).toBeUndefined();
+    const second = new InferenceObserver(p => b.push(p), () => 1000).begin(payload, undefined, { slots, key: 'svc' });
+    expect(b[0]).toMatchObject({ phase: 'waiting', queued: true });
+    const foreign = new InferenceObserver(p => other.push(p), () => 1000).begin(payload, undefined, { slots, key: 'other-service' });
+    expect(other[0].queued).toBeUndefined();
+    first.end(); // the earlier chat's request finished; our stream is still silent
+    await vi.advanceTimersByTimeAsync(600);
+    expect(b.length).toBe(2);
+    expect(b[1]).toMatchObject({ phase: 'waiting' });
+    expect(b[1].queued).toBeUndefined();
+    second.end(); foreign.end();
+  } finally { vi.useRealTimers(); }
+});
+it('releases the queue slot on stream flush and on abort, so the next chat is not blamed', async () => {
+  const slots = new ModelSlotQueue();
+  const observer = new InferenceObserver(() => {}, () => 1000);
+  const streamed = observer.begin(payload, undefined, { slots, key: 'svc' });
+  await consume(streamed, sse(progress(100)) + 'data: [DONE]\n\n');
+  const out: InferenceProgress[] = [];
+  const next = new InferenceObserver(p => out.push(p), () => 1000).begin(payload, undefined, { slots, key: 'svc' });
+  expect(out[0].queued).toBeUndefined();
+  next.end();
+  const controller = new AbortController();
+  const aborted = new InferenceObserver(() => {}, () => 1000).begin(payload, controller.signal, { slots, key: 'svc' });
+  controller.abort();
+  const after: InferenceProgress[] = [];
+  const third = new InferenceObserver(p => after.push(p), () => 1000).begin(payload, undefined, { slots, key: 'svc' });
+  expect(after[0].queued).toBeUndefined();
+  aborted.end(); third.end();
 });

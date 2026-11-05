@@ -13,7 +13,8 @@ export function InferenceStatus({ progress }: { progress: InferenceProgress }) {
   const elapsed = seconds < 60 ? `${seconds} с` : `${Math.floor(seconds / 60)} мин ${seconds % 60} с`;
   const n = (value: number) => value.toLocaleString('ru-RU');
   const measured = progress.total !== undefined && progress.processed !== undefined;
-  const phaseLabel = progress.phase === 'waiting' ? 'Ожидаю ответ сервера модели'
+  const phaseLabel = progress.phase === 'waiting' ? progress.queued ? 'Модель отвечает другому чату'
+    : 'Ожидаю ответ сервера модели'
     : progress.phase === 'prefill' ? 'Обрабатываю контекст'
     : progress.phase === 'reasoning' ? 'Модель обдумывает ответ' : 'Модель формирует ответ';
   const label = progress.task === 'compaction' ? `Сжимаю историю · ${phaseLabel.toLocaleLowerCase('ru-RU')}` : phaseLabel;
@@ -24,7 +25,8 @@ export function InferenceStatus({ progress }: { progress: InferenceProgress }) {
       <div className="inference-detail">{n(progress.processed!)} / {n(progress.total!)} токенов
         {progress.cached! > 0 ? ` · из кэша ${n(progress.cached!)}` : ' · без готового кэша'}</div>
     </>}
-    {progress.phase === 'waiting' && seconds >= 15 && <div className="inference-detail">Сервер ещё не передал прогресс. Запрос передаётся или обрабатывается; повторять его не нужно.</div>}
+    {progress.phase === 'waiting' && progress.queued && <div className="inference-detail">Эта модель обрабатывает один запрос за раз. Ваш запрос ждёт своей очереди и начнётся, когда модель освободится; повторять его не нужно.</div>}
+    {progress.phase === 'waiting' && !progress.queued && seconds >= 15 && <div className="inference-detail">Сервер ещё не передал прогресс. Запрос передаётся или обрабатывается; повторять его не нужно.</div>}
     {progress.phase === 'prefill' && progress.cache === 'prefix_changed' && <div className="inference-detail">Инструкции или инструменты изменились — контекст пересчитывается.</div>}
   </div>;
 }

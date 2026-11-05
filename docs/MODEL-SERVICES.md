@@ -103,6 +103,15 @@ the previous model. A prompt is sent only after the exact requested model is rea
 A readiness **check** of a Hub-owned model (Settings or a failed message) only
 inspects status: it never prepares, selects or calls the model.
 
+Some service profiles (e.g. Strata) execute one request at a time with a FIFO
+queue inside the engine. Same-model clients share the Hub residency, so a
+second chat of the same device waits in that engine queue without any Hub
+message. The runtime proves this locally: while an earlier inference request
+for the same service target is still active, the waiting chat keeps showing
+«Модель отвечает другому чату» instead of a silent wait, and the claim clears
+when the slot frees or the answer starts. Traffic from other devices is
+invisible to this device, so those waits keep the generic server status text.
+
 Legacy explicitly configured local services remain supported for other deployments.
 Additional providers at an already bound API root inherit its control gate and
 require fresh registry authorization for their exact ID; names/prefixes do not

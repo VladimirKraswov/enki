@@ -27,6 +27,7 @@ import { McpPool } from "../mcp/pool.ts";
 import { ConfigProjection, userModelsPresent, type ConfigStatus } from "../models/config.ts";
 import { VaultCredentialStore } from "../models/credentials.ts";
 import { HubLeases } from "../models/hub.ts";
+import { ModelSlotQueue } from "../sdk/inference-transport.ts";
 import { findGit, GitService } from "../platform/git.ts";
 import { ownedSessionPath, runtimePaths, sessionDirFor, SESSION_LAYOUT, validDirectory, type RuntimePaths } from "../platform/paths.ts";
 import { PtyService, type PtyModule } from "../platform/pty.ts";
@@ -160,6 +161,8 @@ export class Runtime {
   /** Chats whose transcript the shard migration deliberately left alone. */
   readonly shardIssues: Array<{ session: string; reason: string }> = [];
   readonly hub: HubLeases;
+  /** Per-service FIFO witness for single-slot model engines (queue status text). */
+  readonly modelSlots = new ModelSlotQueue();
   /** Verified imported config resolved into memory at startup; immutable until restart. */
   configProjection: ConfigProjection = ConfigProjection.none();
   /** Generation committed by importPiConfig in THIS process; active after restart. */
@@ -617,6 +620,13 @@ export class Runtime {
       sessionDir: (d, sessionID) => { const record = sessionID ? this.catalog.get(sessionID) : null; return record ? this.sessionDirOf(record) : this.sessionDir(d); },
       resources: (record) => this.resources(record),
       promptProgress: model => this.hub.route(model.provider, model.id)?.promptProgress === 'prompt-progress-v1',
+      modelSlots: this.modelSlots,
+      // Only operator profiles that serve one request at a time (FIFO) may
+      // claim "another chat holds the model"; other services stay silent.
+      modelSlotKey: model => {
+        const route = this.hub.route(model.provider, model.id);
+        return route?.promptProgress === 'prompt-progress-v1' ? `${route.service}\u0000${route.target}` : undefined;
+      },
       ui: {
         db: this.db, hostId: this.hostId,
         authorize: (principal, sessionID, directory) => this.authorizeUi(principal, sessionID, directory),

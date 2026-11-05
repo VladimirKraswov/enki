@@ -44,7 +44,7 @@ import { ScopedResources } from "../plugin-ui/scoped-resources.ts";
 import { SDK_VERSION } from "../protocol.ts";
 import { projectToolEnvironment } from "../platform/environment.ts";
 import { applyHeaders, type ConfigProjection } from "../models/config.ts";
-import { InferenceObserver, stableTools } from './inference-transport.ts';
+import { InferenceObserver, ModelSlotQueue, stableTools } from './inference-transport.ts';
 import type { InferenceProgress } from '../inference-progress.ts';
 import { compactionBudget } from '../context-budget.ts';
 
@@ -201,7 +201,14 @@ export interface OpenSessionOptions {
   tools?: string[];
   /** In-memory, tool-less session that leaves no transcript (model access checks). */
   ephemeral?: boolean;
-  inference?: { supported(model: SdkModel): boolean; update(progress: InferenceProgress): void };
+  inference?: {
+    supported(model: SdkModel): boolean;
+    update(progress: InferenceProgress): void;
+    /** FIFO registry of single-slot services; slotKey returns the service's
+     * slot only for models whose operator profile is one-request FIFO. */
+    slots?: ModelSlotQueue;
+    slotKey?(model: SdkModel): string | undefined;
+  };
 }
 
 export interface OpenedSession {
@@ -343,8 +350,15 @@ export async function openAgentSession(options: OpenSessionOptions): Promise<Ope
     if (options.inference) {
       const observer = new InferenceObserver(options.inference.update);
       const stream = created.session.agent.streamFunction;
+      let latest: { end(): void } | undefined;
+      // A settled turn owns no engine slot; release whatever its last request
+      // left behind (errors and stops never reach the stream's flush).
+      created.session.subscribe(event => { if (event.type === 'agent_settled') { latest?.end(); latest = undefined; } });
       created.session.agent.streamFunction = (model, context, request) => {
         const supported = model.api === 'openai-completions' && options.inference!.supported(model);
+        const slotKey = supported ? options.inference!.slotKey?.(model) : undefined;
+        const queue = supported && slotKey !== undefined && options.inference!.slots
+          ? { slots: options.inference!.slots, key: slotKey } : undefined;
         let observed: ReturnType<InferenceObserver['begin']> | undefined;
         return stream(model, context, { ...request,
           onPayload: async (original, selected) => {
@@ -353,7 +367,8 @@ export async function openAgentSession(options: OpenSessionOptions): Promise<Ope
             if (supported && payload && typeof payload === 'object') {
               payload = { ...stableTools(payload) as object, return_progress: true };
             }
-            observed?.end(); observed = observer.begin(payload, request?.signal);
+            observed?.end(); observed = observer.begin(payload, request?.signal, queue);
+            latest = observed;
             return payload;
           },
           ...(supported ? { fetch: async (...args: Parameters<typeof fetch>) => {

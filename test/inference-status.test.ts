@@ -25,3 +25,19 @@ it('preserves validated request progress in status snapshots and ignores invalid
   expect(normalizeStatusType({ type: 'busy', inference })).toEqual({ type: 'busy', inference });
   expect(normalizeStatusType({ type: 'busy', inference: { ...inference, processed: 101 } })).toEqual({ type: 'busy' });
 });
+it('names the other chat as the waiting reason only for a proven queue claim', async () => {
+  const el = document.createElement('div'); document.body.append(el); const root = createRoot(el);
+  await act(async () => root.render(createElement(InferenceStatus, { progress: { requestID: 'one', phase: 'waiting', startedAt: 0, elapsedMs: 3000, queued: true } })));
+  expect(el.textContent).toContain('Модель отвечает другому чату');
+  expect(el.textContent).toContain('ждёт своей очереди');
+  expect(el.textContent).not.toContain('не передал прогресс');
+  await act(async () => root.render(createElement(InferenceStatus, { progress: { requestID: 'two', phase: 'waiting', startedAt: 0, elapsedMs: 3000 } })));
+  expect(el.textContent).toContain('Ожидаю ответ сервера модели');
+  expect(el.textContent).not.toContain('другому чату');
+  await act(async () => root.unmount());
+});
+it('keeps the queue claim only as a literal true and drops it from status when invalid', () => {
+  const base = { requestID: 'one', phase: 'waiting', startedAt: 1, elapsedMs: 100 };
+  expect(normalizeStatusType({ type: 'busy', inference: { ...base, queued: true } })).toEqual({ type: 'busy', inference: { ...base, queued: true } });
+  expect(normalizeStatusType({ type: 'busy', inference: { ...base, queued: 'yes' } })).toEqual({ type: 'busy' });
+});

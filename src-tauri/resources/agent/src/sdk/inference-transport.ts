@@ -20,12 +20,46 @@ export function stableTools(payload: unknown): unknown {
   return { ...payload, tools: payload.tools.map(canonical).sort((a, b) => name(a)! < name(b)! ? -1 : name(a)! > name(b)! ? 1 : 0) };
 }
 
+/** One FIFO registry per single-slot model service (docs/MODEL-SERVICES.md:
+ * e.g. Strata serves one request at a time). Requests for the same slot key
+ * are ordered by arrival; a request is `queued` while an earlier one of the
+ * same device is still active. Cross-device traffic is invisible here, so the
+ * flag only ever claims what this runtime can prove. */
+export class ModelSlotQueue {
+  private next = 1;
+  private readonly holders = new Map<string, number[]>();
+  private readonly owner = new Map<number, string>();
+  enter(key: string): number {
+    const id = this.next++;
+    let list = this.holders.get(key);
+    if (!list) this.holders.set(key, list = []);
+    list.push(id);
+    this.owner.set(id, key);
+    return id;
+  }
+  /** Idempotent; safe to call from every possible completion path. */
+  release(id: number): void {
+    const key = this.owner.get(id);
+    if (key === undefined) return;
+    this.owner.delete(id);
+    const list = this.holders.get(key)!;
+    const at = list.indexOf(id);
+    if (at >= 0) list.splice(at, 1);
+    if (!list.length) this.holders.delete(key);
+  }
+  behind(id: number): boolean {
+    const key = this.owner.get(id);
+    if (key === undefined) return false;
+    return (this.holders.get(key) ?? []).indexOf(id) > 0;
+  }
+}
+
 export class InferenceObserver {
   private serial = 0;
   private prefix?: { system: string; tools: string };
   constructor(private emit: (progress: InferenceProgress) => void, private now = Date.now) {}
 
-  begin(payload: unknown, signal?: AbortSignal) {
+  begin(payload: unknown, signal?: AbortSignal, queue?: { slots: ModelSlotQueue; key: string }) {
     const serial = ++this.serial, startedAt = this.now(), requestID = randomUUID();
     const first = object(payload) && Array.isArray(payload.messages) ? payload.messages.find(m => object(m) && ['system', 'developer'].includes(String(m.role))) : undefined;
     const fingerprint = { system: hash(first), tools: hash(object(payload) ? payload.tools : undefined) };
@@ -34,13 +68,34 @@ export class InferenceObserver {
     let phase: InferenceProgress['phase'] = 'waiting', lastAt = -Infinity;
     let counters: Pick<InferenceProgress, 'total' | 'processed' | 'cached' | 'cache'> = {};
     let active = true;
+    let slotId: number | undefined = queue ? queue.slots.enter(queue.key) : undefined;
+    let lastQueued = false;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let onAbort: (() => void) | undefined;
+    const isQueued = () => phase === 'waiting' && slotId !== undefined && queue!.slots.behind(slotId);
+    const stop = () => {
+      active = false;
+      if (poll !== undefined) { clearInterval(poll); poll = undefined; }
+      if (slotId !== undefined && queue) { queue.slots.release(slotId); slotId = undefined; }
+      if (signal && onAbort) { signal.removeEventListener('abort', onAbort); onAbort = undefined; }
+    };
     const publish = (force = false) => {
       const now = this.now();
-      if (!active || signal?.aborted || serial !== this.serial || !force && now - lastAt < 1000) return;
+      const q = isQueued();
+      // A queue flip must reach the UI even while the stream is silent.
+      if (!active || signal?.aborted || serial !== this.serial || !force && q === lastQueued && now - lastAt < 1000) return;
       lastAt = now;
-      this.emit({ requestID, phase, startedAt, elapsedMs: Math.max(0, now - startedAt), ...counters });
+      lastQueued = q;
+      this.emit({ requestID, phase, startedAt, elapsedMs: Math.max(0, now - startedAt), ...counters, ...(q ? { queued: true } : {}) });
     };
     publish(true);
+    if (queue) {
+      // The slot can free while no frame arrives (the other chat's stream ends
+      // between our publishes); bounded polling keeps the reason truthful.
+      poll = setInterval(() => { if (isQueued() !== lastQueued) publish(true); }, 500);
+      poll.unref?.();
+      if (signal) { onAbort = () => stop(); if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+    }
     const frame = (value: unknown) => {
       if (!object(value) || !active || signal?.aborted || serial !== this.serial) return;
       const p = value.prompt_progress;
@@ -67,6 +122,7 @@ export class InferenceObserver {
         if (!response.ok || !response.body || !response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) return response;
         const decoder = new TextDecoder(); let pending = '', dropped = false;
         const tap = new TransformStream<Uint8Array, Uint8Array>({
+          flush() { stop(); }, // The stream ended: the engine slot is free for the next chat.
           transform(bytes, controller) {
             // Forward ORIGINAL bytes, including vendor fields, usage and errors.
             controller.enqueue(bytes);
@@ -87,7 +143,7 @@ export class InferenceObserver {
         });
         return new Response(response.body.pipeThrough(tap), { status: response.status, statusText: response.statusText, headers: response.headers });
       },
-      end: () => { active = false; },
+      end: () => stop(),
     };
   }
 }
