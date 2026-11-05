@@ -32,6 +32,14 @@ it('does not resume due to resize clamping or a programmatic scroll event',()=>{
  controller.intent('up');el.scrollTop=700;controller.onScroll();height=800;controller.layout();controller.onScroll();
  height=1200;controller.layout();expect(controller.snapshot().following).toBe(false);
 });
+it('keeps following through browser clamp, anchor nudge and stale scroll events without a gesture', () => {
+  height = 700; el.scrollTop = 500; controller.onScroll(); // blocks above collapsed: the browser clamped us
+  expect(controller.snapshot().following).toBe(true);
+  height = 1300; controller.layout(); expect(el.scrollTop).toBe(1100);
+  el.scrollTop = 1050; controller.onScroll(); // a stale or anchor-adjusted event arrives late
+  height = 1600; controller.layout();
+  expect(controller.snapshot().following).toBe(true); expect(el.scrollTop).toBe(1400);
+});
 it('resumes when the reader scrolls down to the actual bottom, or presses latest',()=>{
  controller.intent('up');el.scrollTop=500;controller.onScroll();controller.intent('down');el.scrollTop=800;controller.onScroll();
  height=1200;controller.layout();expect(el.scrollTop).toBe(1000);

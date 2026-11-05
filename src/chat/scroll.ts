@@ -57,7 +57,10 @@ export class ChatScrollController {
     }
     this.written = null;
     const movement = now - this.top;
-    if (movement < -.5) this.following = false;
+    // Only an explicit gesture may detach (see intent()/pause()). Raw upward
+    // movement is NOT evidence of intent: when streamed blocks above collapse,
+    // the browser itself clamps or anchor-shifts scrollTop and fires a scroll
+    // event that once silenced following without any user touch.
     if (!this.following && this.direction !== 'up' && movement > .5 && this.bottom() - now <= 2)
       this.following = true;
     this.top = now;
