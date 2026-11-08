@@ -51,6 +51,7 @@ export const QUESTION_TOOL = "question";
 const QuestionParams = Type.Object({
   questions: Type.Array(Type.Object({
     question: Type.String({ minLength: 1, maxLength: QUESTION_LIMITS.question, description: "Complete question text" }),
+    context: Type.Optional(Type.String({ maxLength: QUESTION_LIMITS.context, description: "2–4 предложения контекста для человека, который не следил за работой: что уже сделано в этой задаче и почему сейчас нужен его выбор. Без жаргона, по-русски." })),
     header: Type.Optional(Type.String({ maxLength: QUESTION_LIMITS.header, description: "Very short label (max 80 chars)" })),
     options: Type.Optional(Type.Array(Type.Object({
       label: Type.String({ minLength: 1, maxLength: QUESTION_LIMITS.label }),
@@ -67,7 +68,9 @@ export function questionTool(scope: Pick<SessionScope, "sessionID" | "directory"
     name: QUESTION_TOOL,
     label: "Вопрос пользователю",
     description: "Ask the user one or more questions and wait for the answers. Use it when a decision or missing information "
-      + "blocks the task; do not use it to request permission for a tool (tools ask for permission themselves).",
+      + "blocks the task; do not use it to request permission for a tool (tools ask for permission themselves). "
+      + "Перед вопросом всегда заполняй context: что уже сделано и зачем нужен выбор. "
+      + "В options.description указывай последствия и плюсы/минусы варианта; если есть рекомендуемый вариант, отметь его и объясни почему.",
     parameters: QuestionParams,
     async execute(toolCallId: string, params: Static<typeof QuestionParams>, signal: AbortSignal | undefined) {
       const answer = await broker.askQuestion({ sessionID: scope.sessionID, directory: scope.directory, questions: params.questions, callID: toolCallId, ...(signal ? { signal } : {}) });

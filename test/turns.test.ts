@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
 import type {AssistantMessage, Message, MessagePart} from '../src/api/types';
-import {groupConversation, finalAnswer, visibleParts, turnMetrics} from '../src/chat/turns';
+import {groupConversation, finalAnswer, visibleParts, turnMetrics, currentTurnActivity} from '../src/chat/turns';
 const user=(id:string):Message=>({id,sessionID:'s',role:'user',time:{created:1}});
 const assistant=(id:string,parentID='u',finish='tool-calls'):AssistantMessage=>({id,sessionID:'s',role:'assistant',parentID,finish,time:{created:2,completed:3},modelID:'qwen',tokens:{output:10}});
 const text=(id='text',value='Answer'):MessagePart=>({id,sessionID:'s',messageID:'a',type:'text',text:value});
@@ -25,4 +25,12 @@ it('removes invisible engine markers and blank placeholders but retains reasonin
 });
 it('counts known output across steps and distinct model profiles without inventing missing usage',()=>{
  expect(turnMetrics([assistant('a'),{...assistant('b'),modelID:'deepseek',variant:'high',tokens:undefined}])).toEqual({profiles:['qwen','deepseek · high'],output:10,partial:true});
+});
+it('counts only current-turn tools and names the last one, so a question carries evidence of work',()=>{
+ const messages=[user('u1'),assistant('a1','u1'),user('u2'),assistant('a2','u2'),assistant('a3','u2')];
+ const tool=(id:string,name:string):MessagePart=>({...text(id),type:'tool',tool:name});
+ const parts=(id:string):MessagePart[]=>id==='a1'?[tool('old','bash')]:id==='a2'?[tool('r','read'),tool('e','edit')]:id==='a3'?[tool('b','bash')]:[];
+ expect(currentTurnActivity(messages,parts)).toEqual({actions:3,lastTool:'bash'});
+ expect(currentTurnActivity([user('u1')],parts)).toBeNull();
+ expect(currentTurnActivity([user('u1'),assistant('a1','u1')],()=>[])).toBeNull();
 });

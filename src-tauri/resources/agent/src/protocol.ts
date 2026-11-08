@@ -125,6 +125,8 @@ export interface QuestionRequestDTO {
   sessionID: string;
   questions: Array<{
     question: string;
+    /** Recap of the work so far and why this decision is needed; shown above the question. */
+    context?: string;
     header?: string;
     custom?: boolean | null;
     multiple?: boolean | null;

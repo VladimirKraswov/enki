@@ -22,6 +22,16 @@ function fixture() {
 }
 const denyExternal = [{ permission: "external_directory", pattern: "*", action: "deny" as const }];
 
+it("keeps the recap of completed work in the question event sent to the client", async () => {
+  const f = fixture();
+  const pending = f.broker.askQuestion({ sessionID: "s", directory: f.project, questions: [{ question: "Что дальше?", context: "Логи собраны, причина найдена; нужен выбор каталога." }] });
+  const rows = f.db.all("SELECT payload FROM events WHERE type='question.asked'");
+  expect(rows.length).toBe(1);
+  const event = JSON.parse((rows[0] as { payload: string }).payload);
+  expect(event.properties.questions[0].context).toBe("Логи собраны, причина найдена; нужен выбор каталога.");
+  expect(f.broker.replyQuestion(event.properties.id, [["Да"]])).toBe(true);
+  await expect(pending).resolves.toMatchObject({ answers: [["Да"]] });
+});
 it("default-read denies an external write before any approval can be requested", () => {
   const f = fixture();
   expect(decide({ rules: [], grants: [], fallback: "read", cwd: f.project, tool: "write", input: { path: path.join(f.external, "new.txt"), content: "NO" } }).decision).toBe("deny");

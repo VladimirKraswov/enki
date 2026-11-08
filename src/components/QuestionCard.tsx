@@ -10,6 +10,7 @@ import {getCurrentWebview} from '@tauri-apps/api/webview';
 import {readFile, stat} from '@tauri-apps/plugin-fs';
 import {filesFromNativeDrop, nativeDropTargetsQuestion} from '../attachments/native-drop';
 import {openFileInput} from '../attachments/composerBridge';
+import {actionCountLabel, currentTurnActivity} from '../chat/turns';
 
 export function QuestionCard({req, onReply, onReject}: {
   req: QuestionRequest;
@@ -17,6 +18,11 @@ export function QuestionCard({req, onReply, onReject}: {
   onReject(): void;
 }) {
   const state = useAppState(), workspace = state.prefs.workspaceKey ?? state.prefs.endpoint;
+  const chat = state.chat.sessions[req.sessionID];
+  const activity = chat ? currentTurnActivity(
+    chat.messageOrder.map(id => chat.messages[id]).filter((m): m is NonNullable<typeof m> => !!m),
+    id => (chat.partsByMessage[id] ?? []).map(pid => chat.parts[pid]).filter((p): p is NonNullable<typeof p> => !!p),
+  ) : null;
   const scope = attachmentScope(workspace, state.directory, `@question:${req.id}`);
   const files = useSyncExternalStore(attachmentDrafts.subscribe, () => attachmentDrafts.snapshot(scope));
   const picksKey = questionInputKey(req.id, -1);
@@ -87,7 +93,9 @@ export function QuestionCard({req, onReply, onReject}: {
     onDragOver={e => { if (!busy && Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault(); }}
     onDrop={e => { e.preventDefault(); e.stopPropagation(); addFiles(Array.from(e.dataTransfer.files)); }}>
     <div className="caption">Агент спрашивает</div>
+    {activity && <div className="question-context muted">Перед вопросом агент выполнил {actionCountLabel(activity.actions)}{activity.lastTool ? `, последнее — ${activity.lastTool}` : ''}.</div>}
     {req.questions.map((q, index) => <div className="question-section" key={index}>
+      {q.context && <div className="question-context">{q.context}</div>}
       <div className="question-text">{q.question}</div>
       {(q.options ?? []).map(option => <label className="opt-row" key={option.label}>
         <input type={q.multiple ? 'checkbox' : 'radio'} disabled={busy || voice >= 0} name={`${req.id}-${index}`}

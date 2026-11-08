@@ -34,7 +34,7 @@ export type QuestionAnswer = { answers: string[][]; content?: AnswerContent[]; a
 export interface QuestionAsk {
   sessionID: string; directory: string; questions: QuestionSpec[]; callID?: string; signal?: AbortSignal;
 }
-export const QUESTION_LIMITS = { questions: 8, options: 16, question: 2000, header: 80, label: 200, description: 1000, answer: QUESTION_ANSWER_TEXT_LIMIT } as const;
+export const QUESTION_LIMITS = { questions: 8, options: 16, question: 2000, header: 80, label: 200, description: 1000, context: 2000, answer: QUESTION_ANSWER_TEXT_LIMIT } as const;
 
 /** Structural bounds for model-provided questions (the tool schema is checked too). */
 export function questionProblem(questions: unknown): string | null {
@@ -44,6 +44,7 @@ export function questionProblem(questions: unknown): string | null {
     const q = value as Record<string, unknown>;
     if (typeof q.question !== "string" || !q.question.trim() || q.question.length > QUESTION_LIMITS.question) return "Некорректный текст вопроса.";
     if (q.header !== undefined && (typeof q.header !== "string" || q.header.length > QUESTION_LIMITS.header)) return "Некорректный заголовок вопроса.";
+    if (q.context !== undefined && (typeof q.context !== "string" || q.context.length > QUESTION_LIMITS.context)) return "Некорректный контекст вопроса.";
     for (const flag of ["multiple", "custom"] as const) if (q[flag] !== undefined && q[flag] !== null && typeof q[flag] !== "boolean") return "Некорректный параметр вопроса.";
     if (q.options === undefined) continue;
     if (!Array.isArray(q.options) || q.options.length > QUESTION_LIMITS.options) return "Не более 16 вариантов ответа.";
@@ -251,6 +252,7 @@ export class InteractionBroker {
     const request: QuestionRequestDTO = {
       id: `que_${randomUUID()}`, sessionID: ask.sessionID,
       questions: ask.questions.map(q => ({ question: q.question, ...(q.header ? { header: q.header } : {}),
+        ...(q.context ? { context: q.context } : {}),
         ...(typeof q.multiple === "boolean" ? { multiple: q.multiple } : {}), ...(typeof q.custom === "boolean" ? { custom: q.custom } : {}),
         ...(q.options ? { options: q.options.map(o => ({ label: o.label, ...(o.description ? { description: o.description } : {}) })) } : {}) })),
       tool: ask.callID ? { callID: ask.callID } : null,

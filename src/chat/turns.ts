@@ -47,3 +47,21 @@ function countLabel(count: number, words: [string, string, string]): string {
 }
 export const actionCountLabel = (count: number) => countLabel(count, ['действие', 'действия', 'действий']);
 export const stepCountLabel = (count: number) => countLabel(count, ['шаг', 'шага', 'шагов']);
+
+/** Objective evidence for a user who did not watch the turn: how many tool calls
+ * the current assistant turn already made and which tool ran last. The current
+ * turn is everything after the latest user message. */
+export function currentTurnActivity(messages: Message[], partsFor: (messageID: string) => MessagePart[]): { actions: number; lastTool: string | null } | null {
+  let start = messages.length - 1;
+  while (start >= 0 && messages[start]?.role !== 'user') start--;
+  let actions = 0, lastTool: string | null = null;
+  for (const message of messages.slice(start + 1)) {
+    if (message?.role !== 'assistant') continue;
+    for (const part of partsFor(message.id)) {
+      if (part?.type !== 'tool') continue;
+      actions++;
+      if (part.tool) lastTool = part.tool;
+    }
+  }
+  return actions ? { actions, lastTool } : null;
+}
