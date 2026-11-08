@@ -22,6 +22,7 @@ import {
   type PriceBook,
 } from "./money";
 import { periodStart, type UsageSource, type UsagePeriod, type UsageReport } from "./metrics";
+import { usageSources } from "./sources";
 
 export const DAY_MS = 24 * 3600 * 1000;
 
@@ -140,6 +141,15 @@ export async function computeUsage(
   }
   if (!storageSaved) notes.push("Файл данных использования обновлялся параллельно; показаны свежие данные из этой сессии.");
   return { report, money, notes, cache: refresh.cache, ledger: settledLedger, snapshot };
+}
+
+/** Facts only: no price book or exchange-rate refresh. Used by the context
+ * meter's monthly consumption, which must not wait on pricing. */
+export async function loadUsageCache(signal: AbortSignal): Promise<{ cache: UsageCache; failures: string[] }> {
+  const stored = isNative() ? await readStored<UsageCache>(CACHE_FILE) : null;
+  const cache = stored?.value?.schema === 1 ? stored.value : emptyCache();
+  const refresh = await refreshUsageCache(usageSources(), cache, signal);
+  return { cache: refresh.cache, failures: refresh.failures };
 }
 
 /** Reads the DeepSeek price book and the USD→RUB rate, keeping old values on

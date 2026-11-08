@@ -81,6 +81,8 @@ export interface Prefs {
   /** Audio is removed only after its text and receipt are durably saved together. */
   dictationReceipts?: string[];
   modelServices?: import("../models/services").ModelService[];
+  /** Owner-configured monthly token limit per provider; absent = unknown, no invented percent. */
+  monthlyLimits?: Record<string, number>;
   /** Local application of the shared Hub model catalog; the catalog itself lives on Hub. */
   hubModels?: import("../models/catalog").HubModelsPrefs;
   appearance: Appearance;

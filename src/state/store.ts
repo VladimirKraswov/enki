@@ -3141,6 +3141,18 @@ class Store {
     this.mutate(s => ({ prefs: { ...s.prefs, modelServices: modelServices.configuredServices() } }));
     this.persistPrefs();
   }
+  /** Monthly token limit the owner configured for a provider. Absent = unknown. */
+  monthlyLimit(provider: string): number | undefined {
+    const value = this.state.prefs.monthlyLimits?.[provider];
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+  setMonthlyLimit(provider: string, limit: number | undefined): void {
+    const next = { ...(this.state.prefs.monthlyLimits ?? {}) };
+    if (limit !== undefined && Number.isFinite(limit) && limit > 0) next[provider] = Math.round(limit);
+    else delete next[provider];
+    this.mutate(s => ({ prefs: { ...s.prefs, monthlyLimits: Object.keys(next).length ? next : undefined } }));
+    this.persistPrefs();
+  }
   setHelperEndpoint(endpoint: string) {
     this.mutate((s) => ({ prefs: { ...s.prefs, helperEndpoint: endpoint } }));
     this.persistPrefs();
