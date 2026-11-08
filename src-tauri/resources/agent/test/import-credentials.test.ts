@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { importLegacyCredentials } from "../src/models/import-credentials.ts";
+import { adoptAgentDirCredentials, importLegacyCredentials } from "../src/models/import-credentials.ts";
 import type { SdkCredential, SdkCredentialStore } from "../src/sdk/adapter.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true }); });
@@ -32,4 +32,36 @@ it("reports partial storage failure without exposing keys and preserves complete
   expect(JSON.stringify(first)).not.toMatch(/fixture-key|private-native-diagnostic/);
   fail = false;
   expect(await importLegacyCredentials(f.dir, store, id => values.has(id))).toEqual({ imported: ["other"], kept: ["deepseek"], failed: [] }); f.unchanged();
+});
+it("adopts credentials written by the SDK/CLI into the runtime's own auth.json for known providers only", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "enki-agent-auth-")); dirs.push(dir);
+  const auth = JSON.stringify({
+    "kimi-coding": { type: "oauth", access: "fixture-access", refresh: "fixture-refresh", expires: 1794167880214 },
+    deepseek: { type: "api_key", key: "fixture-key" },
+    unrelated: { type: "api_key", key: "unrelated-key" },
+  });
+  fs.writeFileSync(path.join(dir, "auth.json"), auth, { mode: 0o600 });
+  const values = new Map<string, SdkCredential>();
+  const store = { modify: vi.fn(async (id: string, update: (v: SdkCredential | undefined) => Promise<SdkCredential>) => {
+    const result = await update(values.get(id)); values.set(id, result); return result;
+  }) } as unknown as SdkCredentialStore;
+  // "unrelated" is not a provider Enki knows: it must never reach the OS vault.
+  const result = await adoptAgentDirCredentials(dir, store, new Set(["kimi-coding", "deepseek"]));
+  expect(result).toEqual({ imported: ["kimi-coding", "deepseek"], kept: [], failed: [] });
+  expect([...values.keys()].sort()).toEqual(["deepseek", "kimi-coding"]);
+  expect(values.get("kimi-coding")).toMatchObject({ type: "oauth", access: "fixture-access" });
+  expect(fs.readFileSync(path.join(dir, "auth.json"), "utf8")).toBe(auth);
+  // A second start is idempotent and never replaces a stored credential.
+  values.set("kimi-coding", { type: "oauth", access: "rotated", refresh: "rotated", expires: 1 } as SdkCredential);
+  expect(await adoptAgentDirCredentials(dir, store, new Set(["kimi-coding"]))).toEqual({ imported: [], kept: ["kimi-coding"], failed: [] });
+  expect(values.get("kimi-coding")).toMatchObject({ access: "rotated" });
+});
+it("ignores a missing or malformed auth.json and never writes without a known provider", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "enki-agent-auth-")); dirs.push(dir);
+  const store = { modify: vi.fn() } as unknown as SdkCredentialStore;
+  expect(await adoptAgentDirCredentials(dir, store, new Set(["kimi-coding"]))).toEqual({ imported: [], kept: [], failed: [] });
+  fs.writeFileSync(path.join(dir, "auth.json"), "{ not json", { mode: 0o600 });
+  expect(await adoptAgentDirCredentials(dir, store, new Set(["kimi-coding"]))).toEqual({ imported: [], kept: [], failed: [] });
+  expect(await adoptAgentDirCredentials(dir, store, new Set())).toEqual({ imported: [], kept: [], failed: [] });
+  expect(store.modify).not.toHaveBeenCalled();
 });

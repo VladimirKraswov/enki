@@ -122,6 +122,15 @@ selection, and the **inference service** holding weights in VRAM. Read-only
 archives of former OpenCode/Pi CLI chats keep their provenance; continuing one
 creates a new Enki chat.
 
+Enki keeps provider credentials in the OS vault, so the pinned SDK ignores the
+agent directory `auth.json` while the runtime uses that vault. A credential the
+SDK or its CLI wrote there — for example a subscription OAuth token obtained
+outside Enki — is therefore adopted once at runtime start: only for providers
+Enki already knows, only when the vault holds nothing for them, and the vault
+value always wins. The file itself is never changed, and a broken or absent file
+never blocks startup. This is what makes such a subscription's models selectable
+without copying keys by hand.
+
 ## Configuring a service
 
 In Settings → Services of models, add a name, the exact provider ID, a loopback

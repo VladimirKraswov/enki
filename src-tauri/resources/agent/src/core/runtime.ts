@@ -26,6 +26,7 @@ import { CutoverJournal, type CutoverSessionRef, type CutoverTarget } from "../m
 import { McpPool } from "../mcp/pool.ts";
 import { ConfigProjection, userModelsPresent, type ConfigStatus } from "../models/config.ts";
 import { VaultCredentialStore } from "../models/credentials.ts";
+import { adoptAgentDirCredentials as adoptCredentials } from "../models/import-credentials.ts";
 import { HubLeases } from "../models/hub.ts";
 import { ModelSlotQueue } from "../sdk/inference-transport.ts";
 import { findGit, GitService } from "../platform/git.ts";
@@ -38,7 +39,7 @@ import { shutdownPluginUi, type NativeUiScope } from "../plugin-ui/runtime.ts";
 import { isReadOnlyOrigin, SCHEMA_VERSION, SDK_VERSION, type MessageDTO, type ModelRef, type PromptPart, type ScheduleDTO, type SessionStatusDTO } from "../protocol.ts";
 import { PromptQueue } from "../queue/queue.ts";
 import { Scheduler } from "../schedule/scheduler.ts";
-import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualifiedResourceSpec, trustStore, type ResourceSpec, type SdkExtension, type SdkModelRuntime, type SettingsSpec } from "../sdk/adapter.ts";
+import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualifiedResourceSpec, refreshCredentialSnapshot, trustStore, type ResourceSpec, type SdkExtension, type SdkModelRuntime, type SettingsSpec } from "../sdk/adapter.ts";
 import { SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
 import { SessionShards } from "../sessions/rehome.ts";
 import { SessionRegistry } from "../sessions/registry.ts";
@@ -254,6 +255,10 @@ export class Runtime {
         allowNetwork: config.allowModelNetwork, signal: config.signal,
         ...(projection.state === "none" ? {} : { config: projection }),
       });
+      config.signal?.throwIfAborted();
+      // Only the vault-backed host can hold adopted credentials; an injected
+      // runtime or a memory/ephemeral store owns its own credentials.
+      if (!config.modelRuntime && config.credentials === "vault") await runtime.adoptAgentDirCredentials(config.signal);
       config.signal?.throwIfAborted();
       runtime.modelAccess = new CatalogueAccess(runtime.modelRuntime, (p, m) => !!runtime.hub.route(p, m),
         () => runtime.journal.append(null, null, { type: "provider.catalog.updated", properties: {} }, true), config.allowModelNetwork);
@@ -611,6 +616,29 @@ export class Runtime {
     if (isReadOnlyOrigin(target.origin)) return fail("read_only", "Целевой чат доступен только для чтения.", false);
     if (target.archived) return fail("archived", "Чат перенесён в архив Enki. Верните его из архива и повторите перенос.", true);
     return { ok: true, record: target };
+  }
+
+  /** The pinned SDK (and its CLI) may have written provider credentials —
+   * including subscription OAuth tokens — into this runtime's agentDir/auth.json.
+   * Enki reads credentials from the OS vault, so such a token is invisible to
+   * the model list until it is adopted once. Only providers Enki already knows
+   * are touched, the vault always wins, and a broken/absent file never blocks
+   * startup. */
+  private async adoptAgentDirCredentials(signal?: AbortSignal): Promise<void> {
+    const known = new Set(this.modelRuntime.getProviders().map(p => p.id));
+    if (!known.size) return;
+    const store = new VaultCredentialStore(this.config.broker, this.configProjection);
+    let stored: Set<string>;
+    try { stored = new Set((await store.list({ signal })).map(credential => credential.providerId)); }
+    catch { return; }
+    const missing = new Set([...known].filter(id => !stored.has(id)));
+    if (!missing.size) return;
+    let imported: string[] = [];
+    try { imported = (await adoptCredentials(this.paths.agentDir, store, missing, signal)).imported; }
+    catch { return; }
+    if (!imported.length) return;
+    // Providers are rebuilt from the credential store; no restart is needed.
+    await refreshCredentialSnapshot(this.modelRuntime, signal ?? new AbortController().signal).catch(() => undefined);
   }
 
   private wire(): void {
