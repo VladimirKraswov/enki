@@ -15,7 +15,7 @@ function fakeRequest() {
 
 it("queues writes during backpressure and delivers them on drain instead of closing", () => {
   const { request, response } = fakeRequest();
-  const stream = openEventStream(request, { heartbeatMs: 60_000, stallMs: 60_000, flushMs: 5 });
+  const stream = openEventStream(request as never, { heartbeatMs: 60_000, stallMs: 60_000, flushMs: 5 });
   response.accept = false;
   expect(stream.send(1, { a: 1 })).toBe(false); // первая запись упёрлась в буфер
   expect(stream.send(2, { a: 2 })).toBe(true);  // вторая — в очередь, не закрытие
@@ -29,7 +29,7 @@ it("queues writes during backpressure and delivers them on drain instead of clos
 
 it("still closes when the buffer budget is exhausted or the stall is long", () => {
   const { request, response } = fakeRequest();
-  const stream = openEventStream(request, { heartbeatMs: 60_000, stallMs: 1, maxBufferedBytes: 200 });
+  const stream = openEventStream(request as never, { heartbeatMs: 60_000, stallMs: 1, maxBufferedBytes: 200 });
   response.accept = false;
   stream.send(1, { a: 1 });
   expect(stream.send(2, { x: "y".repeat(1000) })).toBe(false);
