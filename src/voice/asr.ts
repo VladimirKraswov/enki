@@ -49,6 +49,20 @@ export function asrHttpError(status: number): string {
     : 'Не удалось распознать аудиофрагмент.';
   return `ASR HTTP ${status}. ${hint}`;
 }
+/** A fragment that FFmpeg/ASR cannot parse returns a 400. Verify it locally
+ * first: a corrupt or header-only container must not reach the service at all,
+ * and the owner keeps the audio for recovery. */
+async function fragmentDecodes(blob: Blob): Promise<boolean> {
+  if (typeof AudioContext === 'undefined') return true; // нет декодера — отправляем как раньше
+  const audio = new AudioContext();
+  try {
+    const buffer = await blob.arrayBuffer();
+    const decoded = await audio.decodeAudioData(buffer);
+    return decoded.length > 0 && decoded.duration > 0;
+  } catch { return false; }
+  finally { void audio.close().catch(() => {}); }
+}
+
 export async function transcribeAudio(
   blob: Blob,
   settings: AsrSettings,
@@ -59,6 +73,8 @@ export async function transcribeAudio(
   if (error) throw new Error(error);
   if (blob.size === 0 || blob.size > 25 * 1024 * 1024)
     throw new Error("Запись пуста или превышает 25 МБ.");
+  if (!(await fragmentDecodes(blob)))
+    throw new Error("Аудиофрагмент повреждён (контейнер не декодируется). Запрос к ASR не отправлен; сохранённый звук оставлен для восстановления.");
   if (signal.aborted) throw new DOMException("Отменено", "AbortError");
   const mime = blob.type.split(";")[0] || "audio/webm";
   const filename = `dictation.${mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : mime.includes("wav") ? "wav" : "webm"}`;
