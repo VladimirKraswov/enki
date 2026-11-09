@@ -59,7 +59,11 @@ async function fragmentDecodes(blob: Blob): Promise<boolean> {
     const buffer = await blob.arrayBuffer();
     const decoded = await audio.decodeAudioData(buffer);
     return decoded.length > 0 && decoded.duration > 0;
-  } catch { return false; }
+  } catch (error) {
+    // A browser that cannot decode the container (e.g. no webm/opus support)
+    // is not proof of corruption: verify nothing and send as before.
+    return (error as { name?: string } | null)?.name === 'NotSupportedError';
+  }
   finally { void audio.close().catch(() => {}); }
 }
 

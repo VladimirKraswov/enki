@@ -9,8 +9,9 @@ parsing failed). Значит, такие фрагменты нельзя отп
 AudioContext.decodeAudioData: пустой/недекодируемый контейнер → запрос НЕ
 отправляется, честное сообщение «Аудиофрагмент повреждён… звук оставлен для
 восстановления», вместо 400 от сервера.
-Тесты: asr-fragment (jsdom) 2 PASS (нет fetch при битом контейнере; валидный
-фрагмент отправляется), asr 5 PASS, voice-input 13 PASS, voice-preroll 2 PASS.
+Тесты: asr-fragment (jsdom) 3 PASS (нет fetch при битом контейнере; валидный
+фрагмент отправляется; NotSupportedError в Safari/WebKit НЕ блокирует запись —
+иначе вся диктовка сломалась бы), asr 5 PASS, voice-input 13 PASS.
 npm test 1286 PASS, ci-artifacts 1 fail (rustc PATH — среда).
 Следующее: commit → release:local stable 2.0.50. Автоприменение не выполняю.
 
