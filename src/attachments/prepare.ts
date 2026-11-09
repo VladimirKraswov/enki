@@ -68,6 +68,26 @@ async function transcribe(chunks: HelperAsset[], asr: AsrSettings, signal: Abort
   return lines.join("\n");
 }
 
+/** What a converted document must contain before it is sent. A PDF must never
+ * turn into a handful of images that the model then calls "no file attached". */
+export function validateConverted(name: string, converted: Conversion, model: ModelInfo): void {
+  if (!converted.text.trim() && !converted.images.length)
+    throw new Error(`Из «${name}» не удалось извлечь ни текста, ни страниц. Файл не отправлен.`);
+  if (!converted.text.trim() && converted.images.length > 0 && !model.capabilities?.input?.image)
+    throw new Error(`«${name}» — скан без текстового слоя, а модель ${model.name ?? model.id} не принимает изображения. Нужен PDF с текстовым слоем или модель с поддержкой изображений.`);
+}
+
+/** Summary text the model always receives, so a converted PDF still reads as a
+ * document: its name, what was extracted and whether a text layer existed. */
+export function conversionSummary(name: string, kind: Conversion["kind"], converted: Conversion): string {
+  const labels = converted.images.map((image, index) => `${kind === "pdf" ? "Страница" : "Кадр"} ${index + 1}: ${image.label}`);
+  return [
+    `Имя файла: ${name}`, `Тип: ${kind}`,
+    converted.text.trim() ? "Извлечён текст документа ниже." : "Текстового слоя нет — приложены изображения страниц.",
+    ...converted.notes, ...labels,
+  ].join("\n");
+}
+
 export async function prepareAttachments(
   files: DraftAttachment[], model: ModelInfo, helperEndpoint: string, asr: AsrSettings, signal: AbortSignal,
   onProgress: (label: string) => void = () => {},
@@ -116,8 +136,8 @@ export async function prepareAttachments(
       if (kind !== "pdf") throw error;
       converted = await convertPdfLocally(file.blob);
     }
-    const summary = [`Имя файла: ${file.name}`, `Тип: ${kind}`, ...converted.notes,
-      ...converted.images.map((image, index) => `${kind === "pdf" ? "Страница" : "Кадр"} ${index + 1}: ${image.label}`)].join("\n");
+    validateConverted(file.name, converted, model);
+    const summary = conversionSummary(file.name, kind, converted);
     if (kind !== "audio" && !input?.image && converted.images.length)
       throw new Error(`Модель ${model.name ?? model.id} не принимает изображения, поэтому ${file.name} нельзя передать без потери содержимого.`);
     const spoken = await transcribe(converted.audio, asr, signal);
