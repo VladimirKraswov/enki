@@ -27,7 +27,7 @@ it("keeps audio captured during preparation as the first complete segment", asyn
   const capture = new SegmentedCapture(input, null, storage, "workspace", "draft", settings, {
     ready, progress: () => undefined, segmentReady: () => undefined, stopped: () => undefined, error: () => undefined,
   });
-  const first = new Blob(["первое слово"], { type: "audio/webm" });
+  const first = new Blob([new Uint8Array(4096).fill(7)], { type: "audio/webm" }); // реальный звук, не заголовок
   capture.start([first]);
   await Promise.resolve(); await Promise.resolve();
   expect(put).toHaveBeenCalledTimes(1);
@@ -38,14 +38,14 @@ it("keeps audio captured during preparation as the first complete segment", asyn
   await capture.finish();
 });
 
-it("records normally when preparation produced no pre-roll audio", async () => {
+it("does not create an ASR fragment from a header-only pre-roll", async () => {
   (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeRecorder;
   const put = vi.fn(async (_segment: DictationSegment) => undefined);
   const input = { getTracks: () => [{ readyState: "live", muted: false, stop() {} }] } as unknown as MediaStream;
   const capture = new SegmentedCapture(input, null, { put } as unknown as DictationStorage, "workspace", "draft", {} as never, {
     ready: () => undefined, progress: () => undefined, segmentReady: () => undefined, stopped: () => undefined, error: () => undefined,
   });
-  capture.start([]);
+  capture.start([new Blob(["header"], { type: "audio/webm" })]);
   expect(put).not.toHaveBeenCalled();
   await capture.finish();
 });

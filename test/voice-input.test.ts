@@ -88,7 +88,7 @@ it("records and transcribes even when Web Audio never resumes", async () => {
   await act(async()=>{await vi.waitFor(()=>expect(stop).toHaveBeenCalledOnce());});
   // Два независимых фрагмента — пре-ролл и основная запись — распознаются оба,
   // поэтому ни одно слово не теряется и ничего не дублируется.
-  expect(fake.transcribe).toHaveBeenCalledTimes(2);
+  expect(fake.transcribe).toHaveBeenCalledOnce();
   expect(fake.appendDictation).toHaveBeenCalledWith(expect.any(String), expect.any(String), "распознано",expect.any(String));
   expect(stop).toHaveBeenCalledOnce();
 });

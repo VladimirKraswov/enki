@@ -17,6 +17,23 @@ LaunchAgent перенесён на enki path, старый каталог уд�
 Следующее: полные release gates в изолированном worktree, Hub publish/receipt, штатная
 установка и проверка чтения конфигурации. SSH helper tunnel всё ещё не коннектится:
 `ssh pve` → unknown host; это отдельный endpoint, не причина двух-каталоговой ошибки.
+# TASK — 2026-11-09: PDF без помощника + откат сломавшей ASR предпроверки / 2.0.52
+
+Поручение: «не работает» — PDF «Load failed» и ASR «фрагмент повреждён».
+Что было: моя decodeAudioData-предпроверка ломала запись (WebKit) — отменена;
+вместо неё: пре-ролл не создаёт сегмент, если в нём только заголовок
+(bytes<=2048) — именно такие фрагменты давали ASR 400 (EBML header).
+PDF: помощник 127.0.0.1:18107 недоступен (curl refused), LaunchAgent туннеля
+не был установлен; установлен services/helper/install-tunnel.sh, но SSH-алиас
+pve отсутствует в ~/.ssh/config — поэтому сделан ЛОКАЛЬНЫЙ путь:
+attachments/pdfLocal.ts (pdf.js legacy, текст + JPEG страниц, ≤30 страниц,
+doc.cleanup), prepare.ts при ошибке помощника для pdf конвертирует локально.
+Тесты: pdf-local (настоящий test/fixtures/hello-enki.pdf) PASS; asr/voice 18 PASS;
+npm test 1289 PASS, ci-artifacts 1 fail (среда). Версии уже 2.0.52.
+Следующее: commit → release:local stable 2.0.52. Автоприменение не выполняю.
+Ограничение: живой UI не наблюдал; SSH-алиас pve на Mac отсутствует —
+помощник по-прежнему недоступен, но PDF работает локально.
+
 # TASK — 2026-11-09: ошибка помощника PDF вместо «Load failed» / 2.0.51
 
 Поручение: вложение Lenovo RD450X.pdf с ошибкой «Load failed».

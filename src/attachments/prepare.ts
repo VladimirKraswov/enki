@@ -2,6 +2,7 @@ import type { ModelInfo, PromptPartInput, TextPartInput } from "../api/types";
 import type { AsrSettings } from "../voice/asr";
 import { transcribeAudio } from "../voice/asr";
 import { convertFile, type Conversion, type HelperAsset } from "./helper";
+import { convertPdfLocally } from "./pdfLocal";
 import type { DraftAttachment } from "./drafts";
 import { archivePart, type ArchiveStager } from './archive';
 
@@ -107,7 +108,14 @@ export async function prepareAttachments(
       parts.push({ type: "file", filename: file.name, mime, url: await uri(file.blob, mime) });
       continue;
     }
-    const converted: Conversion = await convertFile(helperEndpoint, kind, file.blob, signal);
+    let converted: Conversion;
+    try { converted = await convertFile(helperEndpoint, kind, file.blob, signal); }
+    catch (error) {
+      // The helper is optional infrastructure, not a single point of failure:
+      // a PDF can be converted locally (text + page images) on this device.
+      if (kind !== "pdf") throw error;
+      converted = await convertPdfLocally(file.blob);
+    }
     const summary = [`Имя файла: ${file.name}`, `Тип: ${kind}`, ...converted.notes,
       ...converted.images.map((image, index) => `${kind === "pdf" ? "Страница" : "Кадр"} ${index + 1}: ${image.label}`)].join("\n");
     if (kind !== "audio" && !input?.image && converted.images.length)

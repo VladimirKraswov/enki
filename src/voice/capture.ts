@@ -59,8 +59,13 @@ export class SegmentedCapture {
             this.analyser = undefined;
         }
         try {
+            // A recorder that was stopped before it produced audio yields only a
+            // container header: such a segment is invalid for ASR (its HTTP 400).
+            // Keep the pre-roll only if it really captured sound.
+            const bytes = preroll.reduce((sum, part) => sum + part.size, 0);
             const heard = preroll.filter(part => part.size > 0);
-            if (heard.length) {
+            const audioPresent = bytes > 2048 && heard.length > 0;
+            if (audioPresent) {
                 const segment: RecorderClip = { recorder: { state: 'inactive', stop() { } } as unknown as MediaRecorder,
                     started: this.started, segment: { id: crypto.randomUUID(), group: this.group,
                         scope: dictationScope(this.workspace, this.draft), workspace: this.workspace, draft: this.draft,
