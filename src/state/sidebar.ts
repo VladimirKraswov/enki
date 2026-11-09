@@ -10,6 +10,14 @@ export function liveStatusConfirmed(connection: Pick<ConnectionState, "phase" | 
     && (connection.globalStreamState === "open" || (directory === currentDirectory && connection.streamState === "open"));
 }
 
+/** Selecting another chat must not turn a running task into "unconfirmed".
+ * Only a lasting stream outage or a failed status check may do that. */
+export function sessionStatusConfirmed(connection: Pick<ConnectionState, "phase" | "statusError">,
+  directory: string, currentDirectory: string | null, stalled: boolean): boolean {
+  if (connection.phase !== "connected") return false;
+  return !stalled && !(directory === currentDirectory && !!connection.statusError);
+}
+
 /** A tool waiting for its user still keeps the SDK busy. Attention wins. */
 export function sessionWorkMark(pending: boolean, status: string | undefined, confirmed: boolean): "waiting" | "working" | "unconfirmed" | "none" {
   if (pending) return "waiting";

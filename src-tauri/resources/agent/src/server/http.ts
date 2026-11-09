@@ -273,7 +273,14 @@ export function openEventStream(request: Request, bounds: { maxBufferedBytes?: n
   // Keep one such event deliverable until the protocol uses attachment refs.
   const eventLimit = bounds.maxEventBytes ?? (64 * 1024 * 1024 + 64 * 1024);
   const budget = bounds.maxBufferedBytes ?? eventLimit;
-  const drained = () => { blocked = false; if (stall) clearTimeout(stall); stall = undefined; };
+  // Backpressure is normal, not a dead peer: queue writes and flush on drain.
+  // Only a full budget (memory bound) or a long stall closes the stream.
+  let pending: string[] = [], pendingBytes = 0;
+  const drained = () => {
+    blocked = false; if (stall) clearTimeout(stall); stall = undefined;
+    const queued = pending; pending = []; pendingBytes = 0;
+    for (const value of queued) { if (!write(value)) break; }
+  };
   const close = () => {
     if (closed) return;
     closed = true;
@@ -298,12 +305,18 @@ export function openEventStream(request: Request, bounds: { maxBufferedBytes?: n
   const write = (value: string): boolean => {
     if (closed) return false;
     const length = Buffer.byteLength(value);
-    if (blocked || length > eventLimit || response.writableLength + length > budget) { close(); return false; }
+    if (length > eventLimit) { close(); return false; }
+    if (blocked) {
+      if (pendingBytes + length > budget) { close(); return false; }
+      pending.push(value); pendingBytes += length;
+      return true;
+    }
+    if (response.writableLength + length > budget) { close(); return false; }
     const writable = response.write(value);
-    if (!writable) { blocked = true; stall = setTimeout(close, bounds.stallMs ?? 5_000); }
+    if (!writable) { blocked = true; stall = setTimeout(close, bounds.stallMs ?? 30_000); }
     return writable;
   };
-  heartbeat = setInterval(() => { if (!closed && !blocked) write(": keepalive\n\n"); }, bounds.heartbeatMs ?? 15_000);
+  heartbeat = setInterval(() => { if (!closed) write(": keepalive\n\n"); }, bounds.heartbeatMs ?? 15_000);
   request.signal.addEventListener("abort", close, { once: true });
   response.once("close", close);
   response.once("error", close);

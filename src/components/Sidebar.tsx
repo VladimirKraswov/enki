@@ -17,7 +17,8 @@ import { Icon } from "./Icon";
 import { pathBasename } from "../util/paths";
 import { isNative } from "../native/platform";
 import { WORKSHOP_TITLE } from "../workshop/workspace";
-import { liveStatusConfirmed, sessionWorkMark } from "../state/sidebar";
+import { liveStatusConfirmed, sessionStatusConfirmed, sessionWorkMark } from "../state/sidebar";
+import { useStreamStalled } from "./useStreamStalled";
 import { SESSION_DROP_ATTRIBUTE, startSessionDrag } from "../chat/sessionDrag";
 export const pickFolder = pickProjectFolder;
 
@@ -26,7 +27,9 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   const tasks=useSyncExternalStore(scheduler.subscribe,scheduler.snapshot);
   const timers=activeTimers(tasks,id);
   const status = store.activityStatus(id);
-  const mark = sessionWorkMark(pending, status?.type, liveStatusConfirmed(store.state.connection, directory, store.state.directory));
+  const stalled = useStreamStalled(store.state.connection.streamState, store.state.connection.streamDownSince);
+  const confirmed = sessionStatusConfirmed(store.state.connection, directory, store.state.directory, stalled);
+  const mark = sessionWorkMark(pending, status?.type, confirmed);
   if (mark === "waiting") return <span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>;
   if (mark === "unconfirmed") return <span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>;
   if (mark === "working") return <SessionSpinner/>;
