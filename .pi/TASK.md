@@ -1,3 +1,22 @@
+# TASK — 2026-11-09: конфликт каталога данных Kimi / 2.0.52
+
+Причина воспроизведена на этом Mac: `~/.local/share/enki` содержит полные данные
+Enki (6.8 GiB), а `opencode-desktop` содержал только 948-byte `helper-tunnel.sh`.
+`migration::resolve_named` считал оба каталога базами данных и блокировал config/vault.
+Установщик сам создавал этот ложный конфликт, записывая tunnel helper в старый каталог.
+
+Исправлено: установщик кладёт скрипт в `~/.local/share/enki`; миграция игнорирует
+старую папку только если там ровно один regular file, имя `helper-tunnel.sh`, bytes
+в точности совпадают с bundled `services/helper/tunnel.sh`. Иначе прежний fail-closed
+конфликт. Это сохраняет данные и не обходит настоящую защиту миграции.
+Тесты `cargo test migration::tests::helper_tunnel` 2 PASS; `cargo fmt --check`,
+`git diff --check`, `sh -n` PASS.
+На Mac создан backup в `~/.local/share/enki/recovery/legacy-tunnel-migration-20261109/`;
+LaunchAgent перенесён на enki path, старый каталог удалён, config/runtime/sessions intact.
+Изменения диктовки присутствовали до задачи; не тронуты.
+Следующее: полные release gates в изолированном worktree, Hub publish/receipt, штатная
+установка и проверка чтения конфигурации. SSH helper tunnel всё ещё не коннектится:
+`ssh pve` → unknown host; это отдельный endpoint, не причина двух-каталоговой ошибки.
 # TASK — 2026-11-09: ошибка помощника PDF вместо «Load failed» / 2.0.51
 
 Поручение: вложение Lenovo RD450X.pdf с ошибкой «Load failed».

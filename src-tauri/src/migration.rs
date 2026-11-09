@@ -41,6 +41,36 @@ fn same(left: &Path, right: &Path) -> bool {
         .zip(fs::canonicalize(right).ok())
         .is_some_and(|(a, b)| a == b)
 }
+/// The helper tunnel installer historically created this one app-owned file
+/// beside the data root. It is a service payload, not an OpenCode data store.
+/// Recognize only the exact bundled script as the sole child; any other content
+/// remains a hard conflict and is never moved or deleted by this exception.
+fn legacy_helper_only(parent: &Path, legacy: &str) -> bool {
+    if legacy != "opencode-desktop" {
+        return false;
+    }
+    let root = parent.join(legacy);
+    let Ok(meta) = fs::symlink_metadata(&root) else {
+        return false;
+    };
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return false;
+    }
+    let Ok(mut entries) = fs::read_dir(&root) else {
+        return false;
+    };
+    let Some(Ok(entry)) = entries.next() else {
+        return false;
+    };
+    if entries.next().is_some()
+        || entry.file_name() != "helper-tunnel.sh"
+        || !entry.file_type().is_ok_and(|kind| kind.is_file())
+    {
+        return false;
+    }
+    fs::read(entry.path())
+        .is_ok_and(|bytes| bytes == include_bytes!("../../services/helper/tunnel.sh"))
+}
 fn io(e: std::io::Error) -> String {
     format!("Миграция данных Enki: {e}")
 }
@@ -56,7 +86,7 @@ pub fn resolve_named(parent: &Path, legacy: &str, current: &str) -> Result<PathB
     if is_alias(&new) {
         return Err("Каталог данных Enki не должен быть ссылкой".into());
     }
-    if old.exists() && new.exists() && !same(&old, &new) {
+    if old.exists() && new.exists() && !same(&old, &new) && !legacy_helper_only(parent, legacy) {
         return Err(format!("Обнаружены два разных каталога данных: {current} и {legacy}. Данные сохранены; требуется устранить конфликт перед миграцией."));
     }
     Ok(if new.exists() || !old.exists() {
@@ -101,6 +131,15 @@ fn migrate_with_alias(
     let old = parent.join(legacy);
     let new = parent.join(current);
     let resolved = resolve_named(parent, legacy, current)?;
+    if legacy_helper_only(parent, legacy) {
+        fs::create_dir_all(&new).map_err(io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&new, fs::Permissions::from_mode(0o700)).map_err(io)?;
+        }
+        return Ok(new);
+    }
     let marker = parent.join(format!(".{current}-migration-v1"));
     if marker.is_symlink() {
         return Err("Небезопасный журнал миграции".into());
@@ -388,6 +427,47 @@ mod tests {
         for n in ["enki", "opencode-desktop"] {
             assert_eq!(fs::read_to_string(p.join(n).join("data")).unwrap(), n);
         }
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn helper_tunnel_only_legacy_directory_is_not_a_second_data_store() {
+        let p = fixture();
+        let old = p.join("opencode-desktop");
+        fs::create_dir(&old).unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../services/helper/tunnel.sh"),
+            old.join("helper-tunnel.sh"),
+        )
+        .unwrap();
+        fs::create_dir(p.join("enki")).unwrap();
+        fs::write(p.join("enki/chats.db"), b"sessions stay in Enki").unwrap();
+
+        assert_eq!(initialize(&p).unwrap(), p.join("enki"));
+        assert_eq!(
+            fs::read(p.join("enki/chats.db")).unwrap(),
+            b"sessions stay in Enki"
+        );
+        assert_eq!(
+            fs::read(old.join("helper-tunnel.sh")).unwrap(),
+            include_bytes!("../../services/helper/tunnel.sh")
+        );
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn helper_tunnel_directory_with_any_extra_content_still_fails_closed() {
+        let p = fixture();
+        let old = p.join("opencode-desktop");
+        fs::create_dir(&old).unwrap();
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../services/helper/tunnel.sh"),
+            old.join("helper-tunnel.sh"),
+        )
+        .unwrap();
+        fs::write(old.join("user-data"), b"preserve").unwrap();
+        fs::create_dir(p.join("enki")).unwrap();
+
+        assert!(initialize(&p).is_err());
+        assert_eq!(fs::read(old.join("user-data")).unwrap(), b"preserve");
         fs::remove_dir_all(p).unwrap();
     }
     #[test]

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-owned_dir="$HOME/.local/share/opencode-desktop"
+owned_dir="$HOME/.local/share/enki"
 plist="$HOME/Library/LaunchAgents/dev.vladimir.oc-helper-tunnel.plist"
 mkdir -p "$owned_dir" "$HOME/Library/LaunchAgents"
 install -m 700 "$source_dir/tunnel.sh" "$owned_dir/helper-tunnel.sh"
