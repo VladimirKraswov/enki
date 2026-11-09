@@ -355,6 +355,19 @@ select {
   border-radius: 7px;
   color: var(--text-dim);
   min-height: 30px;
+  /* Pointer drag of chats: never select text or start a native text drag. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+body[data-session-dragging],
+body[data-session-dragging] .session-item { cursor: grabbing; }
+/* Chat is being dragged over this project / the projectless area. */
+[data-session-drop-active] {
+  outline: 1px solid var(--accent, #6b8afd);
+  outline-offset: -1px;
+  border-radius: 8px;
+  background: rgba(107, 138, 253, 0.12);
 }
 .session-item:hover {
   background: var(--bg-sunken);

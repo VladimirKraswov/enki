@@ -42,6 +42,7 @@ import { Scheduler } from "../schedule/scheduler.ts";
 import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualifiedResourceSpec, refreshCredentialSnapshot, trustStore, type ResourceSpec, type SdkCredential, type SdkExtension, type SdkModelRuntime, type SettingsSpec } from "../sdk/adapter.ts";
 import { SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
 import { SessionShards } from "../sessions/rehome.ts";
+import { staleRunningStatuses } from "../sessions/status-reset.ts";
 import { SessionRegistry } from "../sessions/registry.ts";
 import { recoverInterruptedTools } from "../sessions/worker.ts";
 import { AttachmentStore } from "../store/attachments.ts";
@@ -807,6 +808,11 @@ export class Runtime {
     }
     this.journal.prune();
     this.tools.prune(Date.now() - 30 * 24 * 3600_000);
+    // A turn interrupted by this restart cannot still be running, so a sticky
+    // busy/retry/waiting status is always stale: reset it explicitly instead of
+    // letting the sidebar draw "no fresh status" over an idle chat.
+    for (const sessionID of staleRunningStatuses(this.db.all("SELECT session_id, payload FROM events WHERE type='session.status' AND seq IN (SELECT MAX(seq) FROM events WHERE type='session.status' GROUP BY session_id)").map(row => ({ session_id: text(row, "session_id"), payload: text(row, "payload") }))))
+      this.journal.append(this.catalog.get(sessionID)?.directory ?? null, sessionID, { type: "session.status", properties: { sessionID, status: { type: "idle" } } }, true);
   }
 
   activity(options: { currentHttpRequest?: boolean } = {}) {

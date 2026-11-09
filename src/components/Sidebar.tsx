@@ -9,7 +9,7 @@ import enkiMark from "../assets/enki-icon.png";
 import { modKeyLabel } from "../native/platform";
 import { ProjectActions, RemovedProjects } from "./ProjectActions";
 import { HostPicker, pickProjectFolder } from "./WorkspacePicker";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Session } from "../api/types";
 import { store, useAppSelector } from "../state/store";
 import { FloatingPopover } from "./FloatingPopover";
@@ -18,9 +18,8 @@ import { pathBasename } from "../util/paths";
 import { isNative } from "../native/platform";
 import { WORKSHOP_TITLE } from "../workshop/workspace";
 import { liveStatusConfirmed, sessionWorkMark } from "../state/sidebar";
+import { SESSION_DROP_ATTRIBUTE, startSessionDrag } from "../chat/sessionDrag";
 export const pickFolder = pickProjectFolder;
-/** Drag payload of a chat being moved between projects (or out of a project). */
-const SESSION_DRAG = "application/x-enki-session";
 
 function ActivityMark({ id, directory, pending = false }: { id: string; directory: string; pending?: boolean }) {
   const scheduler=taskScheduler();
@@ -73,6 +72,9 @@ export function Sidebar() {
   const [recentCount, setRecentCount] = useState(8);
   const [openingWorkshop, setOpeningWorkshop] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  /** Pointer drag of a chat: the hovered drop area while a gesture is active. */
+  const [dragTarget, setDragTarget] = useState<{ active: boolean; directory: string | null }>({ active: false, directory: null });
+  const suppressOpen = useRef(false);
   const [creating, setCreating] = useState(false), [newName, setNewName] = useState("");
   const [moveDialog, setMoveDialog] = useState<Session | null>(null);
   const submitCreate = async () => {
@@ -110,11 +112,23 @@ export function Sidebar() {
     const isArchived = Boolean(sess.time.archived);
     const pending = store.pendingInteraction(sess.id);
     return (
-      <div className="session-row-wrap" key={rowKey} draggable title="Перетащите в проект или в «Недавние»"
-        onDragStart={event => { event.dataTransfer.setData(SESSION_DRAG, sess.id); event.dataTransfer.effectAllowed = "move"; }}>
+      <div className="session-row-wrap" key={rowKey} title={isArchived ? sess.title : "Перетащите в проект или в «Недавние», либо меню ⋯ → «Перенести в проект…»"}>
         <button
           className={`session-item${s.activeSessionId === sess.id ? " active" : ""}`}
+          onPointerDown={event => {
+            if (event.button !== 0 || isArchived) return;
+            startSessionDrag(event.clientX, event.clientY, {
+              targetAt: (x, y) => document.elementFromPoint(x, y),
+              onHover: directory => {
+                if (directory !== undefined) suppressOpen.current = true;
+                setDragTarget(directory === undefined ? { active: false, directory: null } : { active: true, directory });
+              },
+              onDrop: directory => moveSession(sess.id, directory),
+            });
+          }}
           onClick={() => {
+            // A drag gesture must not also open the chat it just moved.
+            if (suppressOpen.current) { suppressOpen.current = false; return; }
             setMenu(null);
             if (!isArchived) void store.openChat(sess);
           }}
@@ -236,8 +250,8 @@ export function Sidebar() {
           const shown = shownByProject[dir] ?? 8;
           const name = projectName(dir);
           return <section className="project-group" key={dir} aria-label={`Проект ${name}`}
-            onDragOver={event => { if (event.dataTransfer.types.includes(SESSION_DRAG)) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
-            onDrop={event => { const id = event.dataTransfer.getData(SESSION_DRAG); if (!id) return; event.preventDefault(); moveSession(id, dir); }}>
+            {...{ [SESSION_DROP_ATTRIBUTE]: dir }}
+            data-session-drop-active={(dragTarget.active && dragTarget.directory === dir) || undefined}>
             <div className="project-heading">
               <button className={`project-row${dir === s.directory ? " selected" : ""}`} title={dir} aria-label={name} aria-expanded={expanded}
                 onClick={() => { setMenu(null); store.toggleProject(dir); }}>
@@ -276,8 +290,8 @@ export function Sidebar() {
         </form> : <button className="project-empty" onClick={() => setCreating(true)}>Создать проект<Icon name="plus" size={16} /></button>}
         {moveError && <div className="empty-hint" role="alert">{moveError}</div>}
         <section className="recent-sessions" aria-label={archived ? "Архив" : "Недавние"}
-          onDragOver={event => { if (event.dataTransfer.types.includes(SESSION_DRAG)) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
-          onDrop={event => { const id = event.dataTransfer.getData(SESSION_DRAG); if (!id) return; event.preventDefault(); moveSession(id, null); }}>
+          {...{ [SESSION_DROP_ATTRIBUTE]: "recent" }}
+          data-session-drop-active={(dragTarget.active && dragTarget.directory === null) || undefined}>
           <div className="section-label task-heading">
             <span>{archived ? "Архив" : "Недавние"}</span>
             <button className={`icon-btn${archived ? " on" : ""}`} title={archived ? "Показать недавние" : "Архив всех проектов"} aria-label={archived ? "Показать недавние" : "Показать архив"} onClick={() => { setArchived(!archived); setRecentCount(8); }}><Icon name="archive" size={15} /></button>
