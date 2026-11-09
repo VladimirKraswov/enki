@@ -23,11 +23,25 @@ export function validHelperEndpoint(value: string): boolean {
   } catch { return false; }
 }
 
+/** A raw WebKit "Load failed" tells the owner nothing: name the helper and
+ * what to check. The source attachment always stays available. */
+function helperTransportError(error: unknown, endpoint: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/load failed|failed to fetch|networkerror|timed out|aborterror|abort/i.test(message))
+    return new Error(`Сервис подготовки файлов недоступен (${endpoint}). Проверьте его запуск и SSH-туннель; исходный файл сохранён.`);
+  return error instanceof Error ? error : new Error(message);
+}
+
 async function request<T>(endpoint: string, path: string, init: RequestInit, timeout: number): Promise<T> {
   if (!validHelperEndpoint(endpoint)) throw new Error("Адрес помощника должен быть локальным HTTP-адресом без пути и учётных данных.");
-  const response = await fetch(`${endpoint.replace(/\/$/, "")}${path}`, {
-    ...init, credentials: "omit", redirect: "error", signal: AbortSignal.any([init.signal ?? new AbortController().signal, AbortSignal.timeout(timeout)]),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${endpoint.replace(/\/$/, "")}${path}`, {
+      ...init, credentials: "omit", redirect: "error", signal: AbortSignal.any([init.signal ?? new AbortController().signal, AbortSignal.timeout(timeout)]),
+    });
+  } catch (error) {
+    throw helperTransportError(error, endpoint);
+  }
   const body: unknown = await response.json();
   if (!response.ok) {
     const message = body && typeof body === "object" && "error" in body && typeof body.error === "string" ? body.error : `HTTP ${response.status}`;
