@@ -74,6 +74,7 @@ export function Sidebar() {
   const [openingWorkshop, setOpeningWorkshop] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false), [newName, setNewName] = useState("");
+  const [moveDialog, setMoveDialog] = useState<Session | null>(null);
   const submitCreate = async () => {
     const name = newName.trim(); if (!name) return;
     setMoveError(null);
@@ -145,6 +146,7 @@ export function Sidebar() {
               Переименовать
             </button>
             <button onClick={() => {setMenu(null);setInformation(sess);}}>Сведения</button>
+            <button onClick={() => { setMenu(null); setMoveDialog(sess); }}>Перенести в проект…</button>
             <button onClick={() => { setMenu(null); store.setUi({ handoffSource: sess }); }}>Передать задание…</button>
             <button
               onClick={() => {
@@ -313,6 +315,24 @@ export function Sidebar() {
         </button>
         <UpdateBadge />
       </div>
+      {moveDialog && (
+        <div className="modal-overlay" onKeyDown={event => { if (event.key === "Escape") setMoveDialog(null); }}
+          onMouseDown={event => { if (event.target === event.currentTarget) setMoveDialog(null); }}>
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Перенести в проект">
+            <h3>Перенести «{moveDialog.title}»</h3>
+            <p className="dialog-description">Чат и его история переедут в выбранный проект. Работающую сессию перенести нельзя.</p>
+            <div className="move-projects">
+              {dirs.map(dir => <button className="btn" key={dir} onClick={() => {
+                const id = moveDialog.id; setMoveDialog(null); moveSession(id, dir);
+              }}>{projectName(dir)}</button>)}
+              <button className="btn" onClick={() => {
+                const id = moveDialog.id; setMoveDialog(null); moveSession(id, null);
+              }}>Без проекта</button>
+            </div>
+            <button className="btn small" onClick={() => setMoveDialog(null)}>Отмена</button>
+          </div>
+        </div>
+      )}
       {rename && (
         <div
           className="modal-overlay"
