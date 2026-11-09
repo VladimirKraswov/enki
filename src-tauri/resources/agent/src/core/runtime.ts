@@ -697,6 +697,9 @@ export class Runtime {
       },
       onSettled: (sessionID, outcome) => {
         this.queue.onSettled(sessionID, outcome.state === "failed" ? outcome.error : null);
+        // Corrections are settled too: without this publish clients keep showing
+        // "ждёт следующего шага" forever after the turn has actually finished.
+        this.queue.notify(sessionID, this.catalog.get(sessionID)?.directory ?? null);
         this.publishActivity();
       },
       onUndelivered: (sessionID, directory, texts) => this.queue.restoreUndelivered(sessionID, directory, texts, this.catalog.get(sessionID)?.model ?? null),

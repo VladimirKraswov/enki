@@ -175,6 +175,12 @@ export class PromptQueue {
     return !!this.db.get("SELECT 1 AS present FROM queue WHERE session_id=? AND state='sending' LIMIT 1", sessionID);
   }
 
+  /** Publish the current view explicitly (e.g. after a turn settles): steering
+   * corrections disappear then even when no queue item changed. */
+  notify(sessionID: string, directory: string | null): void {
+    if (directory) this.publish(sessionID, directory);
+  }
+
   private publish(sessionID: string, directory: string): void {
     this.journal.append(directory, sessionID, { type: "queue.updated", properties: { sessionID, queue: this.state(sessionID) } });
   }

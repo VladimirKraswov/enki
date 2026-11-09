@@ -165,6 +165,21 @@ describe("steering, editing and attachments", () => {
     expect(submitted[0].parts).toEqual([{ type: "text", text: "смотри" }, { type: "file", mime: "image/png", filename: "b.png", url: PIXEL }]);
   });
 
+  it("publishes the current view on settle so a stale correction disappears from clients", () => {
+    const journal = (db as unknown as { events?: never });
+    const before = db.all("SELECT COUNT(*) AS n FROM events WHERE type='queue.updated'").map(r => Number((r as { n: number }).n))[0];
+    queue.notify("s1", "/p");
+    const after = db.all("SELECT COUNT(*) AS n FROM events WHERE type='queue.updated'").map(r => Number((r as { n: number }).n))[0];
+    expect(after).toBe(before + 1);
+    // Пустое состояние тоже публикуется: это и есть снятие старого уточнения.
+    const last = db.all("SELECT payload FROM events WHERE type='queue.updated' ORDER BY seq DESC LIMIT 1");
+    const payload = JSON.parse((last[0] as { payload: string }).payload);
+    expect(payload.properties.queue).toMatchObject({ sessionID: "s1", items: [], corrections: [] });
+    queue.notify("s1", null);
+    const end = db.all("SELECT COUNT(*) AS n FROM events WHERE type='queue.updated'").map(r => Number((r as { n: number }).n))[0];
+    expect(end).toBe(after);
+  });
+
   it("a file-only entry gets a neutral instruction and a missing stored file pauses before anything is sent", () => {
     add("only", "   ", [{ type: "file", mime: "image/png", filename: "a.png", url: PIXEL }]);
     expect(queue.state("s1").items[0].text).toBe("Проанализируй приложенные файлы.");
