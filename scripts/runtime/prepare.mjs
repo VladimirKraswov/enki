@@ -75,18 +75,21 @@ export function buildEnvironment(nodeHome, work, platform = process.platform, so
     npm_config_nodedir: nodeHome, npm_config_devdir: devdir, npm_config_fetch_retries: '2', npm_config_fetch_timeout: '120000', npm_config_fetch_retry_maxtimeout: '10000' });
 }
 export async function download(url, file, expected, options = {}) {
-  const { signal, retryDelayMs = 500 } = options;
+  const { signal, retryDelayMs = 500, maxAttempts = 7 } = options;
   for (let attempt = 0; ; attempt++) {
     try { return await downloadOnce(url, file, expected, options); }
     catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
       const transient = error instanceof TypeError || error.retryable === true || error.message === 'Download timed out';
-      if (!transient || attempt >= 2) {
+      if (!transient || attempt >= maxAttempts - 1) {
         throw new Error(`Не удалось скачать ${path.basename(file)} с ${new URL(url).hostname}: ${error.message}${transient ? '. Проверьте подключение и повторите сборку; данные приложения сохранены.' : ''}`, { cause: error });
       }
+      // Bounded exponential backoff: a short GitHub 5xx burst must not abort an
+      // otherwise successful build. Non-transient errors fail immediately.
+      const delay = Math.min(retryDelayMs * 2 ** attempt, 20_000);
       await new Promise((resolve, reject) => {
         const abort = () => { clearTimeout(timer); reject(signal.reason ?? new Error('Download cancelled')); };
-        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, retryDelayMs * (attempt + 1));
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, delay);
         signal?.addEventListener('abort', abort, { once: true });
         if (signal?.aborted) abort();
       });
