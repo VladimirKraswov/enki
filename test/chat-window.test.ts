@@ -56,7 +56,7 @@ it('mounts bounded tails across live growth and repeated chat switches, and pres
 });
 it('a broken stream marks a live chat unconfirmed, never a read-only legacy archive',()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
- fixture.state={prefs:{endpoint:'test'},directory:'fixture',activeSessionId:'a',chat:{sessions:{a:chat('a',3),old:chat('old',3)}},ui:{},connection:{streamState:'reconnecting'},historyCursors:{},olderExhausted:{},legacy:['old']};
+ fixture.state={prefs:{endpoint:'test'},directory:'fixture',activeSessionId:'a',chat:{sessions:{a:chat('a',3),old:chat('old',3)}},ui:{},connection:{streamState:'reconnecting',streamDownSince:Date.now()-60_000},historyCursors:{},olderExhausted:{},legacy:['old']};
  const el=document.createElement('div');document.body.append(el);const root=createRoot(el);cleanup=()=>act(()=>root.unmount());
  act(()=>root.render(createElement(ChatView)));
  expect(el.querySelector('.status-line[role="alert"]')).toBeTruthy();
@@ -68,9 +68,16 @@ it('a broken stream marks a live chat unconfirmed, never a read-only legacy arch
 // confirmed running: the alert replaces the "working" spinner, never both.
 it('an unconfirmed live chat shows the alert instead of the working spinner',()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
- fixture.state={prefs:{endpoint:'test'},directory:'fixture',activeSessionId:'a',chat:{sessions:{a:chat('a',3)}},ui:{},connection:{streamState:'reconnecting'},historyCursors:{},olderExhausted:{}};
+ fixture.state={prefs:{endpoint:'test'},directory:'fixture',activeSessionId:'a',chat:{sessions:{a:chat('a',3)}},ui:{},connection:{streamState:'reconnecting',streamDownSince:Date.now()-60_000},historyCursors:{},olderExhausted:{}};
  const el=document.createElement('div');document.body.append(el);const root=createRoot(el);cleanup=()=>act(()=>root.unmount());
  const publish=(connection:any)=>act(()=>{fixture.state={...fixture.state,connection};for(const cb of fixture.listeners)cb();});
+ // Свежий разрыв не пугает: короткое переподключение проходит молча.
+ publish({streamState:'reconnecting',streamDownSince:Date.now()});
+ act(()=>root.render(createElement(ChatView)));
+ expect(el.querySelector('.status-line[role="alert"]')).toBeNull();
+ expect(el.querySelector('.status-line[role="status"]')?.textContent).toContain('Агент работает');
+ // Простой дольше паузы — предупреждение правдиво.
+ publish({streamState:'reconnecting',streamDownSince:Date.now()-60_000});
  act(()=>root.render(createElement(ChatView)));
  expect(el.querySelector('.status-line[role="alert"]')?.textContent).toContain('Выполнение не подтверждено');
  expect(el.textContent).not.toContain('Агент работает');

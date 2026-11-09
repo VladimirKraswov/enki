@@ -3468,6 +3468,11 @@ class Store {
           connection: {
             ...s.connection,
             streamState: state === "closed" ? "closed" : state,
+            // Time the reconnect so the UI can stay calm through short gaps.
+            streamDownSince: state === "open" ? null
+              : state === "reconnecting" || state === "error" || state === "closed"
+                ? (s.connection.streamDownSince ?? Date.now())
+                : s.connection.streamDownSince ?? null,
           },
         }));
         if (state === "open") void this.resyncAfterReconnect(directory, gen);

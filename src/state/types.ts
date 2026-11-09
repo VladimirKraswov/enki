@@ -26,6 +26,8 @@ export interface ConnectionState {
     | "closed"
     | "error";
   statusError?: string | null;
+  /** When the stream last left `open`; a short reconnect must not alarm. */
+  streamDownSince?: number | null;
   globalStreamState?: ConnectionState["streamState"];
   lastEventAt: number;
   endpoint: string;

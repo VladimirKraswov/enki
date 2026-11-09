@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { store, useAppState } from '../state/store';
 import { AssistantTurnView, PermissionCard, QuestionCard, UserMessageView } from './render';
 import { ChatScrollController, type ReadingPosition } from '../chat/scroll';
+import { useStreamStalled } from './useStreamStalled';
 import { groupConversation } from '../chat/turns';
 import { dayKey, dayLabel } from '../chat/time';
 import { Icon } from './Icon';
@@ -161,7 +162,9 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
   // The runtime's event stream is the only source of live status: while it is
   // down, running/idle is not confirmed (a read-only archive has no live state).
   const live = !!sessionId && !store.isLegacySession(sessionId);
-  const broken = live && ['reconnecting','error','closed'].includes(s.connection.streamState);
+  // A short reconnect is not an outage: only a stalled stream reports itself.
+  const stalled = useStreamStalled(s.connection.streamState, s.connection.streamDownSince);
+  const broken = live && stalled;
   const unconfirmed = broken || (live && !!s.connection.statusError);
   // Provenance must be visible: a handed-over chat never pretends the earlier
   // turns were its own.
