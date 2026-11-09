@@ -131,6 +131,15 @@ value always wins. The file itself is never changed, and a broken or absent file
 never blocks startup. This is what makes such a subscription's models selectable
 without copying keys by hand.
 
+The same applies to credentials the owner centralises on Hub. The private
+operator file `model-services.json` may carry a `credentials` map, e.g.
+`{"deepseek":{"type":"api_key","key":"…"},"kimi-coding":{"type":"oauth","access":"…","refresh":"…","expires":1794167880214}}`.
+These values live only in that private 0600 file, never in the public catalog.
+`POST /api/model-services/credentials` with `{providerID}` returns one of them
+to an authenticated device. At start the vault-backed runtime adopts them for
+known providers that have no stored credential yet, so every device of the owner
+can select the same models (DeepSeek, Kimi, etc.) without copying keys by hand.
+
 ## Configuring a service
 
 In Settings → Services of models, add a name, the exact provider ID, a loopback

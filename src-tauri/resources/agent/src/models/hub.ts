@@ -436,6 +436,18 @@ export class HubLeases {
     this.onStatus(owner, state);
   }
 
+  /** Provider credential stored on Hub for the owner's devices (private operator
+   * config, served only to authenticated devices). Absent Hub/unknown provider → null. */
+  async credential(providerID: string, signal?: AbortSignal): Promise<unknown | null> {
+    if (!this.broker.available()) return null;
+    try {
+      const identity = await this.broker.call<{ scope: string | null }>("hub.identity", {}, signal);
+      if (!identity.scope) return null;
+      const result = await this.request<{ credential?: unknown }>("credentials", { providerID }, identity.scope, signal);
+      return result.credential ?? null;
+    } catch { return null; }
+  }
+
   /** Renew leases of running sessions; release those that settled. */
   start(): void {
     if (this.timer) return;

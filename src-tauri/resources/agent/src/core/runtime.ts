@@ -26,7 +26,7 @@ import { CutoverJournal, type CutoverSessionRef, type CutoverTarget } from "../m
 import { McpPool } from "../mcp/pool.ts";
 import { ConfigProjection, userModelsPresent, type ConfigStatus } from "../models/config.ts";
 import { VaultCredentialStore } from "../models/credentials.ts";
-import { adoptAgentDirCredentials as adoptCredentials } from "../models/import-credentials.ts";
+import { adoptAgentDirCredentials as adoptCredentials, adoptProviderCredentials } from "../models/import-credentials.ts";
 import { HubLeases } from "../models/hub.ts";
 import { ModelSlotQueue } from "../sdk/inference-transport.ts";
 import { findGit, GitService } from "../platform/git.ts";
@@ -39,7 +39,7 @@ import { shutdownPluginUi, type NativeUiScope } from "../plugin-ui/runtime.ts";
 import { isReadOnlyOrigin, SCHEMA_VERSION, SDK_VERSION, type MessageDTO, type ModelRef, type PromptPart, type ScheduleDTO, type SessionStatusDTO } from "../protocol.ts";
 import { PromptQueue } from "../queue/queue.ts";
 import { Scheduler } from "../schedule/scheduler.ts";
-import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualifiedResourceSpec, refreshCredentialSnapshot, trustStore, type ResourceSpec, type SdkExtension, type SdkModelRuntime, type SettingsSpec } from "../sdk/adapter.ts";
+import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualifiedResourceSpec, refreshCredentialSnapshot, trustStore, type ResourceSpec, type SdkCredential, type SdkExtension, type SdkModelRuntime, type SettingsSpec } from "../sdk/adapter.ts";
 import { SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
 import { SessionShards } from "../sessions/rehome.ts";
 import { SessionRegistry } from "../sessions/registry.ts";
@@ -259,6 +259,7 @@ export class Runtime {
       // Only the vault-backed host can hold adopted credentials; an injected
       // runtime or a memory/ephemeral store owns its own credentials.
       if (!config.modelRuntime && config.credentials === "vault") await runtime.adoptAgentDirCredentials(config.signal);
+      if (!config.modelRuntime && config.credentials === "vault") await runtime.adoptHubCredentials(config.signal);
       config.signal?.throwIfAborted();
       runtime.modelAccess = new CatalogueAccess(runtime.modelRuntime, (p, m) => !!runtime.hub.route(p, m),
         () => runtime.journal.append(null, null, { type: "provider.catalog.updated", properties: {} }, true), config.allowModelNetwork);
@@ -640,6 +641,20 @@ export class Runtime {
     if (!imported.length) return;
     // Providers are rebuilt from the credential store; no restart is needed.
     await refreshCredentialSnapshot(this.modelRuntime, signal ?? new AbortController().signal).catch(() => undefined);
+  }
+
+  /** Providers the owner centralised on Hub: adopt their credentials into this
+   * device's vault on start, so every device can select the same models. */
+  private async adoptHubCredentials(signal?: AbortSignal): Promise<void> {
+    if (!this.config.broker.available()) return;
+    const store = new VaultCredentialStore(this.config.broker, this.configProjection);
+    let stored: Set<string>;
+    try { stored = new Set((await store.list({ signal })).map(credential => credential.providerId)); }
+    catch { return; }
+    const missing = this.modelRuntime.getProviders().map(provider => provider.id).filter(id => !stored.has(id));
+    if (!missing.length) return;
+    const { imported } = await adoptProviderCredentials(store, missing, provider => this.hub.credential(provider, signal), signal);
+    if (imported.length) await refreshCredentialSnapshot(this.modelRuntime, signal ?? new AbortController().signal).catch(() => undefined);
   }
 
   /** Compact project block: where the session works and which sibling chats

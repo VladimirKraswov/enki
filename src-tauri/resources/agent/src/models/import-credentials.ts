@@ -35,6 +35,24 @@ export async function importLegacyCredentials(source: string, store: SdkCredenti
   return transferSecrets(plan.secrets, store, configured, signal);
 }
 
+/** Provider credentials the owner keeps on Hub (private operator config) are
+ * adopted into this device's OS vault only when nothing is stored there. */
+export async function adoptProviderCredentials(store: SdkCredentialStore, providers: readonly string[],
+  fetch: (provider: string) => Promise<unknown | null>, signal?: AbortSignal): Promise<{ imported: string[] }> {
+  const imported: string[] = [];
+  for (const provider of providers) {
+    signal?.throwIfAborted();
+    const credential = await fetch(provider);
+    if (!credential || typeof credential !== "object") continue;
+    try {
+      let kept = false;
+      const value = await store.modify(provider, async current => { kept = current !== undefined; return current ?? structuredClone(credential) as SdkCredential; }, { signal });
+      if (value && !kept) imported.push(provider);
+    } catch { /* one failed provider must not block the others */ }
+  }
+  return { imported };
+}
+
 /** The runtime's own agentDir/auth.json is where the pinned SDK (and its CLI)
  * writes provider credentials, including subscription OAuth tokens. Enki keeps
  * credentials in the OS vault, so a token obtained outside Enki is invisible

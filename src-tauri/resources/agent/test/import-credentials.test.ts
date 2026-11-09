@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { adoptAgentDirCredentials, importLegacyCredentials } from "../src/models/import-credentials.ts";
+import { adoptAgentDirCredentials, adoptProviderCredentials, importLegacyCredentials } from "../src/models/import-credentials.ts";
 import type { SdkCredential, SdkCredentialStore } from "../src/sdk/adapter.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true }); });
@@ -64,4 +64,17 @@ it("ignores a missing or malformed auth.json and never writes without a known pr
   expect(await adoptAgentDirCredentials(dir, store, new Set(["kimi-coding"]))).toEqual({ imported: [], kept: [], failed: [] });
   expect(await adoptAgentDirCredentials(dir, store, new Set())).toEqual({ imported: [], kept: [], failed: [] });
   expect(store.modify).not.toHaveBeenCalled();
+});
+it("adopts only providers for which Hub has a credential and never replaces the vault value", async () => {
+  const values = new Map<string, SdkCredential>([["deepseek", { type: "api_key", key: "vault" }]]);
+  const store = { modify: vi.fn(async (id: string, update: (v: SdkCredential | undefined) => Promise<SdkCredential>) => {
+    const result = await update(values.get(id)); if (result) values.set(id, result); return result;
+  }) } as unknown as SdkCredentialStore;
+  const result = await adoptProviderCredentials(store, ["kimi-coding", "deepseek", "other"], async provider =>
+    provider === "kimi-coding" ? { type: "oauth", access: "hub-access", refresh: "hub-refresh", expires: 1 }
+      : provider === "deepseek" ? { type: "api_key", key: "hub-key" } : null);
+  expect(result.imported).toEqual(["kimi-coding"]);
+  expect(values.get("kimi-coding")).toMatchObject({ type: "oauth", access: "hub-access" });
+  expect(values.get("deepseek")).toEqual({ type: "api_key", key: "vault" });
+  expect(values.has("other")).toBe(false);
 });

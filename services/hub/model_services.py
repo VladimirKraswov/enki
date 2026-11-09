@@ -92,9 +92,33 @@ class ModelServices:
                 key = Path(service["tokenFile"])
                 if not key.is_absolute() or key.is_symlink() or key.stat().st_mode & 0o077 or key.stat().st_size > 4096:
                     raise ValueError()
+            credentials = data.get("credentials", {})
+            if not isinstance(credentials, dict) or len(credentials) > 64:
+                raise ValueError()
+            for provider, credential in credentials.items():
+                if not ID.fullmatch(provider) or not isinstance(credential, dict):
+                    raise ValueError()
+                if credential.get("type") == "api_key":
+                    if not isinstance(credential.get("key"), str) or not credential["key"]:
+                        raise ValueError()
+                elif credential.get("type") == "oauth":
+                    if not all(isinstance(credential.get(k), str) and credential[k] for k in ("access", "refresh")):
+                        raise ValueError()
+                    if not isinstance(credential.get("expires"), (int, float)):
+                        raise ValueError()
+                else:
+                    raise ValueError()
+            self._credentials = credentials
             return services
         except (ValueError, KeyError, TypeError, OSError):
             self.fail(503, "Проверьте конфигурацию сервисов моделей на Hub.")
+
+    def credentials(self):
+        # Provider credentials live in the same private operator file as the
+        # gateways, never in the public catalog. They are served only to
+        # authenticated devices of the owner, on explicit request.
+        self.services()
+        return getattr(self, "_credentials", {})
 
     def routes(self):
         services = self.services()
@@ -222,6 +246,14 @@ class ModelServices:
     def api(self, method, action, actor, data):
         if action == "catalog" and method == "GET":
             return {"schema": 1, "routes": self.routes()}
+        if action == "credentials" and method == "POST":
+            provider = data.get("providerID")
+            if not isinstance(provider, str) or not ID.fullmatch(provider):
+                self.fail(400, "Некорректный провайдер.")
+            credential = self.credentials().get(provider)
+            if credential is None:
+                self.fail(404, "Для этого провайдера на Hub нет сохранённых данных доступа.")
+            return {"credential": credential}
         if method != "POST":
             self.fail(405, "Метод не поддерживается.")
         if action == "inspect":
