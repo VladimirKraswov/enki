@@ -131,6 +131,16 @@ value always wins. The file itself is never changed, and a broken or absent file
 never blocks startup. This is what makes such a subscription's models selectable
 without copying keys by hand.
 
+For a subscription provider the owner also sees the provider's own quota, not
+only Enki's local counter: Kimi Code publishes it at `<api base>/v1/usages`
+(`usages.limit5h`, `limit7d`, `monthCode`, `monthTotal` with `usedRatio` and
+`resetAt`, plus `extraUsage`). `GET /providers/usage` resolves the stored
+credential (a refreshed OAuth token, never a stale `auth.json` copy), reads that
+endpoint and returns only the documented fields. The context meter shows the real
+5-hour and monthly percentages with their reset times; when the provider answers
+nothing, the honest local counter remains. Providers that publish no quota are
+not asked.
+
 The same applies to credentials the owner centralises on Hub. The private
 operator file `model-services.json` may carry a `credentials` map, e.g.
 `{"deepseek":{"type":"api_key","key":"…"},"kimi-coding":{"type":"oauth","access":"…","refresh":"…","expires":1794167880214}}`.

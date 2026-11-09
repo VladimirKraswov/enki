@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-const fake = vi.hoisted(() => ({ compact: vi.fn(), running: false, provider: null as { providerID: string; modelID: string } | null, limit: undefined as number | undefined, setMonthlyLimit: vi.fn(), windows: null as unknown }));
+const fake = vi.hoisted(() => ({ compact: vi.fn(), running: false, provider: null as { providerID: string; modelID: string } | null, limit: undefined as number | undefined, setMonthlyLimit: vi.fn(), windows: null as unknown, quota: null as unknown }));
 vi.mock("../src/usage/windows", async (original) => {
   const real = await original<typeof import("../src/usage/windows")>();
   return { ...real, loadMonthlyUsage: vi.fn(async () => fake.windows) };
@@ -17,11 +17,12 @@ vi.mock("../src/state/store", () => ({
     getModelChoice: () => fake.provider,
     monthlyLimit: () => fake.limit,
     setMonthlyLimit: fake.setMonthlyLimit,
+    client: { providerUsage: async () => { if (!fake.quota) throw new Error('no quota'); return fake.quota; } },
   },
 }));
 import { ContextMeter } from "../src/components/ContextMeter";
 let root: Root;
-afterEach(() => { if (root) act(() => root.unmount()); document.body.innerHTML = ""; vi.unstubAllGlobals(); fake.running = false; fake.provider = null; fake.limit = undefined; fake.windows = null; vi.clearAllMocks(); });
+afterEach(() => { if (root) act(() => root.unmount()); document.body.innerHTML = ""; vi.unstubAllGlobals(); fake.running = false; fake.provider = null; fake.limit = undefined; fake.windows = null; fake.quota = null; vi.clearAllMocks(); });
 it("offers native compaction for an idle Pi chat and keeps it disabled while running", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -61,4 +62,30 @@ it("shows monthly Enki consumption and the configured limit next to the context 
   expect(document.body.textContent).toContain("Осталось до лимита");
   expect(document.body.textContent).toContain("6\u00A0000");
   expect(document.body.textContent).toContain("Месяц 40%");
+});
+
+it("shows the provider's own quota when it answers, with reset times", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  fake.provider = { providerID: "kimi-coding", modelID: "k3.1-pro" };
+  fake.windows = { usage: { provider: "kimi-coding", tokens: 1000, replies: 1, resetAt: new Date(2026, 11, 1).getTime() }, failures: [] };
+  fake.quota = {
+    limit5h: { usedRatio: 1, resetAt: new Date(2026, 10, 9, 17, 51).toISOString() },
+    limit7d: null,
+    monthTotal: { usedRatio: 0.1341, resetAt: new Date(2026, 11, 8, 17, 3).toISOString() },
+    monthCode: { usedRatio: 0.05, resetAt: null },
+    extraUsage: null,
+  };
+  const node = document.createElement("div"); document.body.append(node); root = createRoot(node);
+  act(() => root.render(createElement(ContextMeter)));
+  act(() => document.querySelector<HTMLButtonElement>(".context-trigger")!.click());
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("Квота подписки · kimi-coding");
+  expect(text).toContain("5 часов");
+  expect(text).toContain("100%");
+  expect(text).toContain("Месяц · всего");
+  expect(text).toContain("13%");
+  expect(text).not.toContain("Неделя");  // отсутствующее окно не выдумывается
+  expect(document.querySelectorAll('progress[aria-label^="Израсходовано"]').length).toBe(3); // 5ч, месяц·Код, месяц·всего
 });

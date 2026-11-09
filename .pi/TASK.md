@@ -1,3 +1,21 @@
+# TASK — 2026-11-09: реальная квота Kimi в Enki / 2.0.47
+
+Поручение: брать лимиты и сбросы с https://www.kimi.ai/settings/subscription.
+Находка: бандл сайта пуст для API, но публичный официальный CLI Kimi раскрывает
+контракт: GET <api base>/v1/usages → usages.limit5h/limit7d/monthCode/monthTotal
+({usedRatio, resetAt}) + extraUsage. Реализовано: agent models/usage.ts (строгий
+парсер: clamp 0..1, только известные поля, null если данных нет),
+models/probe-usage.ts (creds из стора рантайма → свежий OAuth, не старый
+auth.json), GET /providers/usage; клиент providerUsage; ContextMeter: блок
+«Квота подписки» — 5ч/неделя/месяц·Код/месяц·всего с процентами и временем сброса,
+плюс доп. квота; локальный счётчик остаётся как fallback.
+Тесты: provider-usage 3 PASS (документированная форма, clamp/мусор, null);
+context-meter 3 PASS (реальная квота рисуется, отсутствующее окно не выдумывается);
+npm test 1282 PASS, ci-artifacts 1 fail (rustc PATH — среда).
+Не проверено вживую: refresh-токен в auth.json истёк (400), а запущено 2.0.42 без
+маршрута; проверка — после установки, попавер контекста на модели Kimi.
+Следующее: commit → release:local stable 2.0.47. Автоприменение не выполняю.
+
 # TASK — 2026-11-09: мимолётные обрывы стрима больше не пугают / 2.0.46
 
 Поручение: часто висят «Нет свежих событий / Выполнение не подтверждено» и

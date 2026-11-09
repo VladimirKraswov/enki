@@ -415,6 +415,16 @@ export class RuntimeClient {
   // ----------------------------------------------------------------- models
   providers(signal?: AbortSignal) { return this.request<ProvidersDTO>("GET", "/providers", { signal }); }
   providersSettled(signal?: AbortSignal) { return this.request<ProvidersDTO>("GET", "/providers/settled", { signal, timeoutMs: 35000 }); }
+  /** The provider's own quota (e.g. Kimi Code 5h/weekly/monthly ratios). */
+  providerUsage(providerID: string, modelID: string, signal?: AbortSignal) {
+    return this.request<{
+      limit5h: { usedRatio: number; resetAt: string | null } | null;
+      limit7d: { usedRatio: number; resetAt: string | null } | null;
+      monthTotal: { usedRatio: number; resetAt: string | null } | null;
+      monthCode: { usedRatio: number; resetAt: string | null } | null;
+      extraUsage: { balanceCents: number; monthlyUsedCents: number; monthlyChargeLimitCents: number; monthlyChargeLimitEnabled: boolean; currency: string } | null;
+    }>("GET", "/providers/usage", { query: { provider: providerID, model: modelID }, signal, timeoutMs: 20_000 });
+  }
   refreshProviders() { return this.request<{ errors: string[] }>("POST", "/providers/refresh", { body: {}, timeoutMs: 45000 }); }
   checkModel(providerID: string, modelID: string, signal?: AbortSignal) {
     return this.request<{ ok: boolean; detail: string }>("POST", "/models/check", { body: { providerID, modelID }, signal, timeoutMs: 120000 });

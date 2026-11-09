@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FloatingPopover } from "./FloatingPopover";
 import { store, useAppState } from "../state/store";
 import { limitPercent, loadMonthlyUsage } from "../usage/windows";
+import type { ProviderUsage } from "../../src-tauri/resources/agent/src/models/usage";
 
 export function ContextMeter() {
   const ref = useRef<HTMLButtonElement>(null);
@@ -13,9 +14,23 @@ export function ContextMeter() {
   const choice = store.getModelChoice();
   const provider = choice?.providerID ?? null;
   const limit = provider ? store.monthlyLimit(provider) : undefined;
+  const [quota, setQuota] = useState<ProviderUsage | null>(null);
+  const [quotaFailed, setQuotaFailed] = useState(false);
   const [monthly, setMonthly] = useState<Awaited<ReturnType<typeof loadMonthlyUsage>> | null>(null);
   const [monthlyFailed, setMonthlyFailed] = useState(false);
   const [draftLimit, setDraftLimit] = useState<string | null>(null);
+  // Only providers that actually publish a quota are asked (Kimi Code `/usages`);
+  // others keep the honest local counter below.
+  const QUOTA_PROVIDERS = new Set(["kimi-coding"]);
+  useEffect(() => {
+    if (!open || !provider || !choice || !QUOTA_PROVIDERS.has(provider)) { setQuota(null); setQuotaFailed(false); return; }
+    let live = true;
+    setQuota(null); setQuotaFailed(false);
+    void store.client.providerUsage(provider, choice.modelID)
+      .then(value => { if (live) setQuota(value); })
+      .catch(() => { if (live) setQuotaFailed(true); });
+    return () => { live = false; };
+  }, [open, provider, choice?.modelID]);
   useEffect(() => {
     if (!open || !provider) return;
     let alive = true;
@@ -97,6 +112,19 @@ export function ContextMeter() {
           Сжать сейчас
         </button>}
         {provider && <>
+          <strong>Квота подписки · {provider}</strong>
+          {quota ? <>
+            {([["5 часов", quota.limit5h], ["Неделя", quota.limit7d], ["Месяц · Код", quota.monthCode], ["Месяц · всего", quota.monthTotal]] as const)
+              .filter(([, entry]) => !!entry)
+              .map(([label, entry]) => <div key={label}>
+                <div className="kv">
+                  <span>{label}</span>
+                  <b>{Math.round(entry!.usedRatio * 100)}%{entry!.resetAt ? ` · сброс ${new Date(entry!.resetAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}</b>
+                </div>
+                <progress max={100} value={Math.round(entry!.usedRatio * 100)} aria-label={`Израсходовано: ${label}`} />
+              </div>)}
+            {quota.extraUsage && <div className="kv"><span>Доп. квота</span><b>{quota.extraUsage.monthlyChargeLimitEnabled ? "включена" : "не включена"} · {Math.round(quota.extraUsage.balanceCents / 100).toLocaleString("ru-RU")} {quota.extraUsage.currency === "CNY" ? "¥" : quota.extraUsage.currency}</b></div>}
+          </> : <p className="muted">{quotaFailed ? "Провайдер не вернул квоту; ниже — расход по данным Enki." : "Запрашиваю квоту у провайдера…"}</p>}
           <strong>Месячный расход · {provider}</strong>
           <div className="kv">
             <span>Токенов с 1-го числа</span>

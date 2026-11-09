@@ -14,6 +14,7 @@ import { legacyPiDigest, type PiCliMeta } from "../legacy/pi-cli.ts";
 import { validPiId } from "../legacy/pi-jsonl.ts";
 import { CutoverInputError, validBatch } from "../migration/cutover.ts";
 import { checkModelAccess } from "../models/check.ts";
+import { probeProviderUsage } from "../models/probe-usage.ts";
 import { accessFor } from "../models/access.ts";
 import { providers } from "../models/catalog.ts";
 import { VaultCredentialStore } from "../models/credentials.ts";
@@ -507,6 +508,13 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     const access = runtime.modelAccess?.snapshot();
     const first = runtime.modelRuntime.getAvailableSnapshot().find(m => !access || accessFor(access, m.provider, m.id)?.state === "available");
     return { ...providers(runtime.modelRuntime, first ? { providerID: first.provider, modelID: first.id } : null, access), checking: runtime.modelAccess?.checking ?? false };
+  });
+  /** The provider's own quota (Kimi Code `/usages`): real 5h/weekly/monthly
+   * ratios and reset times, resolved with this device's stored credentials. */
+  r("GET", "/providers/usage", async (request) => {
+    const providerID = textParam(str(request.query, "provider"), "provider", 120).trim();
+    const modelID = textParam(str(request.query, "model"), "model", 200).trim();
+    return probeProviderUsage(runtime.modelRuntime, providerID, modelID, AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]));
   });
   r("GET", "/providers/settled", async request => {
     await runtime.modelAccess?.settled(request.signal);
