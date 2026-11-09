@@ -19,6 +19,8 @@ import { isNative } from "../native/platform";
 import { WORKSHOP_TITLE } from "../workshop/workspace";
 import { liveStatusConfirmed, sessionWorkMark } from "../state/sidebar";
 export const pickFolder = pickProjectFolder;
+/** Drag payload of a chat being moved between projects (or out of a project). */
+const SESSION_DRAG = "application/x-enki-session";
 
 function ActivityMark({ id, directory, pending = false }: { id: string; directory: string; pending?: boolean }) {
   const scheduler=taskScheduler();
@@ -70,6 +72,21 @@ export function Sidebar() {
   const [shownByProject, setShownByProject] = useState<Record<string, number>>({});
   const [recentCount, setRecentCount] = useState(8);
   const [openingWorkshop, setOpeningWorkshop] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false), [newName, setNewName] = useState("");
+  const submitCreate = async () => {
+    const name = newName.trim(); if (!name) return;
+    setMoveError(null);
+    try {
+      const created = await store.client.createProject(name);
+      await store.addProjectDirectory(created.directory);
+      setCreating(false); setNewName("");
+    } catch (error) { setMoveError(error instanceof Error ? error.message : String(error)); }
+  };
+  const moveSession = (id: string, directory: string | null) => {
+    setMoveError(null);
+    void store.moveSessionToProject(id, directory).catch(error => setMoveError(error instanceof Error ? error.message : String(error)));
+  };
   const expandedKey = JSON.stringify(dirs.filter((dir) => store.isProjectExpanded(dir)));
   const hostKey = s.prefs.workspaceKey ?? s.prefs.endpoint;
   // Every chat list comes from the connected runtime; there is no separate local agent catalogue.
@@ -92,7 +109,8 @@ export function Sidebar() {
     const isArchived = Boolean(sess.time.archived);
     const pending = store.pendingInteraction(sess.id);
     return (
-      <div className="session-row-wrap" key={rowKey}>
+      <div className="session-row-wrap" key={rowKey} draggable title="Перетащите в проект или в «Недавние»"
+        onDragStart={event => { event.dataTransfer.setData(SESSION_DRAG, sess.id); event.dataTransfer.effectAllowed = "move"; }}>
         <button
           className={`session-item${s.activeSessionId === sess.id ? " active" : ""}`}
           onClick={() => {
@@ -215,7 +233,9 @@ export function Sidebar() {
           const sessions = list?.sessions.filter((session) => !session.time.archived) ?? [];
           const shown = shownByProject[dir] ?? 8;
           const name = projectName(dir);
-          return <section className="project-group" key={dir} aria-label={`Проект ${name}`}>
+          return <section className="project-group" key={dir} aria-label={`Проект ${name}`}
+            onDragOver={event => { if (event.dataTransfer.types.includes(SESSION_DRAG)) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+            onDrop={event => { const id = event.dataTransfer.getData(SESSION_DRAG); if (!id) return; event.preventDefault(); moveSession(id, dir); }}>
             <div className="project-heading">
               <button className={`project-row${dir === s.directory ? " selected" : ""}`} title={dir} aria-label={name} aria-expanded={expanded}
                 onClick={() => { setMenu(null); store.toggleProject(dir); }}>
@@ -246,7 +266,16 @@ export function Sidebar() {
         {dirs.length > 7 && <button className="show-more" onClick={() => setAll(!all)}>{all ? "Меньше проектов" : `Все проекты (${dirs.length})`}</button>}
         {dirs.length === 0 && <button className="project-empty" onClick={() => void pickFolder()}>Открыть папку проекта<Icon name="plus" size={16} /></button>}
         <RemovedProjects />
-        <section className="recent-sessions" aria-label={archived ? "Архив" : "Недавние"}>
+        {creating ? <form className="project-create" onSubmit={event => { event.preventDefault(); void submitCreate(); }}>
+          <input autoFocus placeholder="Название нового проекта" aria-label="Название нового проекта"
+            value={newName} onChange={event => setNewName(event.target.value)} />
+          <button className="btn small primary" type="submit" disabled={!newName.trim()}>Создать</button>
+          <button className="btn small" type="button" onClick={() => setCreating(false)}>Отмена</button>
+        </form> : <button className="project-empty" onClick={() => setCreating(true)}>Создать проект<Icon name="plus" size={16} /></button>}
+        {moveError && <div className="empty-hint" role="alert">{moveError}</div>}
+        <section className="recent-sessions" aria-label={archived ? "Архив" : "Недавние"}
+          onDragOver={event => { if (event.dataTransfer.types.includes(SESSION_DRAG)) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+          onDrop={event => { const id = event.dataTransfer.getData(SESSION_DRAG); if (!id) return; event.preventDefault(); moveSession(id, null); }}>
           <div className="section-label task-heading">
             <span>{archived ? "Архив" : "Недавние"}</span>
             <button className={`icon-btn${archived ? " on" : ""}`} title={archived ? "Показать недавние" : "Архив всех проектов"} aria-label={archived ? "Показать недавние" : "Показать архив"} onClick={() => { setArchived(!archived); setRecentCount(8); }}><Icon name="archive" size={15} /></button>

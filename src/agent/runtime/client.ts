@@ -282,6 +282,14 @@ export class RuntimeClient {
   deleteSession(id: string, directory: string | null) {
     return this.request<void>("DELETE", `/sessions/${encodeURIComponent(id)}`, { query: { directory }, empty: true });
   }
+  /** Move a chat to another project directory (runtime also moves its transcript). */
+  moveSession(id: string, target: string) {
+    return this.request<SessionDTO>("POST", `/sessions/${encodeURIComponent(id)}/move`, { body: { directory: target } });
+  }
+  /** Create a project folder under one root on the executing machine. */
+  createProject(name: string, root?: string) {
+    return this.request<{ directory: string; root: string }>("POST", "/projects/create", { body: { name, ...(root ? { root } : {}) } });
+  }
   /** `messageID` null copies the whole current branch into a new session. */
   forkSession(id: string, directory: string, messageID: string | null, title?: string) {
     return this.request<SessionDTO>("POST", `/sessions/${encodeURIComponent(id)}/fork`, { query: { directory }, body: { messageID, ...(title ? { title } : {}) } });

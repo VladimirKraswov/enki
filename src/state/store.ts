@@ -1558,6 +1558,17 @@ class Store {
     await this.setDirectory(trimmed);
   }
 
+  /** Move a chat into a project, or out of it into its own projectless folder.
+   * The runtime refuses to move a session that is still working. */
+  async moveSessionToProject(sessionID: string, directory: string | null): Promise<void> {
+    const client = this.client;
+    let target = directory;
+    if (!target) target = (await client.prepareChatWorkspace(crypto.randomUUID())).directory;
+    await client.moveSession(sessionID, target);
+    await this.refreshProjects();
+    if (this.state.activeSessionId === sessionID) await this.setDirectory(target, { sessionId: sessionID });
+  }
+
   async setDirectory(
     directory: string | null,
     opts: { restoreSession?: boolean; sessionId?: string } = {},

@@ -13,6 +13,7 @@ import { isReadOnlyOrigin, type MessageDTO, type ModelRef, type PermissionRule, 
 import { branchSessionFile, listSessionFiles, openSessionReader } from "../sdk/adapter.ts";
 import { entriesPage, entriesToMessages } from "../sdk/history.ts";
 import { SessionWorker, type WorkerDeps } from "./worker.ts";
+import { moveSessionTranscript } from "./move.ts";
 import type { SessionCatalog, SessionRecord } from "./catalog.ts";
 
 const IDLE_CLOSE_MS = 20 * 60_000;
@@ -253,6 +254,20 @@ export class SessionRegistry {
     await Promise.allSettled(recycling);
     return { reopened: recycling.length, pending };
   }
+  /** Move a chat to another project directory together with its transcript.
+   * A busy or retained session is never moved; the next use reopens the worker
+   * in the new directory. */
+  async moveToDirectory(id: string, directory: string): Promise<SessionRecord> {
+    const record = this.catalog.get(id);
+    if (!record) throw new Error("Сессия не найдена.");
+    if (record.directory === directory) return record;
+    const worker = this.workers.get(id);
+    if (worker && (!worker.idle() || this.deps.retained(id))) throw new Error("Дождитесь завершения работы этой сессии, затем перенесите её.");
+    if (worker) await this.recycle(id, worker);
+    const sessionFile = moveSessionTranscript(record, this.deps.sessionDir(record.directory), this.deps.sessionDir(directory));
+    return this.catalog.rehome(id, directory, sessionFile);
+  }
+
   /** Close one idle worker exactly like the idle sweep; the next use reopens it. */
   private async recycle(id: string, worker: SessionWorker): Promise<void> {
     this.stale.delete(id);

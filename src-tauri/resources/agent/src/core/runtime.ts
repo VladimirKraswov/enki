@@ -454,6 +454,7 @@ export class Runtime {
           rules: () => this.catalog.get(record.id)?.permission ?? [],
           workshop: () => this.catalog.get(record.id)?.workshop ?? false,
         }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
+          projectContext: directory => this.projectContext(directory),
           registerPreparation: (key, prepare) => preparations.set(key, prepare),
           reportMcp: (servers, error) => {
             if (this.mcpReports.get(record.id)?.epoch !== epoch) return;
@@ -639,6 +640,17 @@ export class Runtime {
     if (!imported.length) return;
     // Providers are rebuilt from the credential store; no restart is needed.
     await refreshCredentialSnapshot(this.modelRuntime, signal ?? new AbortController().signal).catch(() => undefined);
+  }
+
+  /** Compact project block: where the session works and which sibling chats
+   * exist. Projectless chats (own UUID folders under data/chats) get nothing.
+   * Bounded on purpose — this is orientation, not a second project memory. */
+  private projectContext(directory: string): string | null {
+    const chatsRoot = path.join(this.paths.data, "chats");
+    if (directory.startsWith(chatsRoot + path.sep)) return null;
+    const titles = this.catalog.list(directory, 8).filter(session => !session.archived).map(session => session.title).filter(Boolean).slice(0, 8);
+    const others = titles.length ? ` Другие чаты этого проекта: ${titles.map(title => `«${title.slice(0, 80)}»`).join(", ")}.` : "";
+    return `<enki-project-v1 directory="${encodeURIComponent(directory)}">Проект: ${path.basename(directory)} (${directory}). Работайте в этой папке; AGENTS.md и инструкции проекта авторитетны.${others}</enki-project-v1>`;
   }
 
   private wire(): void {

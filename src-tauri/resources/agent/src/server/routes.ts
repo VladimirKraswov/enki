@@ -2,6 +2,7 @@
 // directory-scoped where the resource belongs to a project.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ClientRelayBroker } from "../control/broker.ts";
 import { InteractionInputError } from "../interaction/broker.ts";
@@ -166,6 +167,30 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     return sessionDTO(created);
   });
   r("GET", "/sessions/:id", (request) => sessionDTO(scoped(request)));
+  /** Move a chat to another project directory (busy sessions are refused). */
+  r("POST", "/sessions/:id/move", async (request) => {
+    const current = scoped(request);
+    const directory = textParam(object(request.body).directory, "directory", 4096);
+    if (!validDirectory(directory)) throw new HttpError(400, "Укажите существующую папку проекта.");
+    return sessionDTO(await runtime.registry.moveToDirectory(current.id, directory));
+  });
+  /** Create a project folder under one root, so a project does not require an
+   * already existing directory on disk. */
+  r("POST", "/projects/create", (request) => {
+    const body = object(request.body);
+    const name = textParam(body.name, "name", 120).trim();
+    if (/[/\\\0]/.test(name) || name === "." || name === "..") throw new HttpError(400, "Имя проекта не должно содержать разделители путей.");
+    const root = body.root === undefined ? path.join(os.homedir(), "enki-projects") : textParam(body.root, "root", 4096);
+    if (!path.isAbsolute(root)) throw new HttpError(400, "Корень проектов должен быть абсолютным путём.");
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const directory = path.join(root, name);
+    try { fs.mkdirSync(directory); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new HttpError(409, "Проект с таким именем уже есть в этой папке.");
+      throw error;
+    }
+    return { directory, root };
+  });
   r("PATCH", "/sessions/:id", (request) => {
     const current = scoped(request);
     const body = object(request.body);

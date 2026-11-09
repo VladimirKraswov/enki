@@ -37,6 +37,8 @@ export interface ExtensionDeps {
   pool: McpPool;
   defaultPolicy(): DefaultPolicy;
   capabilities: CapabilitiesScope | null;
+  /** Compact project block (root + sibling chat titles); null for projectless chats. */
+  projectContext?(directory: string): string | null;
   reportMcp?(servers: ServerStatus[], error?: string): void;
   registerPreparation?(key: string, prepare: () => Promise<void>): void;
 }
@@ -113,9 +115,11 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
   const policy: SdkExtension = {
     name: "enki-turn-policy",
     factory: (pi) => {
-      pi.on("before_agent_start", (event) => ({
-        systemPrompt: `${event.systemPrompt}\n\n${sessionPolicyBlocks(scope.sessionID, scope.directory, scope.workshop()).join("\n\n")}`,
-      }));
+      pi.on("before_agent_start", (event) => {
+        const blocks = sessionPolicyBlocks(scope.sessionID, scope.directory, scope.workshop());
+        const project = deps.projectContext?.(scope.directory);
+        return { systemPrompt: `${event.systemPrompt}\n\n${[...blocks, ...(project ? [project] : [])].join("\n\n")}` };
+      });
     },
   };
   const questions: SdkExtension = { name: "enki-questions", factory: (pi) => { pi.registerTool(questionTool(scope, deps.broker)); } };
