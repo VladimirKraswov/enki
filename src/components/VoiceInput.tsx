@@ -124,7 +124,12 @@ export function VoiceInput({ disabled, onActiveChange, draftTarget, holdForRecov
         }
         let stream: MediaStream | null = null;
         let storageReady = false;
+        // The microphone is requested only after the recovery check below: a
+        // pending dictation must never be met by an open microphone.
+        let streamPromise: Promise<MediaStream> | null = null;
         try {
+            // Journal and recovery check first: a pending dictation must not be
+            // followed by an open microphone. Then the microphone opens at once.
             await dictationJournal.ready();
             storageReady = true;
             const saved = await dictationJournal.list(scope);
@@ -133,16 +138,58 @@ export function VoiceInput({ disabled, onActiveChange, draftTarget, holdForRecov
                 void context?.close().catch(() => {});
                 return;
             }
-            if (!active()) {
+            if (!active()) { void context?.close().catch(() => { }); return; }
+            // Open the microphone immediately after the check and start a
+            // pre-roll: speech during the remaining preparation is kept.
+            streamPromise = navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+            streamPromise.catch(() => undefined);
+            try {
+                stream = await streamPromise;
+            }
+            catch (microphone) {
                 void context?.close().catch(() => { });
+                if (active()) {
+                    capture.current = null; audio.current = null;
+                    setPhase('idle');
+                    setError(captureErrorMessage(microphone));
+                }
                 return;
             }
-            stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
             if (!active()) {
                 stream.getTracks().forEach(t => t.stop());
                 void context?.close().catch(() => { });
                 return;
             }
+            const prerollParts: Blob[] = [];
+            let preroll: MediaRecorder | null = null;
+            try {
+                const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type));
+                preroll = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 64000 } : undefined);
+                preroll.ondataavailable = event => { if (event.data.size) prerollParts.push(event.data); };
+                preroll.start(250);
+            }
+            catch {
+                preroll = null;
+            }
+            /** Stop the pre-roll and return everything it captured, in order. */
+            const handOver = async (): Promise<Blob[]> => {
+                if (!preroll) return [];
+                const recorder = preroll;
+                preroll = null;
+                // Bounded: a platform that never reports the final chunk must not
+                // delay (or block) the actual recording from starting.
+                return await new Promise<Blob[]>(resolve => {
+                    let settled = false;
+                    const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve([...prerollParts]); } };
+                    const timer = setTimeout(done, 600);
+                    try {
+                        recorder.addEventListener?.('stop', done);
+                        recorder.onstop = done;
+                        if (recorder.state === 'inactive') done(); else recorder.stop();
+                    }
+                    catch { done(); }
+                });
+            };
             setPhase('preparing');
             const work = processor();
             const recording = new SegmentedCapture(stream, context, dictationJournal, workspace, key, settings, {
@@ -169,10 +216,12 @@ export function VoiceInput({ disabled, onActiveChange, draftTarget, holdForRecov
                 },
             });
             capture.current = recording;
-            recording.start();
+            // The pre-roll becomes the first, already complete segment.
+            recording.start(await handOver());
         }
         catch (e) {
-            stream?.getTracks().forEach(t => t.stop());
+            if (stream) stream.getTracks().forEach(t => t.stop());
+            else void streamPromise?.then(late => late.getTracks().forEach(t => t.stop())).catch(() => undefined);
             void context?.close().catch(() => { });
             if (active()) {
                 capture.current = null;

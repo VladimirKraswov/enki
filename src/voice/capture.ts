@@ -42,7 +42,10 @@ export class SegmentedCapture {
     private group = crypto.randomUUID();
     constructor(private input: MediaStream, private audio: AudioContext | null, private storage: DictationStorage, private workspace: string, private draft: string, private settings: AsrSettings, private callbacks: CaptureCallbacks) { }
     ids() { return [...this.clips].map(c => c.segment.id); }
-    start() {
+    /** `preroll` is audio captured while preparation ran (mic opened but the
+     * journal was not ready yet). It becomes the first, already complete segment
+     * so the very first words are never lost. */
+    start(preroll: readonly Blob[] = []) {
         captures.add(this);
         try {
             if (this.audio) {
@@ -56,6 +59,18 @@ export class SegmentedCapture {
             this.analyser = undefined;
         }
         try {
+            const heard = preroll.filter(part => part.size > 0);
+            if (heard.length) {
+                const segment: RecorderClip = { recorder: { state: 'inactive', stop() { } } as unknown as MediaRecorder,
+                    started: this.started, segment: { id: crypto.randomUUID(), group: this.group,
+                        scope: dictationScope(this.workspace, this.draft), workspace: this.workspace, draft: this.draft,
+                        settings: { ...this.settings }, created: this.started, sequence: this.sequence++, overlap: false,
+                        mime: heard[0].type || 'audio/webm', parts: [...heard], complete: true },
+                    writes: Promise.resolve(), done: Promise.resolve(undefined), resolve: () => { } };
+                segment.writes = Promise.resolve(this.storage.put({ ...segment.segment, parts: [...segment.segment.parts] }))
+                    .then(() => { this.checkpointReady = true; this.notifyReady(); })
+                    .catch((error: unknown) => this.fail(error));
+            }
             this.current = this.create(false);
             this.timer = setInterval(() => this.tick(), 50);
         }
