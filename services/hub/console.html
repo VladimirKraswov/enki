@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enki Hub — центр</title>
+<link rel="stylesheet" href="/console.css">
+</head>
+<body>
+<header>
+  <h1>Enki Hub</h1>
+  <span id="who">не вошли</span>
+  <button id="refresh" hidden>Обновить</button>
+</header>
+<main>
+  <section id="login">
+    <h2>Вход</h2>
+    <p>Ключ устройства или администратора Hub. Он используется только для входа и хранится в этой вкладке.</p>
+    <form id="login-form">
+      <input id="token" type="password" autocomplete="off" placeholder="Ключ Hub" required>
+      <button type="submit">Войти</button>
+    </form>
+    <p id="login-error" class="error" hidden></p>
+  </section>
+  <section id="overview" hidden>
+    <h2>Обновления Enki</h2>
+    <div id="channels" class="cards"></div>
+    <h2>Устройства</h2>
+    <div id="devices"></div>
+    <h2>Модели</h2>
+    <div id="services"></div>
+    <div id="catalog"></div>
+    <div id="credentials"></div>
+    <p class="muted">Секреты не показываются. Конфигурация сервисов и кредов — приватный файл model-services.json на Hub.</p>
+  </section>
+</main>
+<script src="/console.js"></script>
+</body>
+</html>

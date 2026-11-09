@@ -451,7 +451,39 @@ class Hub:
             'groups':sorted(result,key=lambda g:g['count'],reverse=True),
             'note':'Категории эвристические. Отказы и отмены не означают поломку. Статус completed не гарантирует успешный exit code; сырые выводы не собираются. Скорость и качество моделей по этим данным не оцениваются.'}
 
+    def console_overview(self, actor):
+        """One authenticated read for the Hub console: updates, devices and the
+        model centre. Secrets never leave the private operator file."""
+        devices = []
+        with self.lock, self.connection() as c:
+            for row in c.execute("SELECT id,name,platform,app_version,admin,revoked,seen FROM devices ORDER BY seen DESC LIMIT 100"):
+                devices.append({"id": row["id"], "name": row["name"], "platform": row["platform"],
+                    "appVersion": row["app_version"], "admin": bool(row["admin"]),
+                    "revoked": bool(row["revoked"]), "seen": row["seen"]})
+        channels = {}
+        for channel in ("stable", "preview"):
+            head = self.releases.head(channel)
+            channels[channel] = {"available": bool(head.get("available")),
+                "version": head.get("version") or head.get("revision")}
+        services, service_error = [], None
+        try:
+            for sid, service in self.model_services.services().items():
+                services.append({"id": sid, "label": service.get("label", sid),
+                    "kind": service.get("kind", "switch"), "model": service.get("model")})
+        except Fault as error:
+            service_error = str(error)
+        try:
+            credential_providers = sorted(self.model_services.credentials())
+        except Fault:
+            credential_providers = []
+        return {"devices": devices, "channels": channels, "services": services,
+            "serviceError": service_error,
+            "catalogModels": [m.get("id") for m in self.model_catalog.get().get("models", [])],
+            "credentialProviders": credential_providers}
+
     def api(self, method, path, query, actor, data):
+        if path == '/api/console/overview' and method == 'GET':
+            return self.console_overview(actor)
         if path.startswith('/api/workshop/'):
             return self.workshop.api(method, path.removeprefix('/api/workshop/'), query, actor, data)
         if path.startswith('/api/model-services/'):
@@ -635,6 +667,14 @@ class Handler(BaseHTTPRequestHandler):
             for value in ([cookie] if isinstance(cookie,str) else cookie):self.send_header('Set-Cookie',value)
         if filename:self.send_header('Content-Disposition','attachment; filename="'+filename+'"')
         self.end_headers();self.wfile.write(raw)
+    def console_asset(self, path):
+        """The Hub console shell; data still requires the key/cookie login."""
+        name = 'console.html' if path in ('/','/console','/console.html') else path.lstrip('/')
+        if name not in ('console.html','console.js','console.css'):raise Fault(404,'Страница не найдена.')
+        file = Path(__file__).resolve().parent / name
+        if not file.is_file():raise Fault(404,'Страница не найдена.')
+        kind = {'console.html':'text/html; charset=utf-8','console.js':'text/javascript; charset=utf-8','console.css':'text/css; charset=utf-8'}[name]
+        return self.respond(200,file.read_bytes(),kind)
     def actor(self):
         auth=self.headers.get('Authorization','')
         if auth.startswith('Bearer '):return self.server.hub.authenticate(auth[7:])
@@ -653,6 +693,8 @@ class Handler(BaseHTTPRequestHandler):
             if origin and urlsplit(origin).netloc != self.headers.get('Host'):
                 raise Fault(403,'Запрос с другого сайта отклонён.')
             if self.command=='GET' and path=='/health':return self.respond(200,{'service':'enki-hub','apiVersion':1})
+            if self.command=='GET' and path in ('/','/console','/console.html','/console.js','/console.css'):
+                return self.console_asset(path)
             if self.command=='POST' and path=='/api/build-cache/release':
                 auth=self.headers.get('Authorization','')
                 self.server.hub.build_cache.release(auth[7:] if auth.startswith('Bearer ') else '')
