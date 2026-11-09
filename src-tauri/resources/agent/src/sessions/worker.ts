@@ -221,13 +221,26 @@ export function observeRun(facts: RunFacts, event: SdkEvent): void {
 }
 
 export const OUTPUT_LIMIT_TEXT = "Ответ прерван лимитом длины вывода модели, и SDK не смог продолжить его сжатием контекста. Частичный ответ сохранён; задача может быть не завершена. Автоматического повтора не было.";
+
+/** A reasoning-only (or empty) stop leaves the chat without an answer. Ask once
+ * more in the SAME run instead of reporting a broken turn.
+ * Never for a user stop, a provider error or a length stop. */
+export function needsContinuation(facts: RunFacts, stopped: boolean): boolean {
+  if (stopped) return false;
+  const last = facts.last;
+  return !!last && last.stopReason === "stop" && !hasContent(last);
+}
+
+/** One automatic continuation prompt; bounded by needsContinuation + a marker. */
+export const CONTINUE_AFTER_EMPTY = "Продолжи работу: предыдущий шаг закончился без текста ответа и без вызова инструмента. Дай итоговый ответ пользователю либо следующий вызов инструмента; не повторяй уже выполненные действия.";
 export const CLOSED_RUN_TEXT = "Ход прерван закрытием чата в Enki (выход, перезагрузка или удаление). Результат незавершённых действий может быть неизвестен; повтора не было.";
 
 /**
  * The supported outcome of one accepted, non-stopped run. Delivery is not
  * success: an unrecovered length stop, a run that ended with no current
  * answer, or a turn ended by tools before any final answer is `failed` with an
- * honest reason (the queue still continues; nothing is retried or replayed).
+ * honest reason. An empty final turn gets exactly one automatic continuation in
+ * the same run before it is reported (the last text now says so).
  * A run in which the SDK never started a model turn (handled input or slash
  * command) completes as handled, independent of any older assistant.
  */
@@ -242,7 +255,7 @@ export function runOutcome(commandId: string, facts: RunFacts, modelStarted: boo
   }
   if (!last || !facts.produced || (last.stopReason === "stop" && !hasContent(last))) {
     const recovery = facts.compaction && !facts.compaction.ok ? ` Восстановление сжатием не удалось${facts.compaction.error ? `: ${facts.compaction.error}` : ""}.` : "";
-    return { commandId, state: "failed", error: `Модель не дала ответа в этом запросе.${recovery} История сохранена; автоматического повтора не было.`, reason: "no_answer" };
+    return { commandId, state: "failed", error: `Модель не дала ответа в этом запросе даже после автоматического продолжения.${recovery} История сохранена; повторите запрос сами, если нужно.`, reason: "no_answer" };
   }
   if (last.stopReason === "toolUse")
     return { commandId, state: "failed", error: "Ход завершился на вызове инструментов без итогового ответа (выполнение остановлено политикой инструментов). Повтора не было.", reason: "terminated" };
@@ -610,6 +623,15 @@ export class SessionWorker {
             source: "rpc",
             preflightResult: (ok) => { run.preflight ??= ok; resolveAccepted(ok); },
           });
+          // A reasoning-only (or empty) stop would end the turn with no answer.
+          // Ask once more in the same run; the marker above bounds it to one.
+          if (!run.failure && !this.stopRequested && !this.closed && this.runFacts && needsContinuation(this.runFacts, false)) {
+            this.status = { type: "waiting", message: "Модель ответила без текста — прошу продолжить" };
+            this.deps.journal.append(this.directory, this.id, { type: "session.status", properties: { sessionID: this.id, status: this.status } }, true);
+            const facts = this.runFacts;
+            facts.produced = false; facts.last = undefined;
+            await this.session.prompt(CONTINUE_AFTER_EMPTY, { source: "rpc" });
+          }
         } catch (error) {
           run.failure = error instanceof Error ? error.message : String(error);
           resolveAccepted(run.preflight === true);

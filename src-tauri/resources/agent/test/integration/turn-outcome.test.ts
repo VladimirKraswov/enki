@@ -91,15 +91,19 @@ it("handled input and a registered slash command never inherit an older command'
   expect((await users(sid)).length).toBe(before);
 });
 
-it("an empty provider stop is reported as no answer, not success", async () => {
+it("an empty provider stop gets exactly one automatic continuation, then no answer", async () => {
   h = await harness();
   const dir = h.project("empty"), sid = await newSession(h, dir);
-  h.scripted.setResponses([fauxAssistantMessage([], { stopReason: "stop" })]);
+  h.scripted.setResponses([fauxAssistantMessage([], { stopReason: "stop" }), fauxAssistantMessage([], { stopReason: "stop" })]);
   await h.command(promptCommand(h, "empty-1", sid, dir, "hello"));
   const receipt = await h.waitReceipt("empty-1", ["completed", "failed", "rejected", "cancelled"]);
   expect(receipt.state).toBe("failed");
-  expect(receipt.error).toMatch(/не дала ответа/);
-  expect(h.scripted.calls()).toBe(1);
+  expect(receipt.error).toMatch(/даже после автоматического продолжения/);
+  // Ровно одна дополнительная попытка — никакого цикла.
+  expect(h.scripted.calls()).toBe(2);
+  const sent = await users(sid);
+  expect(sent.filter(m => m.info.role === "user")).toHaveLength(2);
+  expect(sent.filter(m => m.info.role === "user").at(-1)!.parts.map(p => p.text ?? "").join("")).toContain("Продолжи работу");
 });
 
 it("an individual recovered tool error is not a task failure", async () => {
@@ -117,12 +121,13 @@ it("a reasoning-only final stop after a tool is failed without replaying the too
   h.scripted.setResponses([
     fauxAssistantMessage([fauxToolCall("read", { path: "missing.txt" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([{ type: "thinking", thinking: "Now I will make the edits." }], { stopReason: "stop" }),
-    fauxAssistantMessage("must not be replayed"),
+    fauxAssistantMessage("готово, проверил"),
   ]);
   await h.command(promptCommand(h, "reasoning-final-1", sid, dir, "inspect and edit"));
-  expect((await h.waitReceipt("reasoning-final-1", ["completed", "failed", "rejected", "cancelled"]))).toMatchObject({ state: "failed", error: expect.stringContaining("не дала ответа") });
-  expect(h.scripted.calls()).toBe(2);
-  expect((await users(sid)).filter(m => m.info.role === "user")).toHaveLength(1);
+  // Продолжение доводит ход до ответа; инструмент и запрос пользователя не повторяются.
+  expect((await h.waitReceipt("reasoning-final-1", ["completed", "failed", "rejected", "cancelled"]))).toMatchObject({ state: "completed", error: null });
+  expect(h.scripted.calls()).toBe(3);
+  expect((await users(sid)).filter(m => m.info.role === "user")).toHaveLength(2);
   const outcome = await client.waitFor(e => e.event.type === "session.outcome");
-  expect(outcome.event.properties).toMatchObject({ state: "failed", reason: "no_answer", finish: "stop" });
+  expect(outcome.event.properties).toMatchObject({ state: "completed", reason: "answered", finish: "stop" });
 });
