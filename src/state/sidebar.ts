@@ -56,3 +56,12 @@ export function mergeSidebarSessions(
   return [...index.values()].filter((s) => !s.parentID)
     .sort((a, b) => b.time.updated - a.time.updated || a.id.localeCompare(b.id));
 }
+
+/** Sessions whose stored status still claims work: these are the only ones a
+ * reconciliation must re-check. `waiting` counts — it also draws a spinner. */
+export function activeStatusIds(statuses: Record<string, { type?: string } | undefined>,
+  directoryOf: (id: string) => string | undefined, directory: string): string[] {
+  return Object.entries(statuses)
+    .filter(([id, status]) => directoryOf(id) === directory && (status?.type === "busy" || status?.type === "retry" || status?.type === "waiting"))
+    .map(([id]) => id);
+}

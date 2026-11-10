@@ -63,7 +63,7 @@ import {
   type EngineId,
 } from "./engines";
 import { completionChime } from "../native/sound";
-import { emptySidebarList, emptyRecentList, mergeSidebarSessions } from "./sidebar";
+import { activeStatusIds, emptySidebarList, emptyRecentList, mergeSidebarSessions } from "./sidebar";
 import type {
   ModelInfo,
   PermissionRequest,
@@ -3749,6 +3749,7 @@ class Store {
     const finished = wasRunning && status.type === "idle";
     if (previous?.type === status.type && !running) return;
     if (running) this.clearUnread(id);
+    if (running || status.type === "waiting") this.ensureActivitySweep();
     this.mutate(s => ({ activityStatuses: { ...s.activityStatuses, [id]: status } }));
     const known = this.activitySessions.get(id) ?? this.state.sessions.find(x => x.id === id)
       ?? this.state.prefs.projectlessSessions?.find(x => x.id === id);
@@ -3845,10 +3846,24 @@ class Store {
     this.persistPrefs();
   }
 
+  /** A stale busy/waiting mark must clear even without a reconnect: while any
+   * session claims work, its status is re-checked against the runtime. */
+  private activitySweep?: ReturnType<typeof setInterval>;
+  private ensureActivitySweep(): void {
+    if (this.activitySweep) return;
+    this.activitySweep = setInterval(() => {
+      if (this.state.connection.phase !== "connected") return;
+      const claimed = Object.values(this.state.activityStatuses)
+        .some(status => status.type === "busy" || status.type === "retry" || status.type === "waiting");
+      if (!claimed) return;
+      void this.reconcileBackgroundActivity(this.backend, this.connectionGeneration);
+    }, 20_000);
+  }
+
   private async reconcileBackgroundActivity(backend: AgentBackend, generation: number) {
     const directories = new Set<string>();
     for (const [id, status] of Object.entries(this.state.activityStatuses))
-      if (status.type === "busy" || status.type === "retry") {
+      if (status.type === "busy" || status.type === "retry" || status.type === "waiting") {
         const dir = this.activityDirectories.get(id);
         if (dir) directories.add(dir);
       }
@@ -3856,10 +3871,8 @@ class Store {
       try {
         const statuses = await backend.sessionStatuses(dir);
         if (generation !== this.connectionGeneration || backend !== this.backend) return;
-        for (const [id, status] of Object.entries(this.state.activityStatuses))
-          if (this.activityDirectories.get(id) === dir &&
-              (status.type === "busy" || status.type === "retry"))
-            this.observeSessionStatus(id, statuses[id] ?? { type: "idle" }, dir);
+        for (const id of activeStatusIds(this.state.activityStatuses, (sessionID) => this.activityDirectories.get(sessionID), dir))
+          this.observeSessionStatus(id, statuses[id] ?? { type: "idle" }, dir);
       } catch { /* Keep prior state until a confirmed server status arrives. */ }
     }
   }
