@@ -43,6 +43,7 @@ import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualif
 import { SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
 import { SessionShards } from "../sessions/rehome.ts";
 import { staleRunningStatuses } from "../sessions/status-reset.ts";
+import { LessonStore } from "../store/lessons.ts";
 import { SessionRegistry } from "../sessions/registry.ts";
 import { recoverInterruptedTools } from "../sessions/worker.ts";
 import { AttachmentStore } from "../store/attachments.ts";
@@ -165,6 +166,7 @@ export class Runtime {
   readonly hub: HubLeases;
   /** Per-service FIFO witness for single-slot model engines (queue status text). */
   readonly modelSlots = new ModelSlotQueue();
+  readonly lessons: LessonStore;
   /** Verified imported config resolved into memory at startup; immutable until restart. */
   configProjection: ConfigProjection = ConfigProjection.none();
   /** Generation committed by importPiConfig in THIS process; active after restart. */
@@ -222,6 +224,7 @@ export class Runtime {
       archives: path.join(this.paths.legacy, "pi-cli"), staging: path.join(this.paths.staging, "pi-cli"), sessions: path.join(this.paths.sessions, SESSION_LAYOUT.piCli),
     });
     this.cutover = new CutoverJournal(this.db, this.attachments, this.queue, this.scheduler, (ref, model, signal) => this.cutoverTarget(ref, model, signal));
+    this.lessons = new LessonStore(this.db);
     this.shards = new SessionShards(this.db, this.catalog, this.paths);
     this.hub = new HubLeases(this.config.broker, this.db, (owner) => this.leaseActive(owner),
       (owner, status) => this.journal.append(this.catalog.get(owner)?.directory ?? null, owner, { type: "model.status", properties: { sessionID: owner, status } }, true),
@@ -457,6 +460,7 @@ export class Runtime {
           workshop: () => this.catalog.get(record.id)?.workshop ?? false,
         }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
           projectContext: directory => this.projectContext(directory),
+          lessons: this.lessons,
           registerPreparation: (key, prepare) => preparations.set(key, prepare),
           reportMcp: (servers, error) => {
             if (this.mcpReports.get(record.id)?.epoch !== epoch) return;

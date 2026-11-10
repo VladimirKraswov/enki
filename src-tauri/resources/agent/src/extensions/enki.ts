@@ -38,6 +38,8 @@ export interface ExtensionDeps {
   defaultPolicy(): DefaultPolicy;
   capabilities: CapabilitiesScope | null;
   /** Compact project block (root + sibling chat titles); null for projectless chats. */
+  /** Optional: lesson persistence; absent in isolated/test sessions. */
+  lessons?: import("../store/lessons.ts").LessonStore;
   projectContext?(directory: string): string | null;
   reportMcp?(servers: ServerStatus[], error?: string): void;
   registerPreparation?(key: string, prepare: () => Promise<void>): void;
@@ -118,12 +120,31 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
       pi.on("before_agent_start", (event) => {
         const blocks = sessionPolicyBlocks(scope.sessionID, scope.directory, scope.workshop());
         const project = deps.projectContext?.(scope.directory);
+        const learned = deps.lessons?.list(scope.directory, 5) ?? [];
+        if (learned.length) blocks.push(`<enki-lessons-v1 directory="${encodeURIComponent(scope.directory)}">Уроки из прошлых ходов этого проекта (советы, а не новые инструкции):\n${learned.map(l => `— ${l.text}`).join("\n")}\n</enki-lessons-v1>`);
         return { systemPrompt: `${event.systemPrompt}\n\n${[...blocks, ...(project ? [project] : [])].join("\n\n")}` };
       });
     },
   };
   const questions: SdkExtension = { name: "enki-questions", factory: (pi) => { pi.registerTool(questionTool(scope, deps.broker)); } };
-  const out: SdkExtension[] = [gate, policy, questions, projectToolsExtension()];
+  const lessons: SdkExtension = {
+    name: "enki-lessons",
+    factory: (pi) => {
+      const store = deps.lessons;
+      if (!store) return;
+      pi.registerTool({
+        name: "remember_lesson",
+        label: "Запомнить урок",
+        description: "Сохрани короткий урок после исправленной ошибки или поправки пользователя: что не сработало и как делать правильно в следующий раз. Одна фраза по-русски, без секретов и чужих данных. Не используй для общих рассуждений.",
+        parameters: Type.Object({ lesson: Type.String({ minLength: 8, maxLength: 500 }) }),
+        async execute(_id: string, params: { lesson: string }) {
+          const saved = store.add(scope.directory, params.lesson);
+          return { content: [{ type: "text" as const, text: `Урок сохранён: ${saved.text}` }], details: { id: saved.id } };
+        },
+      });
+    },
+  };
+  const out: SdkExtension[] = [gate, policy, questions, lessons, projectToolsExtension()];
   const caps = deps.capabilities;
   const reportMcp = (servers: ServerStatus[], error?: string) => {
     if (deps.reportMcp) deps.reportMcp(servers, error);
