@@ -17,11 +17,27 @@ function mount(messages:AssistantMessage[],active=false) {
  act(()=>root!.render(createElement(AssistantTurnView,{sessionId:'s',messages,active})));
 }
 const toggle=()=>document.querySelector<HTMLButtonElement>('.turn-progress-toggle')!;
+it('keeps a substantive answer visible when the model calls a tool afterwards',()=>{
+ // Сценарий владельца: развёрнутый разбор написан до последнего вызова bash,
+ // а на экране осталась только короткая финальная фраза.
+ const analysis='## Анализ\n\n'+('Подробное предложение по улучшению. '.repeat(20));
+ parts('a',[{text:analysis},{type:'tool',tool:'bash',state:{status:'completed',input:{command:'true'},output:'ok'}}]);
+ parts('b',[{text:'Жду вашего решения.'}]);
+ mount([message('a'),message('b','stop')]);
+ expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(false);
+ expect(document.body.textContent).toContain('Анализ');
+ expect(document.body.textContent).toContain('Подробное предложение по улучшению.');
+ expect(document.body.textContent).toContain('Жду вашего решения.');
+});
+
 it('renders a completed task with one final copy/footer and readable, expandable progress',async()=>{
  const clipboard=vi.fn().mockResolvedValue(undefined);Object.defineProperty(navigator,'clipboard',{value:{writeText:clipboard},configurable:true});
  parts('a',[{type:'reasoning',text:'Thinking privately'},{text:'Проверяю сборку'},{type:'tool',tool:'bash',state:{status:'completed',title:'npm test',input:{command:'npm test',description:'Проверка тестов'},output:'PASS',time:{start:100,end:101}}}]);
  parts('b',[{text:'## Готово\n\nТесты прошли.'}]);mount([message('a'),message('b','stop')]);
- expect(toggle().getAttribute('aria-expanded')).toBe('false');expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(true);
+ expect(toggle().getAttribute('aria-expanded')).toBe('false');
+ // Шаг, где ассистент написал текст, — это содержание, а не скрытый трейс.
+ expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(false);
+ expect(document.querySelector('.turn-step')?.textContent).toContain('Проверяю сборку');
  expect(document.querySelectorAll('.message-footer')).toHaveLength(1);expect(document.querySelectorAll('[aria-label="Копировать весь ответ"]')).toHaveLength(1);
  act(()=>toggle().click());expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(false);
  expect(document.querySelector('.tool .fold-head')?.textContent).toContain('Проверка тестов');expect(document.querySelector('.tool-duration')?.textContent).toBe('<0,1 с');
@@ -114,15 +130,15 @@ it('a live sent message offers "edit in a new branch"; a read-only archive does 
  expect(el.querySelector('[aria-label="Редактировать сообщение"]')).toBeNull();
 });
 it('does not parse or mount folded historical steps until opened, then preserves their local state',()=>{
- parts('a',[{text:'```js\nconst hidden = 1;\n```'}]);parts('b',[{text:'Final'}]);
+ // Ленивый монтаж проверяем на шаге без текста: такие шаги остаются свёрнутыми.
+ parts('a',[{type:'tool',tool:'bash',state:{status:'completed',input:{command:'npm test'},output:'```js\nconst hidden = 1;\n```'}}]);parts('b',[{text:'Final'}]);
  mount([message('a'),message('b','stop')]);
  expect(document.querySelector('.turn-step .md')).toBeNull();
+ expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(true);
  act(()=>toggle().click());
- expect(document.querySelector('.turn-step .code-block')).not.toBeNull();
- act(()=>(document.querySelector('[aria-label="Изменить копию кода"]') as HTMLButtonElement).click());
- const editor=document.querySelector('textarea');
+ expect(document.querySelector('.turn-step .tool')).not.toBeNull();
  act(()=>toggle().click());act(()=>toggle().click());
- expect(document.querySelector('textarea')).toBe(editor);
+ expect(document.querySelector('.turn-step .tool')).not.toBeNull();
 });
 it('does not serialize a large tool input while its card is closed',()=>{
  const serialize=vi.fn(()=>({command:'large data'}));

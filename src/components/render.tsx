@@ -312,10 +312,14 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
         const isFinal = hasFinal && m.id === last.id;
         // Message failures and output limits must remain visible even if the user folded progress.
         const problem = !!m.error || (!!m.finish && !['stop','end_turn','stop_sequence','tool-calls','tool_calls'].includes(m.finish));
-        const visible = isFinal || expanded || problem;
+        // A step where the assistant actually wrote an answer is content, not work
+        // trace: folding it away hides substantive replies merely because the model
+        // called one more tool afterwards.
+        const wroteAnswer = !m.summary && !!answerText(allParts.filter(pt => pt.messageID === m.id)).trim();
+        const visible = isFinal || expanded || problem || wroteAnswer;
         if (visible) visited.current.add(m.id);
         return <div key={m.id} id={`${regionId}-${m.id}`} data-message-id={m.id} className={isFinal ? `turn-answer${progress.length ? ' after-progress' : ''}` : 'turn-step'}
-          hidden={!isFinal && !expanded && !problem}>
+          hidden={!visible}>
           {(visible || visited.current.has(m.id)) && <AssistantMessageView sessionId={sessionId} message={m} active={active && !terminal} />}
         </div>;
       })}
