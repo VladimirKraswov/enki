@@ -4,11 +4,11 @@ import {createElement,act} from 'react';
 import {createRoot,type Root} from 'react-dom/client';
 import type {AssistantMessage,MessagePart} from '../src/api/types';
 const data=vi.hoisted(()=>({parts:{} as Record<string,MessagePart>,partsByMessage:{} as Record<string,string[]>,messageOrder:[] as string[],status:"busy",connected:true}));
-vi.mock('../src/state/store',()=>({useAppState:()=>({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed'}}),useAppSelector:(select:any)=>select({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed'}}),store:{isRunning:()=>true,activityStatus:()=>({type:data.status}),isPiSession:()=>false,isLegacySession:(id:string)=>id==='archive'}}));
+vi.mock('../src/state/store',()=>({useAppState:()=>({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed',streamDownSince:data.downSince ?? null}}),useAppSelector:(select:any)=>select({chat:{sessions:{s:data}},connection:{phase:'connected',streamState:data.connected?'open':'closed',streamDownSince:data.downSince ?? null}}),store:{isRunning:()=>true,activityStatus:()=>({type:data.status}),isPiSession:()=>false,isLegacySession:(id:string)=>id==='archive'}}));
 import {AssistantTurnView,UserMessageView} from '../src/components/render';
 import {MessageEdit} from '../src/components/MessageEdit';
 let root:Root|undefined;
-afterEach(()=>{if(root)act(()=>root!.unmount());root=undefined;document.body.innerHTML='';data.parts={};data.partsByMessage={};data.status='busy';data.connected=true;vi.unstubAllGlobals();});
+afterEach(()=>{if(root)act(()=>root!.unmount());root=undefined;document.body.innerHTML='';data.parts={};data.partsByMessage={};data.status='busy';data.connected=true;data.downSince=undefined;vi.unstubAllGlobals();});
 const message=(id:string,finish='tool-calls'):AssistantMessage=>({id,sessionID:'s',role:'assistant',parentID:'u',finish,time:{created:1000,completed:2000},modelID:'local',tokens:{output:10}});
 function parts(id:string,values:Partial<MessagePart>[]) {data.partsByMessage[id]=values.map((p,i)=>{const key=`${id}_${i}`;data.parts[key]={id:key,messageID:id,sessionID:'s',type:'text',...p};return key;});}
 function mount(messages:AssistantMessage[],active=false) {
@@ -77,12 +77,16 @@ it("historical unfinished tools do not claim execution when the server is idle",
  expect(document.body.textContent).toContain('выполнение не подтверждено сервером');
 });
 
-it('unfinished historical tools require both a busy server and live connection',()=>{
+it('unfinished historical tools need a busy server, and only a stalled stream withdraws confirmation',()=>{
  parts('a',[{type:'tool',tool:'bash',state:{status:'running'}}]);
  const unfinished={...message('a'),finish:undefined,time:{created:1000}};
  data.status='idle';mount([unfinished]);expect(document.querySelector('.tool-spinner')).toBeNull();
  expect(document.body.textContent).toContain('выполнение не подтверждено сервером');
- data.status='busy';data.connected=false;mount([{...unfinished}],true);expect(document.querySelector('.tool-spinner')).toBeNull();
+ // Короткое переподключение не отменяет подтверждение: инструмент ещё выполняется.
+ data.status='busy';data.connected=false;data.downSince=Date.now();mount([{...unfinished}],true);
+ expect(document.body.textContent).toContain('выполняется');
+ // Затяжной простой — честное «нет связи».
+ data.downSince=Date.now()-60_000;mount([{...unfinished}],true);expect(document.querySelector('.tool-spinner')).toBeNull();
  expect(document.body.textContent).toContain('статус не подтверждён: нет связи');
 });
 

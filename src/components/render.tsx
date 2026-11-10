@@ -1,3 +1,4 @@
+import { useStreamStalled } from "./useStreamStalled";
 import {turnImageResults} from "../images/results";
 import { imageReference } from '../../src-tauri/resources/agent/src/policy/image-reference';
 import { partsPresentation } from '../chat/presentation';
@@ -186,12 +187,21 @@ export function PartView({ part, evidence }: { part: MessagePart; evidence?: Exe
   }
 }
 
-function usePartsPresentation(sessionId: string, messageIds: readonly string[]) {
+/** Connection state through the same selector the rest of the render uses, so a
+ * short reconnect does not repaint tool statuses as unconfirmed. */
+function useConnectionStalled(): boolean {
+  const connection = useAppSelector(s => s.connection);
+  return useStreamStalled(connection.streamState, connection.streamDownSince);
+}
+
+function usePartsPresentation(sessionId: string, messageIds: readonly string[], stalled: boolean) {
   const select = useMemo(() => partsPresentation(sessionId, messageIds,
     () => store.activityStatus(sessionId)?.type,
     // The runtime event stream is the only live evidence that a tool still runs.
-    s => s.connection.phase === "connected" && s.connection.streamState === "open" && !s.connection.statusError,
-  ), [sessionId, messageIds]);
+    // A reconnect shorter than the grace period is not an outage: only a stalled
+    // stream may mark unfinished calls as unconfirmed.
+    s => s.connection.phase === "connected" && !s.connection.statusError && !stalled,
+  ), [sessionId, messageIds, stalled]);
   return useAppSelector(select);
 }
 
@@ -205,7 +215,8 @@ export const AssistantMessageView = memo(function AssistantMessageView({
   active?: boolean;
 }) {
   const ids = useMemo(() => [message.id], [message.id]);
-  const snapshot = usePartsPresentation(sessionId, ids);
+  const stalled = useConnectionStalled();
+  const snapshot = usePartsPresentation(sessionId, ids, stalled);
   const parts = visibleParts(snapshot.parts);
   const { status, connected } = snapshot;
   const terminal = !!message.time.completed && !["tool-calls", "tool_calls"].includes(message.finish ?? "");
@@ -254,7 +265,8 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
 }) {
   const regionId = useId();
   const ids = useMemo(() => messages.map(m => m.id), [messages]);
-  const snapshot = usePartsPresentation(sessionId, ids);
+  const stalled = useConnectionStalled();
+  const snapshot = usePartsPresentation(sessionId, ids, stalled);
   const visited = useRef(new Set<string>());
   const last = messages[messages.length - 1];
   const parts = snapshot.parts.filter(p => p.messageID === last.id);
@@ -335,7 +347,7 @@ function MessageAttachmentViewer({sessionId, initialKey, onClose}: {sessionId:st
 export function UserMessageView({ message }: { message: UserMessage }) {
   const [viewedFile,setViewedFile] = useState<string|null>(null);
   const ids = useMemo(() => [message.id], [message.id]);
-  const allParts = usePartsPresentation(message.sessionID, ids).parts;
+  const allParts = usePartsPresentation(message.sessionID, ids, useConnectionStalled()).parts;
   const parts = allParts.filter(
     (p) => p.type === "text" && !p.synthetic && !p.ignored,
   );
