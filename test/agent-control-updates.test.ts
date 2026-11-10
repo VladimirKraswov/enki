@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   running: false,
   installCalls: [] as boolean[],
+  checkCalls: 0,
   controller: {
     prepared: false,
     s: {
@@ -16,6 +17,7 @@ const h = vi.hoisted(() => ({
     snapshot() { return this.s; },
     async refresh() { return this.s.status; },
     async check() {
+      h.checkCalls++;
       this.s.release = { available: true, version: "2.0.99", kind: "source", binary: { state: "unavailable" } };
       this.s.status = { nativeVersion: "2.0.21", hot: { uiVersion: "2.0.21" }, build: { stage: null } };
     },
@@ -44,6 +46,7 @@ const { agentControlForTest } = await import("../src/control/bridge");
 const run = (action: string) => agentControlForTest.execute("updates", { action }) as Promise<Record<string, unknown>>;
 
 describe("desktop updates control", () => {
+
   it("reports an up-to-date snapshot before any release is checked", async () => {
     const status = await run("status");
     expect(status.available).toBe(false);
@@ -84,6 +87,14 @@ describe("desktop updates control", () => {
     const applied = await run("apply");
     expect(applied.applied).toBe(true);
     expect(h.installCalls.at(-1)).toBe(false);
+  });
+  it("prepare re-checks the Hub after a previous up-to-date answer", async () => {
+    h.controller.s.release = { available: false };
+    const before = h.checkCalls;
+    const result = await run("prepare");
+    expect(h.checkCalls).toBe(before + 1);
+    expect(result.available).toBe(true);
+    expect(result.version).toBe("2.0.99");
   });
   it("rejects an unknown action without touching the controller", async () => {
     await expect(agentControlForTest.execute("updates", { action: "wipe" })).rejects.toThrow(/status, prepare or apply/);

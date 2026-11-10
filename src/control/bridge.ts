@@ -688,7 +688,9 @@ async function updatesCommand(params: Params): Promise<unknown> {
   if (action === "status") return updatesSnapshot();
   const snap = () => updates.snapshot();
   if (action === "prepare") {
-    if (!snap().release) await updates.check();
+    // A previous 'up to date' answer is not a permanent state: prepare must
+    // re-check the Hub, otherwise an auto-apply never sees a later release.
+    if (!snap().release?.available) await updates.check();
     const release = snap().release;
     if (!release?.available) return updatesSnapshot();
     if (snap().busy) return updatesSnapshot();

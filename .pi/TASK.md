@@ -1,3 +1,15 @@
+# TASK — 2026-11-11: auto-apply prepare re-check / 2.0.63
+
+При применении 2.0.62 через штатный desktop_updates (MCP --agent-mcp, клиент
+.local/updates-mcp.mjs) prepare не делал повторный check после прежнего
+«Установлена актуальная версия»: релиз обнаруживался только плановой проверкой
+watchUpdateChecks (5 мин). Исправлено: prepare проверяет Hub всегда, когда
+release?.available !== true. Тест agent-control-updates: повторный prepare
+после available:false делает новый check и видит 2.0.99.
+UI 1298 PASS, ci-artifacts 1 fail (среда), build/arch/docs PASS.
+Далее: release 2.0.63, status до available 2.0.63, prepare до stage=ready,
+apply последним действием (прямое поручение владельца обновить приложение).
+
 # TASK — 2026-11-11: режим небольших локальных моделей / 2.0.62
 
 Поручение владельца: выполнить P0–P5 самостоятельно, проверить, выпустить и
