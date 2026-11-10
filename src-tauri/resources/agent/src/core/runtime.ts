@@ -43,7 +43,7 @@ import { assertPinnedSdk, createModelRuntime, findModel, isThinkingLevel, qualif
 import { SessionCatalog, type SessionRecord } from "../sessions/catalog.ts";
 import { SessionShards } from "../sessions/rehome.ts";
 import { staleRunningStatuses } from "../sessions/status-reset.ts";
-import { LessonStore } from "../store/lessons.ts";
+import { LessonStore, lessonFromOutcome } from "../store/lessons.ts";
 import { SessionRegistry } from "../sessions/registry.ts";
 import { recoverInterruptedTools } from "../sessions/worker.ts";
 import { AttachmentStore } from "../store/attachments.ts";
@@ -701,6 +701,13 @@ export class Runtime {
       },
       onSettled: (sessionID, outcome) => {
         this.queue.onSettled(sessionID, outcome.state === "failed" ? outcome.error : null);
+        // A confirmed failed outcome teaches even when the model never called
+        // remember_lesson: a static, deduplicated lesson for this directory.
+        if (outcome.state === "failed") {
+          const lesson = lessonFromOutcome(outcome);
+          const directory = this.catalog.get(sessionID)?.directory;
+          if (lesson && directory) this.lessons.addIfNew(directory, lesson);
+        }
         // Corrections are settled too: without this publish clients keep showing
         // "ждёт следующего шага" forever after the turn has actually finished.
         this.queue.notify(sessionID, this.catalog.get(sessionID)?.directory ?? null);

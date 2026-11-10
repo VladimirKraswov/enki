@@ -17,6 +17,16 @@ LaunchAgent перенесён на enki path, старый каталог уд�
 Следующее: полные release gates в изолированном worktree, Hub publish/receipt, штатная
 установка и проверка чтения конфигурации. SSH helper tunnel всё ещё не коннектится:
 `ssh pve` → unknown host; это отдельный endpoint, не причина двух-каталоговой ошибки.
+# TASK — 2026-11-09: автоматический урок при падении хода / 2.0.57
+
+Поручение: продолжать самоулучшение до готовности системы. Срез: урок пишется
+даже без вызова remember_lesson моделью. Сделано: lessonFromOutcome (только
+failed + known reason: no_answer/length/terminated/error; никаких сырых
+ошибок провайдера), LessonStore.addIfNew (дедуп по тексту), Runtime.onSettled
+при failed добавляет урок в каталог сессии. Тесты: lessons 4 PASS (маппинг,
+не-failed не учится, дедуп). Агент 467 PASS.
+Следующее: commit → release:local stable 2.0.57. Автоприменение не выполняю.
+
 # TASK — 2026-11-09: самоулучшение агента (уроки) / 2.0.56
 
 Поручение: агент должен учиться на ошибках и не повторять их, в духе Harness²,
