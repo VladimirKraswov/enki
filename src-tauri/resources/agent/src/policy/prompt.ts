@@ -8,6 +8,7 @@
 import { legacyToolWorkflowReminder, legacyV2ToolWorkflowReminder, toolWorkflowReminder } from "./toolWorkflow.ts";
 import { workQualityReminder } from "./workQuality.ts";
 import { workshopReminder, workshopVisibleText } from "./workshop.ts";
+import { compactToolWorkflowReminder, compactWorkQualityReminder, compactUserWaitReminder, compactScheduleReminder } from "./compact.ts";
 
 export const RESPONSE_LANGUAGE_CONTEXT = `Язык общения Enki: все сообщения пользователю, пояснения, вопросы, отчёты об ошибках и итоговые ответы пиши на русском языке. Не переходи на украинский язык вслед за историей, выводом инструментов или документами. Размышления допускаются на английском. Код, команды, пути и собственные имена сохраняй без перевода. Это правило языка, а не разрешение выполнять дополнительные действия.`;
 export const USER_WAIT_CONTEXT = `Ожидание пользователя и длительные операции: если для продолжения нужно действие или решение человека (подключить устройство, вставить карту, выбрать папку, разрешить доступ), сначала явно напиши, что именно требуется и почему работа без этого не может продолжаться, затем используй инструмент question и дождись ответа. Не скрывай ожидание человека в shell sleep, циклах проверки устройств или длинной команде. Если человек отменил часть работы, сразу учти это уточнение на следующем доступном шаге. Для долгой самостоятельной операции перед запуском кратко объясни, что сейчас выполняется, какой результат ожидается и приблизительное время, если оно известно. По промежуточным результатам сообщай о значимом прогрессе или препятствии; не выдавай отсутствие вывода за зависание или успех. Для явно порученного фонового наблюдения используй таймеры Enki, сохраняя текущий чат. Используй уже предоставленные разрешения; согласованные действия не требуют нового вопроса.`;
@@ -25,14 +26,16 @@ export const languageReminder = (sessionId: string) => `<arvela-response-languag
 
 export const steeringReminder = (sessionId: string) => `<arvela-steering-v1 session="${encodeURIComponent(sessionId)}">\nЭто уточнение текущего задания. Продолжай текущую работу и учти уточнение на следующем шаге. Не начинай независимое задание.\n</arvela-steering-v1>`;
 
-/** Blocks the runtime appends to the system prompt of every turn in a session. */
-export function sessionPolicyBlocks(sessionId: string, directory: string, workshop: boolean): string[] {
+/** Blocks the runtime appends to the system prompt of every turn in a session.
+ * Compact wording is for small local models; the language rule and the workshop
+ * contract stay full because shortening them changes behaviour. */
+export function sessionPolicyBlocks(sessionId: string, directory: string, workshop: boolean, compact = false): string[] {
   return [
     languageReminder(sessionId),
-    toolWorkflowReminder(sessionId),
-    workQualityReminder(sessionId),
-    userWaitReminder(sessionId),
-    scheduleReminder(sessionId, directory),
+    compact ? compactToolWorkflowReminder(sessionId) : toolWorkflowReminder(sessionId),
+    compact ? compactWorkQualityReminder(sessionId) : workQualityReminder(sessionId),
+    compact ? compactUserWaitReminder(sessionId) : userWaitReminder(sessionId),
+    compact ? compactScheduleReminder(sessionId, directory) : scheduleReminder(sessionId, directory),
     ...(workshop ? [workshopReminder(sessionId)] : []),
   ];
 }

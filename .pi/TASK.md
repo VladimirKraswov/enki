@@ -1,3 +1,24 @@
+# TASK — 2026-11-11: режим небольших локальных моделей / 2.0.62
+
+Поручение владельца: выполнить P0–P5 самостоятельно, проверить, выпустить и
+обновить приложение.
+P0: compactionBudget.triggerRatio; для провайдеров local-* по умолчанию 0.68
+(LOCAL_COMPACTION_TRIGGER_RATIO), явная настройка compaction.triggerRatio важнее.
+P1+P3: policy/compact.ts — короткие блоки workflow/quality/wait/schedules,
+обязательный план 2–4 пункта и проверка перед «готово»; язык и workshop полные.
+Выбор по ctx.model.provider в before_agent_start (ctx опционален для тестов).
+P2: policy/tool-output.ts + расширение enki-local-tool-output: bash/powershell
+head 4000 + tail 6000, границы строк, ссылка на fullOutputPath SDK.
+P4: уроки/навыки уже в 2.0.56–58, тесты проходят.
+P5: стенд scripts/evaluations существует; eval:check PASS. Задокументирован
+протокол до/после; стенд меряет ядро SDK без слоёв Enki — прирост качества на
+живых задачах НЕ измерен.
+Проверки: agent 483 PASS (включая integration/local-model-harness на реальном
+SDK: компактный промпт и head+tail у local-scripted, полный промпт у cloud),
+UI 1297 PASS, ci-artifacts 1 fail (среда rustc PATH), build/arch/docs/bundle PASS.
+Следующее: release:local stable 2.0.62, затем применение обновления по прямому
+поручению владельца (штатный desktop_updates в этой сессии недоступен).
+
 # TASK — 2026-11-10: скрытый содержательный ответ / 2.0.61
 
 Дефект (скриншот владельца): развёрнутый разбор написан до последнего bash,

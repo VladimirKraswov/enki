@@ -46,7 +46,7 @@ import { projectToolEnvironment } from "../platform/environment.ts";
 import { applyHeaders, type ConfigProjection } from "../models/config.ts";
 import { InferenceObserver, ModelSlotQueue, stableTools } from './inference-transport.ts';
 import type { InferenceProgress } from '../inference-progress.ts';
-import { compactionBudget } from '../context-budget.ts';
+import { compactionBudget, isLocalProvider, LOCAL_COMPACTION_TRIGGER_RATIO } from '../context-budget.ts';
 
 export type SdkSession = AgentSession;
 export type SdkSessionRuntime = AgentSessionRuntime;
@@ -176,7 +176,7 @@ export function qualifiedResourceSpec(input: ResourceSpec): ResourceSpec {
 }
 
 export interface SettingsSpec {
-  compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number };
+  compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number; triggerRatio?: number };
   retry?: { enabled?: boolean; maxRetries?: number; baseDelayMs?: number };
   /** Tests run without user/global settings files. */
   inMemory?: boolean;
@@ -331,7 +331,9 @@ export async function openAgentSession(options: OpenSessionOptions): Promise<Ope
     // model at every call (including tool continuations and model switches).
     const stream = created.session.agent.streamFunction;
     const applyBudget = (model: SdkModel) => {
-      const { reserveTokens, keepRecentTokens } = compactionBudget(model, compactionPolicy);
+      const triggerRatio = compactionPolicy?.triggerRatio
+        ?? (isLocalProvider(model.provider) ? LOCAL_COMPACTION_TRIGGER_RATIO : undefined);
+      const { reserveTokens, keepRecentTokens } = compactionBudget(model, { ...compactionPolicy, triggerRatio });
       settingsManager.applyOverrides({ compaction: { ...compactionPolicy, reserveTokens, keepRecentTokens } });
     };
     const applyPolicy = (policy: NonNullable<SettingsSpec['compaction']>) => {

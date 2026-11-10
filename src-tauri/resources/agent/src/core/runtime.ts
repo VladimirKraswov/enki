@@ -71,7 +71,7 @@ export interface RuntimeSettings {
    * (ResourceSpec is explicit), so the effective value is always true. */
   noDiscoveredExtensions: boolean;
   gitProgram: string | null;
-  compaction: { enabled: boolean; reserveTokens?: number; keepRecentTokens?: number };
+  compaction: { enabled: boolean; reserveTokens?: number; keepRecentTokens?: number; triggerRatio?: number };
   /** The managed browser is opt-in in Enki's settings; its tools load only when on. */
   browserEnabled: boolean;
   /** Persisted LSP switch: when off, the configured language servers are not loaded. */

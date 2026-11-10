@@ -24,6 +24,8 @@ import { sessionPolicyBlocks } from "../policy/prompt.ts";
 import type { PermissionRule } from "../protocol.ts";
 import type { SdkExtension } from "../sdk/adapter.ts";
 import type { EventJournal } from "../store/events.ts";
+import { isLocalProvider } from "../context-budget.ts";
+import { compactToolText } from "../policy/tool-output.ts";
 
 export interface SessionScope {
   sessionID: string;
@@ -120,8 +122,9 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
   const policy: SdkExtension = {
     name: "enki-turn-policy",
     factory: (pi) => {
-      pi.on("before_agent_start", (event) => {
-        const blocks = sessionPolicyBlocks(scope.sessionID, scope.directory, scope.workshop());
+      pi.on("before_agent_start", (event, ctx) => {
+        const compact = isLocalProvider(ctx?.model?.provider);
+        const blocks = sessionPolicyBlocks(scope.sessionID, scope.directory, scope.workshop(), compact);
         const project = deps.projectContext?.(scope.directory);
         const learned = deps.lessons?.list(scope.directory, 5) ?? [];
         if (learned.length) blocks.push(`<enki-lessons-v1 directory="${encodeURIComponent(scope.directory)}">Уроки из прошлых ходов этого проекта (советы, а не новые инструкции):\n${learned.map(l => `— ${l.text}`).join("\n")}\n</enki-lessons-v1>`);
@@ -168,7 +171,28 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
       });
     },
   };
-  const out: SdkExtension[] = [gate, policy, questions, lessons, learnedSkills, projectToolsExtension()];
+  // Local models get a bounded head+tail of long command output; cloud models
+  // keep the SDK's own truncation unchanged.
+  const toolOutput: SdkExtension = {
+    name: "enki-local-tool-output",
+    factory: (pi) => {
+      pi.on("tool_result", (event, ctx) => {
+        if (!isLocalProvider(ctx.model?.provider)) return;
+        if (event.toolName !== "bash" && event.toolName !== "powershell") return;
+        const full = (event.details as { fullOutputPath?: string } | undefined)?.fullOutputPath;
+        let changed = false;
+        const content = event.content.map(c => {
+          if (c.type !== "text") return c;
+          const next = compactToolText(c.text, full);
+          if (next === c.text) return c;
+          changed = true;
+          return { ...c, text: next };
+        });
+        return changed ? { content } : undefined;
+      });
+    },
+  };
+  const out: SdkExtension[] = [gate, policy, questions, lessons, learnedSkills, toolOutput, projectToolsExtension()];
   const caps = deps.capabilities;
   const reportMcp = (servers: ServerStatus[], error?: string) => {
     if (deps.reportMcp) deps.reportMcp(servers, error);
