@@ -4,6 +4,7 @@
 // ambient agentDir/project extension discovery off); nothing here loads the
 // owner's ~/.pi resources.
 
+import { saveLearnedSkill } from "../skills/learned.ts";
 import path from "node:path";
 import { Type, type Static } from "typebox";
 import { attachBrowser } from "../../../browser/pi-extension.ts";
@@ -40,6 +41,8 @@ export interface ExtensionDeps {
   /** Compact project block (root + sibling chat titles); null for projectless chats. */
   /** Optional: lesson persistence; absent in isolated/test sessions. */
   lessons?: import("../store/lessons.ts").LessonStore;
+  /** Root where learned skills (SKILL.md) are written and discovered from. */
+  learnedSkills?: string;
   projectContext?(directory: string): string | null;
   reportMcp?(servers: ServerStatus[], error?: string): void;
   registerPreparation?(key: string, prepare: () => Promise<void>): void;
@@ -144,7 +147,28 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
       });
     },
   };
-  const out: SdkExtension[] = [gate, policy, questions, lessons, projectToolsExtension()];
+  const learnedSkills: SdkExtension = {
+    name: "enki-learned-skills",
+    factory: (pi) => {
+      if (!deps.learnedSkills) return;
+      const root = deps.learnedSkills;
+      pi.registerTool({
+        name: "create_skill",
+        label: "Создать навык",
+        description: "После успешно решённой задачи сохрани переиспользуемый навык: краткую инструкцию, как делать такие задачи в будущем (что проверять, какие команды, какие ошибки обходить). Это текстовая подсказка (SKILL.md), не исполняемый код. Не сохраняй секреты и чужие данные.",
+        parameters: Type.Object({
+          name: Type.String({ minLength: 3, maxLength: 50, description: "slug навыка, например release-check" }),
+          description: Type.String({ minLength: 8, maxLength: 300, description: "Когда этот навык полезен" }),
+          content: Type.String({ minLength: 20, maxLength: 8000, description: "Содержимое SKILL.md без frontmatter" }),
+        }),
+        async execute(_id: string, params: { name: string; description: string; content: string }) {
+          const saved = saveLearnedSkill(root, params);
+          return { content: [{ type: "text" as const, text: `Навык «${saved.name}» сохранён и будет доступен в следующих ходах.` }], details: { path: saved.path } };
+        },
+      });
+    },
+  };
+  const out: SdkExtension[] = [gate, policy, questions, lessons, learnedSkills, projectToolsExtension()];
   const caps = deps.capabilities;
   const reportMcp = (servers: ServerStatus[], error?: string) => {
     if (deps.reportMcp) deps.reportMcp(servers, error);

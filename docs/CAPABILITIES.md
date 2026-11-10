@@ -120,3 +120,12 @@ Windows `%USERPROFILE%/.enki` (прежний `.opencode-desktop` читаетс
 
 Официальные материалы: [Pi skills](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md),
 [MCP roots](https://modelcontextprotocol.io/specification/2025-11-25/client/roots).
+
+## Навыки, созданные агентом
+
+После успешной задачи агент может сохранить метод как навык инструментом
+`create_skill`: это текстовый `SKILL.md` (frontmatter + инструкция), а не
+исполняемый код. Файл пишется в `~/.local/share/enki/data/skills/learned/<имя>/`
+и подключается к следующим ходам автоматически. Так сильная модель оставляет
+готовый способ, а слабая получает его без повторного изобретения. Имя
+нормализуется в slug, объём ограничен, секреты сохранять запрещено.

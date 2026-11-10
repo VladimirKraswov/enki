@@ -461,6 +461,7 @@ export class Runtime {
         }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
           projectContext: directory => this.projectContext(directory),
           lessons: this.lessons,
+          learnedSkills: path.join(this.paths.data, "skills", "learned"),
           registerPreparation: (key, prepare) => preparations.set(key, prepare),
           reportMcp: (servers, error) => {
             if (this.mcpReports.get(record.id)?.epoch !== epoch) return;
@@ -476,7 +477,7 @@ export class Runtime {
       extensionPaths: [...fromPackages("extensions"), ...settings.extensionPaths.filter((p) => fs.existsSync(p))],
       skillPaths: [...(caps?.skillPaths ?? []), ...(caps?.browser && caps.browserSkillPath ? [caps.browserSkillPath] : []),
         // Explicitly enabled computer use of THIS execution host (native gate re-checks every call).
-        ...(computerSkill ? [computerSkill] : []), ...fromPackages("skills"), ...(settings.skillPaths ?? []).filter((p) => fs.existsSync(p))],
+        ...(computerSkill ? [computerSkill] : []), path.join(this.paths.data, "skills", "learned"), ...fromPackages("skills"), ...(settings.skillPaths ?? []).filter((p) => fs.existsSync(p))],
       promptPaths: [...fromPackages("prompts"), ...(settings.promptPaths ?? []).filter((p) => fs.existsSync(p))],
       ...(packages.some((resolved) => resolved.themes.length) ? { themePaths: fromPackages("themes") } : {}),
       noDiscoveredExtensions: true,
