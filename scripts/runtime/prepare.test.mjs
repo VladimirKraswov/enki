@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { buildEnvironment, download, materializeBinLinks, normalizePtyHelpers, posixWrapper, pruneEmptyPackageDirectories, run, runtimeNodeEntitlements, verifyPackagedNodePty, verifyPackagedCompilers, windowsWrapper } from './prepare.mjs';
-import { buildManifest, MANIFEST, verifyArtifact } from './artifact.mjs';
+import { buildEnvironment, download, materializeBinLinks, normalizePtyHelpers, posixWrapper, pruneEmptyPackageDirectories, run, runnerBootstrapBase, runtimeNodeEntitlements, runtimeWorkRoot, stageForPromotion, verifyPackagedNodePty, verifyPackagedCompilers, windowsWrapper } from './prepare.mjs';
+import { buildManifest, MANIFEST, promote, verifyArtifact } from './artifact.mjs';
 const temporary = t => { const root = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'prepare-case-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; };
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -279,4 +279,59 @@ test('a short GitHub outage no longer aborts the whole build', async t => {
  const root=temporary(t), file=path.join(root,'rg.tar'), data=Buffer.from('verified'), url='https://primary.invalid/rg.tar';let calls=0;
  await download(url,file,hash(data),{retryDelayMs:0,fetcher:async()=>{calls++;if(calls<=5)return new Response('',{status:504});return new Response(data);}});
  assert.equal(calls,6);assert.deepEqual(fs.readFileSync(file),data);
+});
+test('Windows keeps the runner bootstrap and runtime work in short temp roots; other platforms are unchanged', t => {
+  assert.equal(runnerBootstrapBase('darwin', '/repo'), path.join('/repo', 'src-tauri', 'target', 'enki-build-runner'));
+  assert.equal(runnerBootstrapBase('linux', '/repo'), path.join('/repo', 'src-tauri', 'target', 'enki-build-runner'));
+  const windowsBase = runnerBootstrapBase('win32', 'C:\\deep\\update-runtime\\build-aa\\attempt-bb');
+  assert.ok(windowsBase.startsWith(path.resolve(os.tmpdir())), `runner bootstrap must use the temp root: ${windowsBase}`);
+  assert.ok(windowsBase.endsWith('enki-build-runner'), windowsBase);
+  assert.ok(windowsBase.length < 80, `runner bootstrap root must stay short: ${windowsBase}`);
+  assert.equal(runtimeWorkRoot('/owned', 'darwin'), '/owned');
+  const windowsWork = runtimeWorkRoot('C:\\deep\\owned', 'win32');
+  assert.ok(!windowsWork.startsWith('C:\\deep'), `Windows work must leave the deep profile tree: ${windowsWork}`);
+  assert.ok(fs.existsSync(windowsWork), 'the short temp root is created before mkdtemp');
+  t.after(() => fs.rmSync(windowsWork, { recursive: true, force: true }));
+});
+test('an externally built artifact is staged, re-verified and promoted only inside the owned root', t => {
+  const root = temporary(t), owned = path.join(root, 'owned'), work = path.join(root, 'temp-work', 'work-x'), artifact = path.join(work, 'artifact');
+  fs.mkdirSync(owned, { recursive: true });
+  const contents = {
+    'node/bin/node': Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+    'app/dist/main.js': Buffer.from('export const runtime = true;\n'),
+  };
+  for (const [relative, data] of Object.entries(contents)) {
+    const file = path.join(artifact, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data);
+  }
+  const manifest = buildManifest(artifact, { version: '0.85.1-0123', contract: 1, node: 'node/bin/node', entry: 'app/dist/main.js' });
+  fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest));
+  assert.deepEqual(verifyArtifact(artifact), []);
+  const staged = stageForPromotion(owned, artifact);
+  assert.equal(path.relative(owned, staged).startsWith('..'), false, 'staging is inside the owned artifact root');
+  assert.equal(fs.existsSync(artifact), false, 'the same-volume move consumed the temp artifact');
+  assert.deepEqual(verifyArtifact(staged), []);
+  const current = promote(owned, staged);
+  assert.deepEqual(verifyArtifact(current), []);
+  assert.equal(fs.readFileSync(path.join(current, 'app/dist/main.js'), 'utf8'), 'export const runtime = true;\n');
+  // A verified artifact already inside owned needs no staging hop at all.
+  assert.equal(stageForPromotion(owned, current), current);
+});
+test('the staging handoff copies on cross-volume moves and refuses changed bytes without touching current', t => {
+  const root = temporary(t), owned = path.join(root, 'owned'), artifact = path.join(root, 'other-volume', 'artifact');
+  fs.mkdirSync(owned, { recursive: true });
+  const contents = { 'node/bin/node': Buffer.from([0x7f, 0x45, 0x4c, 0x46]), 'app/dist/main.js': Buffer.from('export const runtime = true;\n') };
+  for (const [relative, data] of Object.entries(contents)) {
+    const file = path.join(artifact, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data);
+  }
+  const manifest = buildManifest(artifact, { version: '0.85.1-0123', contract: 1, node: 'node/bin/node', entry: 'app/dist/main.js' });
+  fs.writeFileSync(path.join(artifact, MANIFEST), JSON.stringify(manifest));
+  const staged = stageForPromotion(owned, artifact, { forceCopy: true });
+  assert.ok(fs.existsSync(path.join(artifact, MANIFEST)), 'the copy path never deletes its source');
+  assert.deepEqual(verifyArtifact(staged), []);
+  promote(owned, staged);
+  // A second, tampered build fails verification AFTER promotion: current stays.
+  fs.writeFileSync(path.join(artifact, 'app/dist/main.js'), 'export const runtime = false;\n');
+  assert.throws(() => stageForPromotion(owned, artifact, { forceCopy: true }), /Staged artifact differs/);
+  assert.deepEqual(fs.readdirSync(owned).sort(), ['.runtime-artifact-lease.sqlite', 'current'].sort());
+  assert.deepEqual(verifyArtifact(path.join(owned, 'current')), []);
 });

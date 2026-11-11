@@ -232,7 +232,7 @@ impl Build {
                 .args(args)
                 .current_dir(&directory)
                 .env("PATH", &tools.path)
-                .env("CARGO_TARGET_DIR", directory.join("src-tauri/target"))
+                .env("CARGO_TARGET_DIR", native_target_dir(digest, &directory))
                 .env(
                     "CARGO_BUILD_JOBS",
                     build_jobs(std::env::var("CARGO_BUILD_JOBS").ok().as_deref()),
@@ -260,7 +260,7 @@ impl Build {
                 format!("{phase}: {error}")
             })?;
         }
-        let artifact = artifact(&directory)?;
+        let artifact = artifact(&native_target_dir(digest, &directory))?;
         let plan = Plan::create(&artifact, &v.packet.version)?;
         super::atomic(&directory.join("install-plan.json"), &plan)?;
         Ok(plan)
@@ -346,6 +346,22 @@ impl Build {
                 fs::remove_dir_all(p).map_err(|e| e.to_string())?;
             }
         }
+        // The short Windows cargo cache lives outside the builds root; it is
+        // named after the same digest and belongs to the builds being cleared.
+        #[cfg(windows)]
+        if let Ok(entries) = fs::read_dir(std::env::temp_dir()) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.file_name().is_some_and(|n| {
+                    n.to_string_lossy()
+                        .strip_prefix("enki-native-target-")
+                        .is_some_and(packet::hash_ok)
+                }) && !p.is_symlink()
+                {
+                    let _ = fs::remove_dir_all(p);
+                }
+            }
+        }
         *self.prepared.lock().map_err(|e| e.to_string())? = None;
         self.set(json!({"stage":"idle"}));
         Ok(())
@@ -416,22 +432,26 @@ fn failure_detail(log: &Path) -> String {
     let read = || -> std::io::Result<String> {
         let mut file = fs::File::open(log)?;
         let length = file.metadata()?.len();
-        file.seek(SeekFrom::Start(length.saturating_sub(8192)))?;
+        file.seek(SeekFrom::Start(length.saturating_sub(16 * 1024)))?;
         let mut bytes = Vec::new();
-        file.take(8192).read_to_end(&mut bytes)?;
+        file.take(16 * 1024).read_to_end(&mut bytes)?;
         let text = String::from_utf8_lossy(&bytes);
-        Ok(text
+        // The most recent decisive lines, not just the last one: a Windows
+        // LNK1104 names the exact path that could not be opened, and the
+        // surrounding `error: could not compile` line alone hides the cause
+        // (the UI previously showed only the exit code).
+        let decisive: Vec<&str> = text
             .lines()
             .rev()
-            .find(|line| {
+            .filter(|line| {
                 line.starts_with("runtime:prepare:")
                     || line.starts_with("npm error code ")
                     || line.starts_with("error: ")
+                    || line.contains("fatal error LNK")
             })
-            .unwrap_or("")
-            .chars()
-            .take(500)
-            .collect())
+            .take(3)
+            .collect();
+        Ok(decisive.join(" | ").chars().take(900).collect())
     };
     read().unwrap_or_default()
 }
@@ -447,6 +467,20 @@ fn attempt_name() -> Result<String, String> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     ))
+}
+/// Cargo compilation cache location. On Windows the linker (LNK1104) cannot
+/// open files under the deep per-profile update-runtime path, so the cache
+/// lives in a short temp directory instead; cleanup removes it with the builds.
+fn native_target_dir(digest: &str, attempt: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::temp_dir().join(format!("enki-native-target-{digest}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = digest;
+        attempt.join("src-tauri/target")
+    }
 }
 fn fresh_attempt(root: &Path, digest: &str) -> Result<PathBuf, String> {
     if !packet::hash_ok(digest) {
@@ -551,8 +585,8 @@ fn platform_args() -> Vec<&'static str> {
         },
     ];
 }
-fn artifact(dir: &Path) -> Result<PathBuf, String> {
-    let root = dir.join("src-tauri/target/release/bundle");
+fn artifact(target: &Path) -> Result<PathBuf, String> {
+    let root = target.join("release/bundle");
     #[cfg(target_os = "macos")]
     {
         let candidates: Vec<_> = ["macos/Enki.app", "macos/Arvela.app"]
@@ -743,6 +777,14 @@ mod tests {
         )
         .unwrap();
         assert!(failure_detail(&previous.join("build.log")).contains("nodejs.org"));
+        fs::write(
+            previous.join("build.log"),
+            "LINK : fatal error LNK1104: не удается открыть файл C:\\users\\.enki\\update-runtime\\build-aa\\attempt-bb\\src-tauri\\target\\enki-build-runner\\enki-build-runner-abc\\target\\release\\build\\quote-1\\build_script_build-1.exe\nerror: could not compile `quote` (build script) due to 1 previous error\nerror: could not compile `proc-macro2` (build script) due to 1 previous error\n",
+        )
+        .unwrap();
+        let detail = failure_detail(&previous.join("build.log"));
+        assert!(detail.contains("LNK1104"), "{detail}");
+        assert!(detail.contains("proc-macro2"), "{detail}");
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -762,6 +804,23 @@ mod tests {
     #[test]
     fn status_is_renderable_before_any_build() {
         assert_eq!(Build::default().status()["stage"], "idle");
+    }
+    #[test]
+    fn cargo_target_stays_deep_off_windows_and_short_on_windows() {
+        let attempt = Path::new("/owner/.enki/data/enki/update-runtime/build-aa/attempt-bb");
+        let digest = "a".repeat(64);
+        let target = native_target_dir(&digest, attempt);
+        #[cfg(not(windows))]
+        assert_eq!(target, attempt.join("src-tauri/target"));
+        #[cfg(windows)]
+        {
+            assert!(target.starts_with(std::env::temp_dir()));
+            assert!(target
+                .to_string_lossy()
+                .contains(&format!("enki-native-target-{digest}")));
+            let extra = target.join("release\\build\\proc-macro2-a070229bbcccb0a0\\build_script_build-a070229bbcccb0a0.exe");
+            assert!(extra.to_string_lossy().len() < 240, "{}", extra.display());
+        }
     }
     #[test]
     fn cargo_build_is_locked_and_noninteractive() {

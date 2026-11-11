@@ -1,3 +1,31 @@
+# TASK — 2026-11-12: Windows long-path build failure / 2.0.65
+
+Отчёт владельца: кнопка «Собрать на этом компьютере» на Windows падала с
+LNK1104 — ссылщик не открывает build_script_build .exe под глубоким путём
+update-runtime\build-<sha>\attempt-<id>\... (262+ символов > MAX_PATH).
+Изменено (по доказанному владельцем рецепту + сверх него):
+1) scripts/runtime/prepare.mjs: на Windows bootstrap доверенного runner
+   компилируется в %TEMP%\enki-build-runner, рабочее дерево runtime — в
+   %TEMP%\enki-runtime-build\work-*; Unix без изменений.
+2) stageForPromotion(): внешний артефакт переносится (rename того же тома)
+   или копируется и ПОВТОРНО проверяется verifyArtifact в приватный staged-
+   каталог внутриowned-корня, затем штатный журналированный promote();
+   отказ не трогает current/previous. promote() по-прежнему принимает только
+   потомка artifact root.
+3) build.rs: CARGO_TARGET_DIR основного компилята на Windows — короткий
+   %TEMP%\enki-native-target-<digest> (шарится между попытками одного digest
+   для кэша зависимостей), artifact() ищет пакет там же; Build::clear()
+   чистит эти папки. Офф-Windows поведение не изменилось.
+4) failure_detail: в сообщение об ошибке попадают до 3 последних решающих
+   строк (runtime:prepare:, npm error, error:, fatal error LNK) вместо одной
+   — LNK1104 с путём виден в UI, не только Some(1); полный журнал — build.log.
+Тесты: runtime-artifact 106 PASS (новые: выбор коротких roots по платформам,
+внешний staged promote, copy-on-cross-volume + отказ при изменённых байтах),
+Rust 296 PASS, clippy -D warnings и fmt чистые, UI 1300 PASS (ci-artifacts
+падает только без ~/.cargo/bin в PATH — окружение, не продукт).
+Не покрыто живым Windows-прогоном из этой среды: фактическая сборка кнопкой в
+стандартном профиле Windows подтверждается только на машине владельца.
+
 # TASK — 2026-11-12: compaction when the model is out of quota / 2.0.64
 
 Сценарий владельца: платная модель 1M исчерпала лимит (429), переключение в

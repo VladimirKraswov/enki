@@ -2,6 +2,7 @@
 // Trusted build helper. Imports do not start a download, build or SDK.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -317,6 +318,59 @@ if(e.name==='esbuild'&&fs.existsSync(path.join(f,'package.json'))){const compile
 scan(path.join(process.cwd(),'node_modules'));if(!count)throw Error('Packaged extension compiler is missing');`;
   await run(path.join(artifact, ...nodeRelative.split('/')), ['--input-type=module', '-e', probe], { cwd: path.join(artifact, 'app'), env, signal, capture: true, timeoutMs: 30_000 });
 }
+/** Windows: the Windows linker opens every build-script .exe/PDB by absolute
+ * path and fails with LNK1104 beyond MAX_PATH on deep profile trees (the
+ * device update flow extracts sources under ...
+ * update-runtime\build-<sha>\attempt-<id>\...). Compiling the runner and the
+ * runtime into a short per-user temp root keeps those paths openable; the
+ * verification and journaled promotion still run inside the owned artifact
+ * root, so nothing trusted is accepted from the temp tree. Unix is unchanged. */
+export function runnerBootstrapBase(platform = process.platform, repo = REPO) {
+  return platform === 'win32' ? path.join(os.tmpdir(), 'enki-build-runner') : path.join(repo, 'src-tauri', 'target', 'enki-build-runner');
+}
+export function runtimeWorkRoot(owned, platform = process.platform) {
+  if (platform !== 'win32') return owned;
+  const root = path.join(os.tmpdir(), 'enki-runtime-build');
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  return root;
+}
+/** promote() intentionally accepts only a staging descendant of the artifact
+ * root. When the verified build finished in the short Windows temp root, move
+ * (same volume) or byte-copy and RE-verify it into a private staging directory
+ * inside owned before invoking the existing journaled promotion; a failure
+ * removes only the fresh staging copy and leaves current/previous untouched. */
+export function stageForPromotion(owned, artifact, { forceCopy = false } = {}) {
+  const relative = path.relative(owned, artifact);
+  if (!relative.startsWith('..') && !path.isAbsolute(relative)) return artifact;
+  const staged = path.join(owned, `staged-${crypto.randomUUID()}`);
+  try {
+    try {
+      if (forceCopy) throw Object.assign(new Error('copy requested'), { code: 'EXDEV' });
+      fs.renameSync(artifact, staged);
+    } catch (error) {
+      if (error.code !== 'EXDEV' && error.code !== 'EPERM') throw error;
+      copyAll(artifact, staged);
+    }
+    const errors = verifyArtifact(staged);
+    if (errors.length) throw new Error(`Staged artifact differs from the verified build: ${errors.slice(0, 5).join('; ')}`);
+    return staged;
+  } catch (error) {
+    fs.rmSync(staged, { recursive: true, force: true });
+    throw error;
+  }
+}
+/** Full-tree copy for the verified handoff: unlike copyTree there is no SKIP
+ * set (the artifact IS the inventory), links and special files are refused. */
+function copyAll(from, to) {
+  fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name), target = path.join(to, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`Prepared artifact contains a link: ${source}`);
+    if (entry.isDirectory()) copyAll(source, target);
+    else if (entry.isFile()) { fs.copyFileSync(source, target); fs.chmodSync(target, fs.lstatSync(source).mode & 0o777); }
+    else throw new Error('Prepared artifact contains a special file');
+  }
+}
 /** Windows: compile the native runner from THIS authenticated source into a
  * fresh private directory, then bind it for jobs and durable directory flushes
  * before any artifact recovery may rename directories. An older installed Enki
@@ -324,7 +378,7 @@ scan(path.join(process.cwd(),'node_modules'));if(!count)throw Error('Packaged ex
  * explicit failure; there is no fallback. Returns a release function. */
 async function configureNativePort(repo, signal) {
   if (process.platform !== 'win32') return () => {};
-  const identity = await bootstrapRunner({ repo, base: path.join(repo, 'src-tauri', 'target', 'enki-build-runner'), signal });
+  const identity = await bootstrapRunner({ repo, base: runnerBootstrapBase(), signal });
   windowsRunner = identity; setDirectoryFlushPort(trustedRunner(identity));
   return () => { setDirectoryFlushPort(undefined); windowsRunner = undefined; discardRunner(identity); };
 }
@@ -390,7 +444,7 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
   const inputs = preparationDigest(repo, { platform, remote, signingIdentity });
   const out = path.join(repo, 'src-tauri/target/enki-agent'); fs.mkdirSync(out, { recursive: true, mode: 0o700 });
   const owned = physical(out); recoverArtifacts(owned); const cache = path.join(owned, 'cache'); fs.mkdirSync(cache, { recursive: true, mode: 0o700 });
-  const work = fs.mkdtempSync(path.join(owned, 'work-'));
+  const work = fs.mkdtempSync(path.join(runtimeWorkRoot(owned, platform), 'work-'));
   try {
     const archive = path.join(cache, pin.file); await download(new URL(pin.file, lock.node.source).href, archive, pin.sha256, { signal });
     const nodeHome = await extract(archive, path.join(work, 'node-extract'), buildEnvironment(path.dirname(process.execPath), work), signal);
@@ -429,7 +483,7 @@ async function prepareWithPort({ platform, remote, repo, signal, signingIdentity
       await run(tool(['/usr/bin/tar', '/bin/tar']), ['--owner=0', '--group=0', '--numeric-owner', '--sort=name', '--mtime=@0', '-czf', tarball, '-C', work, 'artifact'], { env, signal });
       fs.writeFileSync(tarball + '.sha256', `${sha256File(tarball)}  ${path.basename(tarball)}\n`);
     }
-    const current = promote(owned, artifact);
+    const current = promote(owned, stageForPromotion(owned, artifact));
     // Written only after a verified promotion and bound to its manifest bytes; a
     // crash before this line, a rollback or a later promotion invalidates reuse.
     writeReceipt(owned, { schema: 1, platform, remote: remote === true, signingIdentity, inputs, version, manifestSha256: sha256File(path.join(current, MANIFEST)) });
