@@ -1,3 +1,17 @@
+# TASK — 2026-11-12: mobile-first Remote UI / 2.0.68
+
+По отзыву владельца заменена трёхпанельная страница `/remote` на мобильный
+single-column UI: компьютер в topbar, текущая сессия, чат и закреплённый composer.
+Выбор сессии — bottom sheet с поиском по названию/проекту, фильтрами Все/
+Работают/Ждут ответа/Мастерская, статусами и датами. Touch targets ≥44px,
+safe-area, 16px controls против iOS zoom, растущий textarea, backdrop close.
+Модели: доступные только при настроенном провайдере и access.state=available;
+unknown/unavailable/unconfigured полностью скрыты и в настройках тоже.
+Живая проверка fixture в браузере: основной экран, sheet, поиск без совпадений,
+prompt; отдельный isolated mobile viewport 390×844 (main+sessions screenshots
+в .local); после добавления unavailable/unknown/off моделей selector содержит
+только доступную Qwen. Hub 134 PASS; обновлённые статические файлы установлены
+на CT206. Runtime/протокол не менялись. Релиз для канонической доставки исходников.
 # TASK — 2026-11-12: LAN Remote Control + remote updates / 2.0.67
 
 Страница Hub `/remote`: все активные сессии всех устройств, включая Мастерскую

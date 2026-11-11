@@ -3,66 +3,82 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#101412">
+  <meta name="theme-color" content="#101512">
   <title>Enki — управление</title>
   <link rel="stylesheet" href="/remote.css">
 </head>
 <body>
   <header class="topbar">
-    <button id="menu" class="icon mobile" aria-label="Устройства">☰</button>
-    <div><strong>Enki</strong><span class="subtitle">локальная сеть</span></div>
-    <span id="connection" class="pill">Подключение…</span>
-    <button class="icon" data-action="settings" aria-label="Модели, настройки и обновления">⚙</button>
+    <div class="brand">Enki <span>Remote</span></div>
+    <select id="device-select" aria-label="Компьютер"></select>
+    <span id="connection" class="connection" title="Связь с Hub"></span>
+    <button class="icon" data-action="settings" aria-label="Настройки и обновления">⚙</button>
   </header>
-  <div class="layout">
-    <aside id="sidebar" class="sidebar">
-      <div class="section-title">Устройства</div>
-      <div id="devices"></div>
-      <button class="secondary wide" data-action="reload">Обновить</button>
-      <a class="hub-link" href="/console">Консоль Hub</a>
-    </aside>
-    <aside class="sessions-panel">
-      <div class="panel-head"><span>Сессии</span><button class="icon" data-action="new" title="Новое задание">＋</button></div>
-      <div id="sessions"></div>
-    </aside>
-    <main class="main">
-      <div id="empty" class="empty"><h1>Управление Enki</h1><p>Выберите компьютер и сессию.</p><button class="primary" data-action="new">Новое задание</button></div>
-      <div id="work" hidden>
-        <div class="session-head">
-          <div class="session-heading"><strong id="session-title"></strong><small id="session-path"></small></div>
-          <span id="session-status" class="pill"></span>
-          <button class="secondary compact" data-action="settings" title="Модели и настройки">⚙</button>
-        </div>
-        <div id="alerts"></div>
-        <div id="messages" class="messages"></div>
-        <div id="queue" class="queue"></div>
-        <form id="composer" class="composer">
-          <select id="model" aria-label="Модель"></select>
-          <textarea id="prompt" rows="3" placeholder="Задание или уточнение…"></textarea>
-          <div class="composer-actions">
-            <button id="dictate" type="button" class="secondary">🎙 Надиктовать</button>
-            <span id="dictation-status" class="muted"></span>
-            <button type="button" class="secondary" data-action="stop">Остановить</button>
-            <button type="submit" class="primary">Отправить</button>
-          </div>
-        </form>
-      </div>
-    </main>
-  </div>
 
-  <dialog id="new-dialog">
+  <main class="app">
+    <section class="session-bar">
+      <button id="session-picker" class="session-picker" data-action="sessions">
+        <span class="picker-eyebrow">Сессия</span>
+        <strong id="session-title">Выбрать сессию</strong>
+        <small id="session-path"></small>
+      </button>
+      <span id="session-status" class="status"></span>
+      <button class="new-button" data-action="new" aria-label="Новое задание">＋</button>
+    </section>
+
+    <div id="alerts" class="alerts"></div>
+    <div id="messages" class="messages">
+      <div id="empty" class="empty">
+        <div class="empty-mark">⌁</div>
+        <h1>Выберите сессию</h1>
+        <p>Или начните новое задание на любом компьютере.</p>
+        <button class="primary" data-action="new">Новое задание</button>
+      </div>
+    </div>
+    <div id="queue" class="queue"></div>
+
+    <form id="composer" class="composer" hidden>
+      <div class="composer-box">
+        <textarea id="prompt" rows="2" placeholder="Задание или уточнение…"></textarea>
+        <div class="composer-tools">
+          <select id="model" aria-label="Модель"></select>
+          <button id="dictate" type="button" class="tool-button" aria-label="Надиктовать">🎙</button>
+          <button type="button" class="tool-button stop-button" data-action="stop">Стоп</button>
+          <button type="submit" class="send-button" aria-label="Отправить">↑</button>
+        </div>
+      </div>
+      <div id="dictation-status" class="dictation-status"></div>
+    </form>
+  </main>
+
+  <dialog id="sessions-dialog" class="sheet">
+    <div class="sheet-head">
+      <h2>Сессии</h2>
+      <button class="icon" data-action="close-sessions" aria-label="Закрыть">×</button>
+    </div>
+    <input id="session-search" class="search" type="search" placeholder="Название или проект…" autocomplete="off">
+    <div class="filters">
+      <button class="filter selected" data-filter="all">Все</button>
+      <button class="filter" data-filter="busy">Работают</button>
+      <button class="filter" data-filter="attention">Ждут ответа</button>
+      <button class="filter" data-filter="workshop">Мастерская</button>
+    </div>
+    <div id="session-results" class="session-results"></div>
+  </dialog>
+
+  <dialog id="new-dialog" class="sheet small-sheet">
     <form id="new-form">
-      <h2>Новое задание</h2>
+      <div class="sheet-head"><h2>Новое задание</h2><button type="button" class="icon" data-action="close-new">×</button></div>
       <label>Компьютер<select id="new-device"></select></label>
       <label>Проект<select id="new-project"></select></label>
       <label>Модель<select id="new-model"></select></label>
-      <label>Задание<textarea id="new-prompt" rows="5" required></textarea></label>
-      <div class="dialog-actions"><button type="button" class="secondary" data-action="close-new">Отмена</button><button class="primary" type="submit">Создать и отправить</button></div>
+      <label>Задание<textarea id="new-prompt" rows="5" required placeholder="Что нужно сделать?"></textarea></label>
+      <button class="primary wide" type="submit">Создать и отправить</button>
     </form>
   </dialog>
 
-  <dialog id="settings-dialog" class="settings-dialog">
-    <div class="dialog-head"><h2>Модели и настройки</h2><button class="icon" data-action="close-settings">×</button></div>
+  <dialog id="settings-dialog" class="sheet settings-sheet">
+    <div class="sheet-head"><h2>Настройки</h2><button class="icon" data-action="close-settings">×</button></div>
     <div id="settings-content"></div>
   </dialog>
   <div id="toast" role="status"></div>
