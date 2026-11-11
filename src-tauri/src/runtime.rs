@@ -548,6 +548,12 @@ fn command(artifact: &Artifact) -> Result<Command, String> {
 // credential and are no longer served; legacy `pi-provider:` entries remain
 // readable (revision 0) through vault.credentialRead.
 fn broker(app: &tauri::AppHandle, method: &str, params: &Value) -> Result<Value, String> {
+    if method == "updates.control" {
+        let action = params["action"]
+            .as_str()
+            .ok_or("Не указано действие обновления")?;
+        return crate::hub_updates::remote_control(app, action);
+    }
     if crate::runtime_ui::relayable(method) {
         return crate::runtime_ui::broker(app, method, params);
     }
@@ -1627,7 +1633,8 @@ pub async fn runtime_broker_relay(
 }
 
 fn relayable(method: &str) -> bool {
-    matches!(method, "hub.identity" | "hub.request") || crate::runtime_ui::relayable(method)
+    matches!(method, "hub.identity" | "hub.request" | "updates.control")
+        || crate::runtime_ui::relayable(method)
 }
 
 /// Periodic token rotation while the app runs.

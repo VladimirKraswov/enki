@@ -1,3 +1,20 @@
+# TASK — 2026-11-12: LAN Remote Control + remote updates / 2.0.67
+
+Страница Hub `/remote`: все активные сессии всех устройств, включая Мастерскую
+(badge); live история/инструменты, промпт/диктовка GigaAM, stop, вопросы и
+разрешения, новая сессия+первый промпт, модели/настройки. Обновления на устройстве:
+check, prepare (source→build, hot→download), apply (source→install, hot→activate).
+Apply планируется после ответа broker (750мс), поэтому собственный permit не
+блокирует idle; далее штатные maintenance/idle/backup/signature/installer.
+Никаких аккаунтов/регистрации/токенов Hub по прямому поручению; LAN subnet gate,
+HTTPS certificate и подписи пакетов остаются. Hub только relay, не agent loop.
+2.0.66 был опубликован до уточнения, но не применялся; 2.0.67 его заменяет.
+Проверки предыдущего среза: agent492/UI1300/Hub134/runtime106/releases30 PASS,
+build/arch/docs/bundle PASS. Новые update transport интеграционно PASS; Rust
+remote operation mapping PASS; clippy/fmt PASS. Живой Hub и ASR HTTP200;
+браузерный fixture + стабильные клики + prompt queue PASS. После релиза —
+реальный Mac/Мастерская и применение; телефонный микрофон отдельно владельцем.
+
 # TASK — 2026-11-12: LAN Remote Control / 2.0.66
 
 По поручению владельца реализована страница Hub `/remote` без входа,

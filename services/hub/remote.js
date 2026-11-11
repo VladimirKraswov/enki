@@ -72,13 +72,14 @@ function renderDevices() {
   if (!state.devices.length) root.append(el('p', 'muted', 'Пока нет подключённых устройств.'));
 }
 function renderSessions() {
-  const signature = JSON.stringify([state.device,state.session,(state.overview?.sessions || []).map(x => [x.id,x.title,x.directory,statusFor(x.id)])]);
+  const signature = JSON.stringify([state.device,state.session,(state.overview?.sessions || []).map(x => [x.id,x.title,x.directory,x.workshop,statusFor(x.id)])]);
   if (state.signatures.sessions === signature) return; state.signatures.sessions = signature;
   const root = $('sessions'); root.replaceChildren();
   for (const session of state.overview?.sessions || []) {
     const item = el('button', 'session-item' + (session.id === state.session ? ' selected' : ''));
     const status = statusFor(session.id);
     const head = el('div', 'session-title-line'); head.append(el('span', '', session.title || 'Новый чат'));
+    if (session.workshop) head.append(el('span', 'badge', 'Мастерская'));
     if (status !== 'idle') head.append(el('span', 'badge', statusLabel(status)));
     item.append(head, el('small', '', session.directory));
     item.addEventListener('click', () => selectSession(session.id)); root.append(item);
@@ -229,7 +230,7 @@ $('new-form').addEventListener('submit', async event => {
 function renderSettings() {
   if (!$('settings-dialog').open) return;
   const settings = state.overview?.settings;
-  const signature = JSON.stringify([settings,state.overview?.providers]);
+  const signature = JSON.stringify([settings,state.overview?.providers,state.overview?.updates]);
   if (state.signatures.settings === signature) return; state.signatures.settings = signature;
   const root = $('settings-content'); root.replaceChildren();
   if (!settings) return root.append(el('p', '', 'Устройство офлайн.'));
@@ -245,6 +246,20 @@ function renderSettings() {
     await command('settings.update', { patch }, null); toast('Настройки отправлены');
   }, true), button('Обновить каталог моделей', () => void command('providers.refresh', {}, null)),
     ...(state.session ? [button('Сжать историю текущей сессии', () => void command('compact', {}))] : []));
+  const updates = el('section', 'provider');
+  updates.append(el('h3', '', 'Обновление Enki на этом компьютере'));
+  const update = state.overview?.updates;
+  updates.append(el('p', 'muted', update
+    ? `Установлено: ${update.nativeVersion || '—'} · Доступно: ${update.release?.version || 'нет данных'} · Этап: ${update.build?.stage || 'idle'}`
+    : 'Состояние обновления запрашивается у устройства.'));
+  if (update?.build?.error) updates.append(el('p', 'tool-error', update.build.error));
+  const updateButtons = el('div', 'answers');
+  updateButtons.append(button('Проверить обновление', () => void command('update.check', {}, null)),
+    button('Скачать / собрать', () => void command('update.prepare', {}, null)),
+    button('Установить и перезапустить', () => {
+      if (confirm('Установить подготовленное обновление? Enki перезапустится после завершения работы агентов.')) void command('update.apply', {}, null);
+    }, true));
+  updates.append(updateButtons); root.append(updates);
   for (const provider of state.overview?.providers?.all || []) {
     const box = el('div', 'provider'); box.append(el('strong', '', `${provider.name || provider.id}${provider.auth?.configured ? '' : ' · не настроен'}`));
     box.append(el('div', 'provider-models', Object.values(provider.models || {}).map(m => `${m.name || m.id} (${Math.round((m.limit?.context || 0) / 1024)}K)`).join(' · '))); root.append(box);

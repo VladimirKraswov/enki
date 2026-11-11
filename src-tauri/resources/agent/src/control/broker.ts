@@ -17,6 +17,8 @@ export type BrokerMethod =
   /** Imported config transaction + active snapshot. Local supervisor only, never relayed. */
   | ConfigMethod
   | "hub.identity" | "hub.request"
+  /** Existing signed updater: status/check/prepare/schedule apply. */
+  | "updates.control"
   /** Native shared-capability registry for one project: key, skill roots, MCP readiness. */
   | "capabilities.prepare"
   | "ui.clipboard.write" | "ui.clipboard.read" | "ui.open-url";

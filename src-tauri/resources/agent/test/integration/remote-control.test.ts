@@ -7,11 +7,13 @@ function remoteBroker() {
   const queue: Array<Record<string, unknown>> = [];
   const completed: Array<Record<string, unknown>> = [];
   const snapshots: Array<Record<string, unknown>> = [];
+  const updateActions: string[] = [];
   let watch: string | null = null;
   const broker: Broker = {
     kind: "supervisor", available: () => true,
     async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
       if (method === "hub.identity") return { scope: "test-hub" } as T;
+      if (method === "updates.control") { updateActions.push(String(params.action)); return { nativeVersion: "test", action: params.action } as T; }
       if (method !== "hub.request") throw new Error(`unexpected ${method}`);
       if (params.path === "model-services/catalog") return { schema: 1, routes: [] } as T;
       const body = params.body as Record<string, unknown>;
@@ -24,7 +26,7 @@ function remoteBroker() {
       throw new Error(`unexpected ${params.path}`);
     },
   };
-  return { broker, queue, completed, snapshots, watch: (id: string) => { watch = id; } };
+  return { broker, queue, completed, snapshots, updateActions, watch: (id: string) => { watch = id; } };
 }
 const wait = async (condition: () => boolean, timeout = 15_000) => {
   const until = Date.now() + timeout;
@@ -77,5 +79,12 @@ it("LAN relay watches history and sends prompts, model changes and settings with
     remote.queue.push({ id: "remote-invalid-1", session: sessionID, kind: "prompt", payload: { text: "", model: h.model() } });
     await wait(() => remote.completed.some(c => c.id === "remote-invalid-1"));
     expect(remote.completed.find(c => c.id === "remote-invalid-1")?.ok).toBe(false);
+    for (const action of ["check", "prepare", "apply"]) {
+      const id = `remote-update-${action}`;
+      remote.queue.push({ id, session: null, kind: `update.${action}`, payload: {} });
+      await wait(() => remote.completed.some(c => c.id === id));
+      expect(remote.completed.find(c => c.id === id)?.ok).toBe(true);
+    }
+    expect(remote.updateActions).toEqual(expect.arrayContaining(["status", "check", "prepare", "apply"]));
   } finally { await h.stop(); }
 });

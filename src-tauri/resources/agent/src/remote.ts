@@ -31,6 +31,8 @@ export class RemoteControl {
   private running = false;
   private stopped = false;
   private readonly results = new Map<string, { ok: boolean; result: unknown }>();
+  private updates: unknown = null;
+  private updatesAt = 0;
   private readonly abort = new AbortController();
 
   constructor(private readonly runtime: Runtime, private readonly intervalMs = 2_000) {}
@@ -59,6 +61,12 @@ export class RemoteControl {
     try {
       const identity = await this.runtime.config.broker.call<{ scope: string | null }>("hub.identity", {}, this.abort.signal, 5_000);
       if (!identity.scope) return;
+      if (Date.now()-this.updatesAt > 10_000) {
+        try {
+          this.updates = await this.runtime.config.broker.call("updates.control", { action: "status" }, this.abort.signal, 5_000);
+          this.updatesAt = Date.now();
+        } catch { /* older Enki or remote runtimes without update control */ }
+      }
       const response = await this.runtime.config.broker.call<SyncAnswer>("hub.request", {
         path: "remote/sync", scope: identity.scope,
         body: { overview: this.overview() },
@@ -101,7 +109,7 @@ export class RemoteControl {
       sessions, statuses: this.runtime.statuses(null), providers: providersDTO,
       settings: this.runtime.settings(), projects: this.runtime.catalog.directories(),
       questions: this.runtime.interactions.pendingQuestions(), permissions: this.runtime.interactions.pendingPermissions(),
-      activity: this.runtime.activity(), queues: this.runtime.queue.sessions(null),
+      activity: this.runtime.activity(), queues: this.runtime.queue.sessions(null), updates: this.updates,
     };
   }
 
@@ -202,6 +210,12 @@ export class RemoteControl {
       case "queue.resume": {
         const record = this.record(command);
         return this.runtime.queue.resume(record.id, isModelRef(payload.model) ? payload.model as ModelRef : undefined);
+      }
+      case "update.check": case "update.prepare": case "update.apply": {
+        const action = command.kind.slice("update.".length);
+        const result = await this.runtime.config.broker.call("updates.control", { action }, this.abort.signal, 120_000);
+        this.updatesAt = 0;
+        return { update: result };
       }
       case "providers.refresh": {
         const errors = await refreshCatalog(this.runtime.modelRuntime, AbortSignal.timeout(30_000));

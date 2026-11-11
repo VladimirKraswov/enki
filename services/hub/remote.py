@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 ID = re.compile(r'^[A-Za-z0-9_.:-]{1,160}$')
 COMMANDS = {'prompt', 'stop', 'model.set', 'compact', 'question.reply', 'question.reject',
             'permission.reply', 'session.create', 'settings.update', 'queue.pause', 'queue.resume',
-            'providers.refresh'}
+            'providers.refresh', 'update.check', 'update.prepare', 'update.apply'}
 ASR_URL = 'http://192.168.31.59:8080/api/asr/v1/audio/transcriptions'
 MAX_ASR = 25 * 1024 * 1024
 
@@ -148,7 +148,7 @@ class Remote:
         session = data.get('session')
         if session is not None:
             session = self.identity(session, 'session')
-        elif kind not in ('session.create', 'settings.update', 'providers.refresh'):
+        elif kind not in ('session.create', 'settings.update', 'providers.refresh', 'update.check', 'update.prepare', 'update.apply'):
             raise self.Fault(400, 'Нужна сессия.')
         id_ = data.get('id') or str(uuid.uuid4())
         self.identity(id_, 'command')

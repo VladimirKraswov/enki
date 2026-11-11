@@ -195,6 +195,16 @@ pub async fn hub_update(
     if window.label() != "main" {
         return Err("Main window only".into());
     }
+    hub_update_app(app, action, channel, data, digest).await
+}
+
+async fn hub_update_app(
+    app: tauri::AppHandle,
+    action: String,
+    channel: Option<String>,
+    data: Option<String>,
+    digest: Option<String>,
+) -> Result<Value, String> {
     let state = app.state::<HubUpdates>();
     if action == "status" {
         let hot = app.state::<HotAssets>().status();
@@ -467,6 +477,61 @@ pub async fn hub_update(
     }
 }
 
+/// Bounded LAN Runtime update control. Apply is scheduled AFTER the broker
+/// response releases its Runtime admission permit; the ordinary installer then
+/// waits for authoritative agent idle and keeps all signature/backup checks.
+fn remote_operation(kind: &str, action: &str) -> Result<&'static str, String> {
+    match (kind, action) {
+        ("source", "prepare") => Ok("build"),
+        ("hot", "prepare") => Ok("download"),
+        ("source", "apply") => Ok("install"),
+        ("hot", "apply") => Ok("activate"),
+        _ => Err("Unknown remote update operation".into()),
+    }
+}
+
+pub fn remote_control(app: &tauri::AppHandle, action: &str) -> Result<Value, String> {
+    match action {
+        "status" | "check" => tauri::async_runtime::block_on(hub_update_app(
+            app.clone(),
+            action.into(),
+            Some("stable".into()),
+            None,
+            None,
+        )),
+        "prepare" => {
+            let checked = checked(app, Some("stable"))?;
+            let operation = remote_operation(&checked.kind, "prepare")?;
+            tauri::async_runtime::block_on(hub_update_app(
+                app.clone(),
+                operation.into(),
+                Some("stable".into()),
+                None,
+                None,
+            ))
+        }
+        "apply" => {
+            let checked = checked(app, Some("stable"))?;
+            let operation = remote_operation(&checked.kind, "apply")?;
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(750));
+                if let Err(error) = tauri::async_runtime::block_on(hub_update_app(
+                    app,
+                    operation.into(),
+                    Some("stable".into()),
+                    None,
+                    None,
+                )) {
+                    eprintln!("Remote update apply failed: {error}");
+                }
+            });
+            Ok(json!({"scheduled":true,"operation":operation,"version":checked.version}))
+        }
+        _ => Err("Unknown remote update action".into()),
+    }
+}
+
 /// Read-only operator diagnostic: exercises the same pinned Hub connection as
 /// the updater without opening a window or touching an agent session.
 pub fn cli_status() -> Result<(), String> {
@@ -487,7 +552,7 @@ pub fn cli_status() -> Result<(), String> {
 
 #[cfg(test)]
 mod checked_freshness_tests {
-    use super::{checked_is_newer, Checked};
+    use super::{checked_is_newer, remote_operation, Checked};
     fn checked(version: &str) -> Checked {
         Checked {
             channel: "stable".into(),
@@ -510,5 +575,14 @@ mod checked_freshness_tests {
         assert!(!checked_is_newer(&checked("0.2.70"), "0.2.71"));
         assert!(!checked_is_newer(&checked("not-a-version"), "0.2.71"));
         assert!(!checked_is_newer(&checked("0.2.72"), "not-a-version"));
+    }
+    #[test]
+    fn remote_update_uses_the_existing_prepare_and_install_paths() {
+        assert_eq!(remote_operation("source", "prepare").unwrap(), "build");
+        assert_eq!(remote_operation("hot", "prepare").unwrap(), "download");
+        assert_eq!(remote_operation("source", "apply").unwrap(), "install");
+        assert_eq!(remote_operation("hot", "apply").unwrap(), "activate");
+        assert!(remote_operation("other", "apply").is_err());
+        assert!(remote_operation("hot", "other").is_err());
     }
 }
