@@ -4,6 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#101512">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Enki">
+  <link rel="manifest" href="/remote.webmanifest">
+  <link rel="apple-touch-icon" href="/remote-apple-touch-icon.png">
+  <link rel="icon" href="/remote-icon-192.png">
   <title>Enki — управление</title>
   <link rel="stylesheet" href="/remote.css">
 </head>
@@ -12,6 +19,7 @@
     <div class="brand">Enki <span>Remote</span></div>
     <select id="device-select" aria-label="Компьютер"></select>
     <span id="connection" class="connection" title="Связь с Hub"></span>
+    <button class="icon" data-action="install" aria-label="Установить приложение">⬇</button>
     <button class="icon" data-action="settings" aria-label="Настройки и обновления">⚙</button>
   </header>
 

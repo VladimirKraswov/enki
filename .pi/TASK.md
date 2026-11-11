@@ -1,3 +1,14 @@
+# TASK — 2026-11-12: Remote PWA / 2.0.69
+
+`/remote` превращена в PWA: manifest standalone, иконки PNG 192/512 и Apple 180,
+service worker `/remote-sw.js`, install action (native beforeinstallprompt;
+iOS инструкция Поделиться→На экран Домой), safe mobile UI сохранён.
+SW кэширует только shell, network-first; API/downloads/чаты/команды/ASR не
+кэшируются. Офлайн открывается shell и честный статус, не снимок истории.
+Hub server отдаёт manifest/icons/worker с корректными MIME, shell no-cache;
+LAN/no-auth контракт не менялся. Hub 135 PASS. Browser: SW activated scope=/,
+offline reload title Enki/Нет связи, cachedApi=false. Live CT206: все PWA routes
+HTTP200. Документация REMOTE-CONTROL обновлена. Релиз канонической доставки.
 # TASK — 2026-11-12: mobile-first Remote UI / 2.0.68
 
 По отзыву владельца заменена трёхпанельная страница `/remote` на мобильный

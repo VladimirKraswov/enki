@@ -688,23 +688,23 @@ class Handler(BaseHTTPRequestHandler):
         try:path=urlsplit(self.path).path
         except ValueError:path='[invalid]'
         print(encode({'method':self.command,'path':path,'status':status}),flush=True)
-    def respond(self,code,body,kind='application/json; charset=utf-8',cookie=None,filename=None):
+    def respond(self,code,body,kind='application/json; charset=utf-8',cookie=None,filename=None,cache=False):
         raw=encode(body).encode() if kind.startswith('application/json') else body
         self.send_response(code)
-        for k,v in [('Content-Type',kind),('Content-Length',str(len(raw))),('Cache-Control','no-store'),('X-Content-Type-Options','nosniff'),('Referrer-Policy','no-referrer'),('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")]:self.send_header(k,v)
+        for k,v in [('Content-Type',kind),('Content-Length',str(len(raw))),('Cache-Control','no-cache' if cache else 'no-store'),('X-Content-Type-Options','nosniff'),('Referrer-Policy','no-referrer'),('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")]:self.send_header(k,v)
         if self.close_connection:self.send_header('Connection','close')
         if cookie:
             for value in ([cookie] if isinstance(cookie,str) else cookie):self.send_header('Set-Cookie',value)
         if filename:self.send_header('Content-Disposition','attachment; filename="'+filename+'"')
         self.end_headers();self.wfile.write(raw)
     def console_asset(self, path):
-        """The Hub console shell; data still requires the key/cookie login."""
+        """LAN console and installable remote shell; no account login in LAN mode."""
         name = 'console.html' if path in ('/','/console','/console.html') else ('remote.html' if path == '/remote' else path.lstrip('/'))
-        if name not in ('console.html','console.js','console.css','remote.html','remote.js','remote.css'):raise Fault(404,'Страница не найдена.')
+        if name not in ('console.html','console.js','console.css','remote.html','remote.js','remote.css','remote.webmanifest','remote-sw.js','remote-icon-192.png','remote-icon-512.png','remote-apple-touch-icon.png'):raise Fault(404,'Страница не найдена.')
         file = Path(__file__).resolve().parent / name
         if not file.is_file():raise Fault(404,'Страница не найдена.')
-        kind = {'console.html':'text/html; charset=utf-8','console.js':'text/javascript; charset=utf-8','console.css':'text/css; charset=utf-8','remote.html':'text/html; charset=utf-8','remote.js':'text/javascript; charset=utf-8','remote.css':'text/css; charset=utf-8'}[name]
-        return self.respond(200,file.read_bytes(),kind)
+        kind = {'console.html':'text/html; charset=utf-8','console.js':'text/javascript; charset=utf-8','console.css':'text/css; charset=utf-8','remote.html':'text/html; charset=utf-8','remote.js':'text/javascript; charset=utf-8','remote.css':'text/css; charset=utf-8','remote.webmanifest':'application/manifest+json; charset=utf-8','remote-sw.js':'text/javascript; charset=utf-8','remote-icon-192.png':'image/png','remote-icon-512.png':'image/png','remote-apple-touch-icon.png':'image/png'}[name]
+        return self.respond(200,file.read_bytes(),kind,cache=name.startswith('remote'))
     def actor(self):
         # No accounts/tokens by explicit owner policy. Server.verify_request still
         # restricts the listener to loopback and 192.168.31.0/24; do not expose WAN.
@@ -720,7 +720,7 @@ class Handler(BaseHTTPRequestHandler):
             if origin and urlsplit(origin).netloc != self.headers.get('Host'):
                 raise Fault(403,'Запрос с другого сайта отклонён.')
             if self.command=='GET' and path=='/health':return self.respond(200,{'service':'enki-hub','apiVersion':1})
-            if self.command=='GET' and path in ('/','/console','/console.html','/console.js','/console.css','/remote','/remote.html','/remote.js','/remote.css'):
+            if self.command=='GET' and path in ('/','/console','/console.html','/console.js','/console.css','/remote','/remote.html','/remote.js','/remote.css','/remote.webmanifest','/remote-sw.js','/remote-icon-192.png','/remote-icon-512.png','/remote-apple-touch-icon.png'):
                 return self.console_asset(path)
             if self.command=='POST' and path=='/api/build-cache/release':
                 auth=self.headers.get('Authorization','')

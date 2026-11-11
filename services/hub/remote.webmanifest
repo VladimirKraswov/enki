@@ -1,0 +1,18 @@
+{
+  "id": "/remote",
+  "name": "Enki Remote",
+  "short_name": "Enki",
+  "description": "Управление Enki на устройствах локальной сети",
+  "lang": "ru",
+  "start_url": "/remote",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "browser"],
+  "background_color": "#101512",
+  "theme_color": "#101512",
+  "categories": ["productivity", "developer", "utilities"],
+  "icons": [
+    { "src": "/remote-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/remote-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

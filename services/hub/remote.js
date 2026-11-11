@@ -417,6 +417,7 @@ document.addEventListener('click', event => {
   if (action === 'close-sessions') $('sessions-dialog').close();
   if (action === 'new') openNew();
   if (action === 'close-new') $('new-dialog').close();
+  if (action === 'install') void installApp();
   if (action === 'settings') { $('settings-dialog').showModal(); renderSettings(); }
   if (action === 'close-settings') $('settings-dialog').close();
   if (action === 'stop') void command('stop', {});
@@ -424,6 +425,26 @@ document.addEventListener('click', event => {
 
 for (const id of ['sessions-dialog', 'new-dialog', 'settings-dialog'])
   $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
+
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; });
+window.addEventListener('appinstalled', () => { installPrompt = null; toast('Enki установлен на это устройство'); });
+async function installApp() {
+  if (matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)
+    return toast('Enki уже работает как установленное приложение');
+  if (installPrompt) {
+    const prompt = installPrompt; installPrompt = null; await prompt.prompt();
+    const choice = await prompt.userChoice;
+    if (choice.outcome !== 'accepted') toast('Установка отменена'); return;
+  }
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent))
+    toast('В Safari: Поделиться → «На экран “Домой”».');
+  else toast('В меню браузера выберите «Установить приложение» / «Установить Enki».');
+}
+if ('serviceWorker' in navigator && window.isSecureContext)
+  window.addEventListener('load', () => navigator.serviceWorker.register('/remote-sw.js', { scope: '/' }).catch(() => {}));
+window.addEventListener('offline', () => { $('connection').className = 'connection'; $('connection').title = 'Нет сети'; });
+window.addEventListener('online', () => { void loadOverview(); });
 
 async function poll() { await loadOverview(); await loadDetail(); }
 void (async () => {

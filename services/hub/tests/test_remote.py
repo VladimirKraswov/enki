@@ -58,6 +58,28 @@ class RemoteAPI(unittest.TestCase):
 
 
 class RemoteHTTP(HTTP):
+    def test_pwa_manifest_icons_and_worker_are_served_without_login(self):
+        import struct
+        code, headers, raw = self.req('/remote.webmanifest')
+        self.assertEqual(code,200)
+        self.assertEqual(headers['Content-Type'],'application/manifest+json; charset=utf-8')
+        manifest = json.loads(raw)
+        self.assertEqual(manifest['start_url'],'/remote')
+        self.assertEqual(manifest['display'],'standalone')
+        self.assertEqual([icon['sizes'] for icon in manifest['icons']],['192x192','512x512'])
+        for size in (192,512):
+            code, headers, icon = self.req(f'/remote-icon-{size}.png')
+            self.assertEqual(code,200)
+            self.assertEqual(headers['Content-Type'],'image/png')
+            self.assertEqual(icon[:8],b'\x89PNG\r\n\x1a\n')
+            self.assertEqual(struct.unpack('>II',icon[16:24]),(size,size))
+        code, headers, worker = self.req('/remote-sw.js')
+        self.assertEqual(code,200)
+        self.assertIn('no-cache',headers['Cache-Control'])
+        text = worker.decode()
+        self.assertIn("url.pathname.startsWith('/api/')",text)
+        self.assertNotIn("cache.addAll(SHELL)", text.split('self.addEventListener(\'fetch\'')[1])
+
     def test_page_needs_no_login_and_asr_uses_existing_service(self):
         code, _, body = self.req('/remote')
         self.assertEqual(code, 200)

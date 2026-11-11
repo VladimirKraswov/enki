@@ -64,7 +64,7 @@ Full restore: `pct restore NEW_ID ARCHIVE --storage STORAGE`, check address/MAC/
 
 ## API and maintenance
 
-LAN remote control page `/remote` and its relay live in `remote.py`; Hub stores
+LAN remote control and installable PWA `/remote` (manifest + `remote-sw.js`) live in `remote.py`; Hub stores
 snapshots/commands but executes no agent loop. See [remote control](../../docs/REMOTE-CONTROL.md).
 
 Owner-device source exchange, addressed agent inbox/ACK and bounded critical
