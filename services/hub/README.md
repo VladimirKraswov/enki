@@ -33,9 +33,8 @@ See [Windows bootstrap](../../docs/WINDOWS-BOOTSTRAP.md).
 
 1. Install Enki. Settings → **Облачная библиотека**.
 2. Enter HTTPS address and paste public `server.crt` PEM. Verify its fingerprint with administrator through trusted channel. Public certificate contains no credentials and can accompany instructions.
-3. Administrator logs into Web UI using separate admin key, opens **Устройства → Создать ключ**. Every installation gets a distinct device key; never reuse the Mac key on Windows.
-4. Paste device key into Enki, enable sync and optionally texts, save/check. Key stays in OS vault, never returned to WebView. Web UI uses30-minute HttpOnly/Secure/SameSite=Strict cookie and no localStorage credentials.
-5. Load catalog, select packages. Skills enter the shared registry of the bundled Enki Runtime. A remote runtime requires installation on its own host; local paths are not injected remotely. MCP descriptors are imported **disabled**, without credentials. Configure/enable in common tool settings. Prompts append to drafts without sending; templates/runbooks are readable local files.
+3. Enable sync and optionally texts, save/check. By explicit owner policy the LAN deployment has no accounts, device keys, registrations or login cookies; network scope is enforced by the Hub listener.
+4. Load catalog, select packages. Skills enter the shared registry of the bundled Enki Runtime. A remote runtime requires installation on its own host; local paths are not injected remotely. MCP descriptors are imported **disabled**, without credentials. Configure/enable in common tool settings. Prompts append to drafts without sending; templates/runbooks are readable local files.
 
 Selected skills/prompts/templates update every5minutes while agents are idle. New unselected packages are not installed automatically. MCP updates require deliberate review. Downloaded revisions have SHA256 checks and safe paths; local edits are preserved with an error. Old revisions remain in cache. Rollback: GET manifest `?revision=HASH`, publish its original files with current `expectedRevision`; devices pull this current version. Only packages are shared, not provider configuration or device secrets.
 
@@ -65,12 +64,15 @@ Full restore: `pct restore NEW_ID ARCHIVE --storage STORAGE`, check address/MAC/
 
 ## API and maintenance
 
+LAN remote control page `/remote` and its relay live in `remote.py`; Hub stores
+snapshots/commands but executes no agent loop. See [remote control](../../docs/REMOTE-CONTROL.md).
+
 Owner-device source exchange, addressed agent inbox/ACK and bounded critical
 session diagnostics use `/api/workshop/*`. Deploy `workshop.py` with `server.py`;
 tables live in the existing backed-up `hub.sqlite`. Source snapshots are review
 data, never execution or releases. See [operator/client procedure](../../docs/WORKSHOP-EXCHANGE.md).
 
-Public `GET /health` service/API version only. Bearer device key: `GET /api/me`, `/catalog`, `/catalog/ID?revision=HASH`, `/metrics?device=ID&days=30`, `/devices`, `/sessions`, `/sessions/ID`, `/issues`, `/settings`; `POST /api/ingest` max50records/2MiB. Device-readable `GET /api/model-catalog` returns the shared model catalog (version, per-engine provider definitions); admin `POST /api/model-catalog` publishes the whole catalog with server-side validation and atomic version increment. Devices merge it into local engine configuration and keep selections/exclusions on the device. Admin-only writes `/catalog` CAS `expectedRevision`, `/devices`, `/devices/revoke`, `/sessions/review`, `/issues/review`, `/settings`; admin `GET /api/export` JSONL wrapped in JSON.
+Public `GET /health` service/API version only. Inside the explicitly trusted LAN (no bearer keys): `GET /api/me`, `/catalog`, `/catalog/ID?revision=HASH`, `/metrics?device=ID&days=30`, `/devices`, `/sessions`, `/sessions/ID`, `/issues`, `/settings`; `POST /api/ingest` max50records/2MiB. Device-readable `GET /api/model-catalog` returns the shared model catalog (version, per-engine provider definitions); admin `POST /api/model-catalog` publishes the whole catalog with server-side validation and atomic version increment. Devices merge it into local engine configuration and keep selections/exclusions on the device. Admin-only writes `/catalog` CAS `expectedRevision`, `/devices`, `/devices/revoke`, `/sessions/review`, `/issues/review`, `/settings`; admin `GET /api/export` JSONL wrapped in JSON.
 
 `/sessions?limit=50&cursor=...` returns newest sessions with `nextCursor` (max100/page). `/sessions/ID?direction=older&limit=50&cursor=...` opens latest messages; `newer` walks from the beginning. Pages always return chronological records, `total`, and `nextCursor` (max200/page). Cursors are scoped to session/direction, with timestamp+ID tie-breaking. Web UI loads older pages without replacing review-note drafts; review still applies to the whole session. Closing/logout clears private detail and rejects late responses.
 

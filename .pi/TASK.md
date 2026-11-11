@@ -1,3 +1,25 @@
+# TASK — 2026-11-12: LAN Remote Control / 2.0.66
+
+По поручению владельца реализована страница Hub `/remote` без входа,
+регистрации и токенов; Server.verify_request по-прежнему ограничивает доступ
+loopback/192.168.31.0/24, WAN не добавляется. Hub — только relay снимков и
+команд; единственный исполнитель — существующий Runtime на каждом устройстве.
+Runtime remote.ts каждые 2с синхронизирует устройства/проекты/сессии/статусы/
+модели/настройки и наблюдаемую сессию; команды идемпотентны, повтор delivered
+после потери ACK возвращает сохранённый результат. Поддержаны новый чат+первый
+промпт, prompt/queue, stop, model.set, compact, вопросы/разрешения, settings,
+queue pause/resume, refresh providers. Отдельная консоль Hub также без входа.
+Диктовка: MediaRecorder → Hub multipart ≤25MiB → существующий GigaAM CT201 →
+текст в черновик без автоотправки; аудио не хранится Hub.
+Токены Hub удалены из нативного request/release/catalog/setup пути; HTTPS origin,
+сертификат и подписи пакетов сохранены. Старые поля ключей wire-совместимы.
+Тесты: agent 492 PASS, UI 1300 PASS, Hub 134 PASS, Rust 297 PASS,
+runtime-artifact 106 PASS, releases 30 PASS; build/arch/docs/bundle/clippy/fmt
+PASS. Живой Hub CT206 обновлён с SQLite backup и active; `/remote`, overview,
+no-auth API и ASR через Hub проверены HTTP200. Страница проверена в браузере с
+fixture: устройство/сессия/ответ/tool, стабильные клики и prompt→queued.
+После применения нужен живой прогон реального Mac Runtime и микрофона телефона.
+
 # TASK — 2026-11-12: Windows long-path build failure / 2.0.65
 
 Отчёт владельца: кнопка «Собрать на этом компьютере» на Windows падала с

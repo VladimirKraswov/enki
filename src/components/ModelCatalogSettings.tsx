@@ -223,7 +223,6 @@ export function ModelCatalogSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [adminKey, setAdminKey] = useState("");
   // null = not checked / cannot decide; true = the catalog differs from the
   // live models.json; false = it already matches. Read-only, agent-safe.
   const [catalogPending, setCatalogPending] = useState<boolean | null>(null);
@@ -330,8 +329,7 @@ export function ModelCatalogSettings() {
     setError("");
     setNotice("");
     try {
-      const saved = await publishCatalog(models, adminKey, catalog?.version);
-      setAdminKey("");
+      const saved = await publishCatalog(models, undefined, catalog?.version);
       // The acknowledged CAS response is this publication. A second GET could
       // lose the acknowledgement or replace this draft with another editor's.
       setCatalog(saved);
@@ -468,21 +466,6 @@ export function ModelCatalogSettings() {
       <section className="setting-group">
         <h2>Публикация</h2>
         <div className="setting-card">
-          <div className="setting-row">
-            <div className="setting-label">
-              <label htmlFor="hub-catalog-admin">Административный ключ Hub</label>
-              <small>Нужен только для записи каталога; при доступном системном хранилище сохраняется в нём.</small>
-            </div>
-            <div className="setting-control">
-              <input
-                id="hub-catalog-admin"
-                type="password"
-                autoComplete="off"
-                value={adminKey}
-                onChange={(e) => setAdminKey(e.target.value)}
-              />
-            </div>
-          </div>
           <div className="setting-row">
             <div className="setting-label">
               <span>Черновик каталога</span>

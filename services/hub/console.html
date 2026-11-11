@@ -11,16 +11,11 @@
   <h1>Enki Hub</h1>
   <span id="who">не вошли</span>
   <button id="refresh" hidden>Обновить</button>
+  <a href="/remote" style="color:inherit">Управление агентами</a>
 </header>
 <main>
-  <section id="login">
-    <h2>Вход</h2>
-    <p>Ключ устройства или администратора Hub. Он используется только для входа и хранится в этой вкладке.</p>
-    <form id="login-form">
-      <input id="token" type="password" autocomplete="off" placeholder="Ключ Hub" required>
-      <button type="submit">Войти</button>
-    </form>
-    <p id="login-error" class="error" hidden></p>
+  <section id="login" hidden>
+    <p>Локальная сеть: вход и ключи не требуются.</p>
   </section>
   <section id="overview" hidden>
     <h2>Обновления Enki</h2>

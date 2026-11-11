@@ -43,6 +43,7 @@ export interface HarnessOptions {
   legacy?: RuntimeConfig["legacy"];
   /** Register the second scripted provider (the fallback-compaction role). */
   altModel?: boolean;
+  remoteControl?: boolean;
 }
 
 export async function harness(options: HarnessOptions = {}): Promise<Harness> {
@@ -51,7 +52,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   const runtime = await Runtime.create({
     dataDir: data, host: "local", broker: options.broker ?? NO_BROKER, credentials: "memory", userPiAgentDir: path.join(data, "no-user-pi"),
     legacy: options.legacy ?? {}, allowModelNetwork: false, version: "test", modelRuntime: scripted.modelRuntime, capabilities: async () => null,
-    extraExtensions: options.extraExtensions, settingsInMemory: true, ...(options.ptyModule ? { ptyModule: options.ptyModule } : {}),
+    extraExtensions: options.extraExtensions, settingsInMemory: true, remoteControl: options.remoteControl, ...(options.ptyModule ? { ptyModule: options.ptyModule } : {}),
   });
   const token = randomBytes(32).toString("base64url");
   const credentials: Credentials = { current: token, previous: null };

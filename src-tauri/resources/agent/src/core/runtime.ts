@@ -28,6 +28,7 @@ import { ConfigProjection, userModelsPresent, type ConfigStatus } from "../model
 import { VaultCredentialStore } from "../models/credentials.ts";
 import { adoptAgentDirCredentials as adoptCredentials, adoptProviderCredentials } from "../models/import-credentials.ts";
 import { HubLeases } from "../models/hub.ts";
+import { RemoteControl } from "../remote.ts";
 import { ModelSlotQueue } from "../sdk/inference-transport.ts";
 import { findGit, GitService } from "../platform/git.ts";
 import { ownedSessionPath, runtimePaths, sessionDirFor, SESSION_LAYOUT, validDirectory, type RuntimePaths } from "../platform/paths.ts";
@@ -125,6 +126,8 @@ export interface RuntimeConfig {
   /** Tests add plugin extensions (tools, UI calls) exactly as a Pi package would. */
   extraExtensions?: (session: { sessionID: string; directory: string }) => SdkExtension[];
   settingsInMemory?: boolean;
+  /** LAN Hub relay; production defaults on, injected test model runtimes opt in. */
+  remoteControl?: boolean;
   /** Tests replace node-pty with an in-memory module; no shell is spawned. */
   ptyModule?: () => Promise<PtyModule | null>;
 }
@@ -167,6 +170,7 @@ export class Runtime {
   /** Chats whose transcript the shard migration deliberately left alone. */
   readonly shardIssues: Array<{ session: string; reason: string }> = [];
   readonly hub: HubLeases;
+  readonly remote: RemoteControl;
   /** Per-service FIFO witness for single-slot model engines (queue status text). */
   readonly modelSlots = new ModelSlotQueue();
   readonly lessons: LessonStore;
@@ -232,6 +236,7 @@ export class Runtime {
     this.hub = new HubLeases(this.config.broker, this.db, (owner) => this.leaseActive(owner),
       (owner, status) => this.journal.append(this.catalog.get(owner)?.directory ?? null, owner, { type: "model.status", properties: { sessionID: owner, status } }, true),
       (owner, message) => this.hubLeaseLost(owner, message));
+    this.remote = new RemoteControl(this);
     } catch (error) {
       // Synchronous construction owns the OS lease too. A malformed/missing DB
       // must not strand it until GC or prevent a repaired retry in this process.
@@ -276,6 +281,7 @@ export class Runtime {
       runtime.registry.start();
       runtime.scheduler.start();
       runtime.hub.start();
+      if (config.remoteControl ?? !config.modelRuntime) runtime.remote.start();
       return runtime;
     } catch (error) {
       try { await runtime.shutdown(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Enki Runtime initialization and cleanup failed'); }
@@ -941,6 +947,7 @@ export class Runtime {
 
   /** Stop accepting turns; wait (bounded) for running turns to settle. */
   async drain(deadlineMs: number): Promise<{ interrupted: { sessionID: string; directory: string }[] }> {
+    this.remote.stop();
     this.stopAdmission();
     this.journal.append(null, null, { type: "runtime.draining", properties: { deadline: Date.now() + deadlineMs } });
     const until = Date.now() + deadlineMs;
@@ -953,6 +960,7 @@ export class Runtime {
 
   shutdown(): Promise<void> { return this.shuttingDown ??= this.close(); }
   private async close(): Promise<void> {
+    this.remote.stop();
     this.stopAdmission();
     const errors: unknown[] = [];
     const attempt = async (work: () => void | Promise<void>) => { try { await work(); } catch (error) { errors.push(error); } };

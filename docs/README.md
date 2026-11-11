@@ -8,6 +8,7 @@
 
 - [Замысел и поведение](PRODUCT.md), [настройки](SETTINGS.md), [чаты и компьютеры](WORKSPACES.md).
 - [Контекст задачи](CHAT-CONTEXT.md), [контекст, очередь и диктовка](CONTEXT-QUEUE-VOICE.md), [таймеры](SCHEDULES.md).
+- [Удалённое управление в LAN](REMOTE-CONTROL.md).
 - [Прогресс модели, кэш и сжатие истории](INFERENCE-CONTEXT.md).
 - [Вложения](ATTACHMENTS.md), [изображения и материалы](IMAGE-GENERATION.md).
 - [Браузер](BROWSER.md), [профиль браузера](BROWSER-PREFERENCES.md), [управление компьютером](COMPUTER-USE.md).

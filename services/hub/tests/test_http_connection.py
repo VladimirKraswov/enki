@@ -8,10 +8,13 @@ class ConnectionHeaders(unittest.TestCase):
 
     def test_closed_responses_advertise_close_so_clients_do_not_reuse_dead_tls_sockets(self):
         for path,headers,status in [
-            ('/api/model-catalog',None,401),
+            ('/api/model-catalog',None,200),
             ('/downloads/latest',None,404),
             ('/api/model-catalog',{'Origin':'https://other.site'},403),
         ]:
             code,returned,_ = self.req(path,headers=headers)
             self.assertEqual(code,status)
-            self.assertEqual(returned.get('Connection'),'close')
+            if status >= 400:
+                self.assertEqual(returned.get('Connection'),'close')
+            else:
+                self.assertNotEqual(returned.get('Connection'),'close')

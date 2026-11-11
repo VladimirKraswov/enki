@@ -35,6 +35,10 @@ _workshop_spec = importlib.util.spec_from_file_location('enki_workshop', Path(__
 _workshop_module = importlib.util.module_from_spec(_workshop_spec)
 _workshop_spec.loader.exec_module(_workshop_module)
 
+_remote_spec = importlib.util.spec_from_file_location('enki_remote', Path(__file__).with_name('remote.py'))
+_remote_module = importlib.util.module_from_spec(_remote_spec)
+_remote_spec.loader.exec_module(_remote_module)
+
 MAX_BODY = 2 * 1024 * 1024
 KINDS = {'skill', 'prompt', 'tool', 'template', 'runbook'}
 KEY = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
@@ -207,6 +211,7 @@ class Hub:
         os.chmod(self.db, 0o600)
         self.memory = _memory_module.Memory(self.connection, self.lock, scrub, Fault)
         self.workshop = _workshop_module.Workshop(self.connection, self.lock, scrub, Fault)
+        self.remote = _remote_module.Remote(self.connection, self.lock, Fault)
         self.releases = _release_module.Releases(root, self.lock, Fault)
         self.native_updates = _native_module.NativeUpdates(self.releases, _device_module.sign)
         self.build_cache = _cache_module.BuildCache(root / 'build-cache')
@@ -232,13 +237,36 @@ class Hub:
         return {'id': id_, 'name': name, 'token': token, 'admin': admin}
 
     def authenticate(self, token):
+        # Legacy compatibility: the LAN listener no longer authenticates callers.
+        # Kept only for old operator tooling; network scope is enforced by Server.
         if not isinstance(token, str) or not 20 <= len(token) <= 256:
-            raise Fault(401, 'Нужен ключ устройства или администратора.')
+            raise Fault(401, 'Некорректный устаревший ключ.')
         with self.connection() as c:
             row = c.execute('SELECT * FROM devices WHERE token_hash=? AND revoked=0', (digest(token),)).fetchone()
         if not row:
-            raise Fault(401, 'Неверный или отозванный ключ.')
+            raise Fault(401, 'Неизвестный устаревший ключ.')
         return dict(row)
+
+    def lan_actor(self, name='', platform='lan'):
+        """Trusted LAN identity, not a login. Device names route Runtime traffic;
+        browsers without a device name use the shared owner console identity."""
+        name, platform = scrub(name, 80), scrub(platform, 32)
+        now = int(time.time()*1000)
+        with self.lock, self.connection() as c:
+            row = None
+            if name:
+                row = c.execute('SELECT * FROM devices WHERE name=? AND platform=? AND revoked=0 ORDER BY seen DESC',
+                                (name, platform)).fetchone()
+            else:
+                row = c.execute('SELECT * FROM devices WHERE admin=1 AND revoked=0 ORDER BY seen DESC').fetchone()
+            if not row:
+                id_ = str(uuid.uuid4())
+                c.execute('INSERT INTO devices(id,name,platform,app_version,token_hash,admin,revoked,created,seen) VALUES(?,?,?,?,NULL,?,0,?,?)',
+                          (id_, name or 'Владелец (LAN)', platform, '', 0 if name else 1, now, now))
+                row = c.execute('SELECT * FROM devices WHERE id=?', (id_,)).fetchone()
+            actor = dict(row)
+            actor['admin'] = True  # Explicit owner policy: full access inside the LAN.
+            return actor
 
     @staticmethod
     def admin(actor):
@@ -484,6 +512,8 @@ class Hub:
     def api(self, method, path, query, actor, data):
         if path == '/api/console/overview' and method == 'GET':
             return self.console_overview(actor)
+        if path.startswith('/api/remote/'):
+            return self.remote.api(method, path.removeprefix('/api/remote/'), query, actor, data)
         if path.startswith('/api/workshop/'):
             return self.workshop.api(method, path.removeprefix('/api/workshop/'), query, actor, data)
         if path.startswith('/api/model-services/'):
@@ -669,20 +699,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers();self.wfile.write(raw)
     def console_asset(self, path):
         """The Hub console shell; data still requires the key/cookie login."""
-        name = 'console.html' if path in ('/','/console','/console.html') else path.lstrip('/')
-        if name not in ('console.html','console.js','console.css'):raise Fault(404,'Страница не найдена.')
+        name = 'console.html' if path in ('/','/console','/console.html') else ('remote.html' if path == '/remote' else path.lstrip('/'))
+        if name not in ('console.html','console.js','console.css','remote.html','remote.js','remote.css'):raise Fault(404,'Страница не найдена.')
         file = Path(__file__).resolve().parent / name
         if not file.is_file():raise Fault(404,'Страница не найдена.')
-        kind = {'console.html':'text/html; charset=utf-8','console.js':'text/javascript; charset=utf-8','console.css':'text/css; charset=utf-8'}[name]
+        kind = {'console.html':'text/html; charset=utf-8','console.js':'text/javascript; charset=utf-8','console.css':'text/css; charset=utf-8','remote.html':'text/html; charset=utf-8','remote.js':'text/javascript; charset=utf-8','remote.css':'text/css; charset=utf-8'}[name]
         return self.respond(200,file.read_bytes(),kind)
     def actor(self):
-        auth=self.headers.get('Authorization','')
-        if auth.startswith('Bearer '):return self.server.hub.authenticate(auth[7:])
-        cookies=http.cookies.SimpleCookie(self.headers.get('Cookie',''))
-        sid=cookies.get('enki_session') or cookies.get('arvela_session')
-        entry=self.server.hub.cookies.get(sid.value if sid else '')
-        if entry and entry[1]>time.time():return self.server.hub.authenticate(entry[0])
-        raise Fault(401,'Войдите по ключу.')
+        # No accounts/tokens by explicit owner policy. Server.verify_request still
+        # restricts the listener to loopback and 192.168.31.0/24; do not expose WAN.
+        return self.server.hub.lan_actor(self.headers.get('X-Enki-Device-Name',''),
+            self.headers.get('X-Enki-Platform','lan'))
     def dispatch(self):
         release_slot=False
         download_slot=False
@@ -693,7 +720,7 @@ class Handler(BaseHTTPRequestHandler):
             if origin and urlsplit(origin).netloc != self.headers.get('Host'):
                 raise Fault(403,'Запрос с другого сайта отклонён.')
             if self.command=='GET' and path=='/health':return self.respond(200,{'service':'enki-hub','apiVersion':1})
-            if self.command=='GET' and path in ('/','/console','/console.html','/console.js','/console.css'):
+            if self.command=='GET' and path in ('/','/console','/console.html','/console.js','/console.css','/remote','/remote.html','/remote.js','/remote.css'):
                 return self.console_asset(path)
             if self.command=='POST' and path=='/api/build-cache/release':
                 auth=self.headers.get('Authorization','')
@@ -715,6 +742,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.actor()
                 download_slot=self.server.release_download.acquire(False)
                 if not download_slot:raise Fault(429,'Загрузка обновлений занята. Повторите позже.')
+            if self.command=='POST' and path=='/api/remote/asr':
+                return self.server.hub.remote.asr(self)
             data={}
             if self.command=='POST':
                 size=int(self.headers.get('Content-Length','0'))
@@ -734,10 +763,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.command=='POST' and path=='/api/build-cache/lease':
                 # Browser cookies cannot authorize a compiler cache lease.
                 auth=self.headers.get('Authorization','')
-                actor=self.server.hub.authenticate(auth[7:] if auth.startswith('Bearer ') else '')
+                actor=self.actor()
                 return self.respond(200,self.server.hub.build_cache.lease(actor,data.get('platform')))
             if self.command=='POST' and path=='/api/login':
-                actor=self.server.hub.authenticate(data.get('token'))
+                actor=self.actor()
                 sid=secrets.token_urlsafe(32)
                 with self.server.hub.lock:
                     self.server.hub.cookies={k:v for k,v in self.server.hub.cookies.items() if v[1]>time.time()}

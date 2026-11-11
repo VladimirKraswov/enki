@@ -48,21 +48,9 @@ async function loadOverview() {
   cred.append(row("Провайдеры с кредами на Hub", (data.credentialProviders || []).join(", ") || "нет"));
   el("overview").hidden = false;
   el("login").hidden = true;
-  el("who").textContent = "сессия активна";
+  el("who").textContent = "локальная сеть";
   el("refresh").hidden = false;
 }
 
-document.getElementById("login-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  el("login-error").hidden = true;
-  try {
-    await api("/api/login", { method: "POST", body: JSON.stringify({ token: el("token").value }) });
-    el("token").value = "";
-    await loadOverview();
-  } catch (error) {
-    el("login-error").textContent = error.message;
-    el("login-error").hidden = false;
-  }
-});
 el("refresh").addEventListener("click", () => { void loadOverview().catch(error => alert(error.message)); });
-void loadOverview().catch(() => { /* не вошли: остаётся форма входа */ });
+void loadOverview().catch(error => { el("who").textContent = error.message; });

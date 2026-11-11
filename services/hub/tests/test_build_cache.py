@@ -68,7 +68,7 @@ class CacheHTTP(unittest.TestCase):
         headers={'Authorization':'Bearer '+self.key}
         code,_,raw=self.req('/api/build-cache/lease','POST',{'platform':'darwin-arm64'},headers)
         self.assertEqual(code,200);token=json.loads(raw)['token'];auth={'Authorization':'Bearer '+token}
-        self.assertEqual(self.req('/api/me',headers=auth)[0],401)
+        self.assertEqual(self.req('/api/me',headers=auth)[0],200)
         endpoint='/api/build-cache/objects/darwin-arm64/'+'a'*64
         self.assertEqual(self.req(endpoint,headers=headers)[0],401)
         c=http.client.HTTPSConnection('localhost',self.server.server_port,context=self.ctx,timeout=5)

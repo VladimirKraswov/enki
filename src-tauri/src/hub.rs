@@ -110,12 +110,11 @@ pub(crate) fn workshop_endpoint() -> Option<String> {
 pub(crate) fn release_identity() -> Result<String, String> {
     let c = load()?;
     origin(&c.endpoint)?;
-    let token = vault(&c.endpoint)?
-        .get_password()
-        .map_err(|_| "Настройте ключ Hub в разделе «Общая библиотека»")?;
+    // LAN releases need no account token. Signed packages and the pinned Hub
+    // certificate still authenticate the artifact and its origin.
     Ok(format!(
         "{:x}",
-        Sha256::digest(format!("{}\0{}\0{}", c.endpoint, c.certificate, token))
+        Sha256::digest(format!("{}\0{}", c.endpoint, c.certificate))
     ))
 }
 pub(crate) fn release_get(path: &str, identity: &str) -> Result<Value, String> {
@@ -127,15 +126,8 @@ pub(crate) fn release_get(path: &str, identity: &str) -> Result<Value, String> {
         return Err("Invalid release path".into());
     }
     let c = load()?;
-    let key = vault(&c.endpoint)?
-        .get_password()
-        .map_err(|_| "Нет ключа Hub")?;
     origin(&c.endpoint)?;
-    if format!(
-        "{:x}",
-        Sha256::digest(format!("{}\0{}\0{}", c.endpoint, c.certificate, key))
-    ) != identity
-    {
+    if release_identity()? != identity {
         return Err("Подключение Hub изменилось. Проверьте обновления заново.".into());
     }
     let route = if matches!(path, "stable" | "preview") {
@@ -149,7 +141,8 @@ pub(crate) fn release_get(path: &str, identity: &str) -> Result<Value, String> {
             c.endpoint.trim_end_matches('/')
         ))
         .timeout(Duration::from_secs(120))
-        .bearer_auth(key)
+        .header("X-Enki-Device-Name", &c.label)
+        .header("X-Enki-Platform", std::env::consts::OS)
         .send()
         .map_err(|_| "Не удалось подключиться к Hub обновлений")?;
     if !response.status().is_success() {
@@ -173,9 +166,6 @@ pub(crate) fn release_get(path: &str, identity: &str) -> Result<Value, String> {
 pub(crate) fn build_cache_lease() -> Result<Value, String> {
     let c = load()?;
     let endpoint = origin(&c.endpoint)?;
-    let key = vault(&c.endpoint)?
-        .get_password()
-        .map_err(|_| "Нет ключа Hub")?;
     let platform = format!(
         "{}-{}",
         match std::env::consts::OS {
@@ -192,7 +182,8 @@ pub(crate) fn build_cache_lease() -> Result<Value, String> {
     let response = client(&c)?
         .post(format!("{endpoint}/api/build-cache/lease"))
         .timeout(Duration::from_secs(5))
-        .bearer_auth(key)
+        .header("X-Enki-Device-Name", &c.label)
+        .header("X-Enki-Platform", std::env::consts::OS)
         .json(&json!({"platform":platform}))
         .send()
         .map_err(|_| "Кэш Hub недоступен; сборка без кэша")?;
@@ -234,19 +225,14 @@ fn origin(value: &str) -> Result<String, String> {
     Ok(u.origin().ascii_serialization())
 }
 /// Hub device key account: the exact endpoint origin, as shipped.
+#[cfg(test)]
 pub(crate) fn device_account(endpoint: &str) -> String {
     endpoint.to_string()
 }
 /// Cached model-admin key account, in the same profile Hub service.
+#[cfg(test)]
 pub(crate) fn admin_account(endpoint: &str) -> String {
     format!("{endpoint}#model-admin")
-}
-fn vault(endpoint: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(
-        &crate::paths::HUB_SECRETS.service()?,
-        &device_account(endpoint),
-    )
-    .map_err(|_| "System credential store unavailable".into())
 }
 fn validate(c: &Config) -> Result<(), String> {
     if c.endpoint.is_empty() && !c.enabled {
@@ -328,6 +314,7 @@ fn request(c: &Config, path: &str, body: Option<Value>) -> Result<Value, String>
         || path.starts_with("metrics?")
         || path == "ingest"
         || workshop_path(path, body.is_some())
+        || remote_path(path, body.is_some())
         || memory_path(path)
         || path == "memory/retrieve";
     let model_control = model_control_path(path, body.as_ref());
@@ -344,6 +331,7 @@ fn request(c: &Config, path: &str, body: Option<Value>) -> Result<Value, String>
         && path != "memory"
         && path != "memory/retrieve"
         && !workshop_path(path, true)
+        && !remote_path(path, true)
     {
         return Err("Unsupported Hub write operation".into());
     }
@@ -355,9 +343,6 @@ fn request(c: &Config, path: &str, body: Option<Value>) -> Result<Value, String>
             memory_write(value, c.share_text)?;
         }
     }
-    let key = vault(&c.endpoint)?
-        .get_password()
-        .map_err(|_| "Нет ключа библиотеки в системном хранилище")?;
     let url = format!("{}/api/{}", c.endpoint.trim_end_matches('/'), path);
     let mut q = client(c)?
         .request(
@@ -368,7 +353,8 @@ fn request(c: &Config, path: &str, body: Option<Value>) -> Result<Value, String>
             },
             url,
         )
-        .bearer_auth(key);
+        .header("X-Enki-Device-Name", &c.label)
+        .header("X-Enki-Platform", std::env::consts::OS);
     if let Some(mut b) = body {
         if !c.share_text {
             if let Some(records) = b["records"].as_array_mut() {
@@ -449,6 +435,14 @@ fn workshop_path(path: &str, write: bool) -> bool {
             | "workshop/messages"
             | "workshop/logs"
     ) || route.strip_prefix("workshop/changes/").is_some_and(hash_ok)
+}
+
+fn remote_path(path: &str, write: bool) -> bool {
+    if write {
+        matches!(path, "remote/sync" | "remote/complete") && !path.contains('?')
+    } else {
+        matches!(path, "remote/overview" | "remote/session")
+    }
 }
 
 fn memory_path(path: &str) -> bool {
@@ -567,16 +561,7 @@ pub async fn hub_config(
             if !c.endpoint.is_empty() {
                 c.endpoint = origin(&c.endpoint)?;
             }
-            if let Some(k) = key {
-                if !k.is_empty() {
-                    if !(20..=256).contains(&k.trim().len()) || k.contains(['\r', '\n']) {
-                        return Err("Invalid device key".into());
-                    }
-                    vault(&c.endpoint)?
-                        .set_password(k.trim())
-                        .map_err(|_| "Cannot save Hub key to system vault")?;
-                }
-            }
+            let _ = key; // Legacy field: LAN mode intentionally stores no token.
             if scope(&old) != scope(&c) {
                 c.installed.clear();
             }
@@ -637,8 +622,9 @@ pub(crate) fn broker_request(
     let models = path
         .strip_prefix("model-services/")
         .is_some_and(|rest| allowed.contains(&rest));
-    if !models && !workshop_path(path, body.is_some()) {
-        return Err("Недопустимый запрос сервиса моделей".into());
+    let remote = remote_path(path, body.is_some());
+    if !models && !workshop_path(path, body.is_some()) && !remote {
+        return Err("Недопустимый запрос Hub".into());
     }
     let c = load()?;
     if !c.enabled {
@@ -692,21 +678,16 @@ fn valid_files(v: &Value) -> Result<BTreeMap<String, String>, String> {
     }
     Ok(out)
 }
-fn admin_vault(endpoint: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(
-        &crate::paths::HUB_SECRETS.service()?,
-        &admin_account(endpoint),
-    )
-    .map_err(|_| "System credential store unavailable".into())
-}
 fn catalog_send(
     c: &Config,
     method: reqwest::Method,
     body: Option<&Value>,
-    key: &str,
 ) -> Result<Result<Value, (u16, String)>, String> {
     let url = format!("{}/api/model-catalog", c.endpoint.trim_end_matches('/'));
-    let mut q = client(c)?.request(method, url).bearer_auth(key);
+    let mut q = client(c)?
+        .request(method, url)
+        .header("X-Enki-Device-Name", &c.label)
+        .header("X-Enki-Platform", std::env::consts::OS);
     if let Some(b) = body {
         if b.to_string().len() > 256 * 1024 {
             return Err("Каталог моделей превышает 256KiB".into());
@@ -752,11 +733,8 @@ pub async fn hub_model_catalog(
             return Err("Hub не подключён".into());
         }
         origin(&c.endpoint)?;
-        let device = vault(&c.endpoint)?
-            .get_password()
-            .map_err(|_| "Нет ключа библиотеки в системном хранилище")?;
         if action == "get" {
-            return match catalog_send(&c, reqwest::Method::GET, None, &device)? {
+            return match catalog_send(&c, reqwest::Method::GET, None)? {
                 Ok(value) => Ok(value),
                 Err((status, message)) => Err(format!("Hub HTTP {status} — {message}")),
             };
@@ -775,45 +753,11 @@ pub async fn hub_model_catalog(
         if !body["models"].is_array() {
             return Err("models должен быть списком".into());
         }
-        let provided = admin_key
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty());
-        if let Some(k) = &provided {
-            if !(20..=256).contains(&k.len()) || k.contains(['\r', '\n']) {
-                return Err("Некорректный административный ключ".into());
-            }
+        let _ = admin_key; // Legacy field; no administrator token in LAN mode.
+        match catalog_send(&c, reqwest::Method::POST, Some(&body))? {
+            Ok(value) => Ok(value),
+            Err((status, message)) => Err(format!("Hub HTTP {status} — {message}")),
         }
-        let mut keys: Vec<String> = Vec::new();
-        if let Some(k) = &provided {
-            keys.push(k.clone());
-        }
-        if let Ok(Some(k)) = admin_vault(&c.endpoint).map(|v| v.get_password().ok()) {
-            if !keys.contains(&k) {
-                keys.push(k);
-            }
-        }
-        if !keys.contains(&device) {
-            keys.push(device);
-        }
-        let mut last =
-            "Hub отклонил публикацию: ни один ключ не является администратором".to_string();
-        for k in &keys {
-            match catalog_send(&c, reqwest::Method::POST, Some(&body), k)? {
-                Ok(value) => {
-                    if Some(k) == provided.as_ref() {
-                        // Publication is already acknowledged. A credential
-                        // cache failure must not turn it into a failed publish.
-                        if let Ok(entry) = admin_vault(&c.endpoint) {
-                            let _ = entry.set_password(k);
-                        }
-                    }
-                    return Ok(value);
-                }
-                Err((403, message)) => last = format!("Hub HTTP 403 — {message}"),
-                Err((status, message)) => return Err(format!("Hub HTTP {status} — {message}")),
-            }
-        }
-        Err(last)
     })
     .await
     .map_err(|_| "Каталог моделей: задача не выполнена")?
@@ -959,14 +903,7 @@ pub fn cli() -> Result<(), String> {
             .map_err(|_| "Invalid setup configuration")?;
         validate(&c)?;
         c.endpoint = origin(&c.endpoint)?;
-        let key = input["key"].as_str().ok_or("Missing device key")?;
-        if !(20..=256).contains(&key.len()) || key.contains(['\r', '\n']) {
-            return Err("Invalid device key".into());
-        }
         let _guard = IO.lock().map_err(|_| "Hub lock failed")?;
-        vault(&c.endpoint)?
-            .set_password(key)
-            .map_err(|_| "Cannot save Hub credential")?;
         write(
             &root()?.join("connection.json"),
             &serde_json::to_string_pretty(&c).map_err(|_| "Cannot encode connection")?,
@@ -999,6 +936,17 @@ mod tests {
         assert!(!workshop_path("workshop/devices/revoke", true));
         assert!(!workshop_path("devices", false));
         assert!(!workshop_path("https://other/status", false));
+    }
+    #[test]
+    fn remote_control_is_a_bounded_runtime_transport_not_an_arbitrary_api_proxy() {
+        assert!(remote_path("remote/sync", true));
+        assert!(remote_path("remote/complete", true));
+        assert!(remote_path("remote/overview", false));
+        assert!(remote_path("remote/session", false));
+        assert!(!remote_path("remote/command", true));
+        assert!(!remote_path("remote/sync?device=other", true));
+        assert!(!remote_path("remote/../updates", true));
+        assert!(!remote_path("remote/asr", true));
     }
     #[test]
     fn model_coordinator_paths_accept_only_bounded_catalog_ids_and_ticket_operations() {

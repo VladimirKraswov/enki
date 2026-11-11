@@ -11,8 +11,8 @@ class HTTP(unittest.TestCase):
   c=http.client.HTTPSConnection('localhost',self.server.server_port,context=self.ctx,timeout=5);h=headers or {};raw=json.dumps(body) if body is not None else None
   if raw:h={'Content-Type':'application/json',**h}
   c.request(method,path,body=raw,headers=h);r=c.getresponse();data=r.read();code=r.status;headers=dict(r.getheaders());c.close();return code,headers,data
- def test_auth_transport_and_security_headers(self):
-  self.assertEqual(self.req('/health')[0],200);self.assertEqual(self.req('/api/metrics')[0],401);code,h,b=self.req('/api/me',headers={'Authorization':'Bearer '+self.key});self.assertEqual(code,200);self.assertNotIn(self.key,b.decode());self.assertIn("frame-ancestors 'none'",h['Content-Security-Policy']);self.assertEqual(self.req('/api/login','POST',{'token':self.key}, {'Origin':'https://other.site'})[0],403)
+ def test_lan_transport_and_security_headers(self):
+  self.assertEqual(self.req('/health')[0],200);self.assertEqual(self.req('/api/metrics')[0],200);code,h,b=self.req('/api/me',headers={'Authorization':'Bearer '+self.key});self.assertEqual(code,200);self.assertNotIn(self.key,b.decode());self.assertIn("frame-ancestors 'none'",h['Content-Security-Policy']);self.assertEqual(self.req('/api/login','POST',{'token':self.key}, {'Origin':'https://other.site'})[0],403)
  def test_cookie_login_and_safe_static(self):
   code,h,_=self.req('/api/login','POST',{'token':self.key});self.assertEqual(code,200);self.assertIn('HttpOnly',h['Set-Cookie']);self.assertIn('Secure',h['Set-Cookie']);cookie=h['Set-Cookie'].split(';')[0];self.assertEqual(self.req('/api/catalog',headers={'Cookie':cookie})[0],200);self.assertEqual(self.req('/../server.py')[0],404);self.assertEqual(self.req('/')[0],200)
  def test_legacy_cookie_stays_usable_but_logout_revokes_both_names(self):
@@ -20,7 +20,8 @@ class HTTP(unittest.TestCase):
   self.assertEqual(self.req('/api/catalog',headers={'Cookie':old})[0],200)
   _,h,_=self.req('/api/login','POST',{'token':self.key});new=h['Set-Cookie'].split(';')[0]
   self.assertEqual(self.req('/api/logout','POST',{}, {'Cookie':old+'; '+new})[0],200)
-  for cookie in [old,new]:self.assertEqual(self.req('/api/catalog',headers={'Cookie':cookie})[0],401)
+  # LAN mode has no cookie authority; logout remains a harmless legacy operation.
+  for cookie in [old,new]:self.assertEqual(self.req('/api/catalog',headers={'Cookie':cookie})[0],200)
  def test_wrong_ca_rejected(self):
   c=http.client.HTTPSConnection('localhost',self.server.server_port,context=ssl.create_default_context(),timeout=5)
   with self.assertRaises(ssl.SSLCertVerificationError):c.request('GET','/health')
@@ -40,25 +41,20 @@ class UpdateHTTP(HTTP):
   self.assertEqual(self.req('/downloads/latest/source.zip')[2],archive)
   self.assertEqual(self.req(manifest['signedSource']['url'])[0],200)
   for path in ['/api/metrics','/api/sessions','/api/catalog','/api/updates/stable']:
-   self.assertEqual(self.req(path)[0],401)
+   self.assertEqual(self.req(path)[0],200)
   self.assertEqual(self.req('/downloads/../server.py')[0],404)
   self.assertEqual(self.req('/downloads/latest','POST',{})[0],405)
   self.assertEqual(self.req('/downloads/latest',headers={'Origin':'https://other.site'})[0],403)
   self.server.release_download.acquire();self.server.release_download.acquire()
   try:self.assertEqual(self.req('/downloads/latest')[0],429)
   finally:self.server.release_download.release();self.server.release_download.release()
- def test_release_upload_auth_before_body_and_large_authenticated_publish(self):
+ def test_large_lan_release_publish_and_signed_artifact_download(self):
   from test_releases import package
   admin=self.h.provision('publisher','other',True)['token']
-  c=http.client.HTTPSConnection('localhost',self.server.server_port,context=self.ctx,timeout=5)
-  c.putrequest('POST','/api/updates');c.putheader('Content-Type','application/json');c.putheader('Content-Length',str(30*1024*1024));c.endheaders()
-  r=c.getresponse();self.assertEqual(r.status,401);r.read();c.close()
   hot=package('hot',files={'index.html':'x'*(2*1024*1024)})
   body=dict(channel='stable',expectedRevision=None,hot=hot,source=package('source'))
-  c=http.client.HTTPSConnection('localhost',self.server.server_port,context=self.ctx,timeout=5)
-  c.putrequest('POST','/api/updates');c.putheader('Authorization','Bearer '+self.key);c.putheader('Content-Type','application/json');c.putheader('Content-Length',str(30*1024*1024));c.endheaders();r=c.getresponse();self.assertEqual(r.status,403);r.read();c.close()
-  code,_,raw=self.req('/api/updates','POST',body,{'Authorization':'Bearer '+admin});self.assertEqual(code,200)
+  code,_,raw=self.req('/api/updates','POST',body);self.assertEqual(code,200)
   head=json.loads(raw);artifact=head['artifacts']['hot']['digest']
   code,_,_=self.req('/api/updates/artifacts/'+artifact,headers={'Authorization':'Bearer '+self.key});self.assertEqual(code,200)
-  self.assertEqual(self.req('/api/updates/artifacts/'+artifact)[0],401)
+  self.assertEqual(self.req('/api/updates/artifacts/'+artifact)[0],200)
   self.assertEqual(self.req('/health')[0],200)

@@ -8,10 +8,10 @@ import { usageSources } from "../usage/sources";
 import { store } from "../state/store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 export function HubSettings({onDirtyChange}:{onDirtyChange?:(v:boolean)=>void}){
- const [value,setValue]=useState<HubConfig>(emptyConfig),[saved,setSaved]=useState<HubConfig>(emptyConfig),[key,setKey]=useState("");
+ const [value,setValue]=useState<HubConfig>(emptyConfig),[saved,setSaved]=useState<HubConfig>(emptyConfig);
  const [items,setItems]=useState<HubItem[]>([]),[status,setStatus]=useState<Spool|null>(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState(""),[error,setError]=useState(""),[ready,setReady]=useState(false);
  const cancel=useRef<AbortController|null>(null),mounted=useRef(true);
- const dirty=ready&&(JSON.stringify(value)!==JSON.stringify(saved)||!!key);
+ const dirty=ready&&(JSON.stringify(value)!==JSON.stringify(saved));
  useEffect(()=>{mounted.current=true;void config().then(c=>{if(mounted.current){setValue(c);setSaved(c);setReady(true);}}).catch(e=>setError(String(e)));return()=>{mounted.current=false;cancel.current?.abort();};},[]);
  useEffect(()=>{onDirtyChange?.(dirty);return()=>onDirtyChange?.(false);},[dirty,onDirtyChange]);
  const run=async(fn:()=>Promise<void>)=>{setBusy(true);setError("");setNotice("");try{await fn();}catch(e){if(mounted.current)setError(String(e));}finally{if(mounted.current)setBusy(false);}};
@@ -34,14 +34,13 @@ export function HubSettings({onDirtyChange}:{onDirtyChange?:(v:boolean)=>void}){
  <SettingField label="Адрес сервиса HTTPS"><input aria-label="Адрес библиотеки" placeholder="https://enki-hub.local:8443" value={value.endpoint} onChange={e=>setValue({...value,endpoint:e.target.value})}/></SettingField>
  <SettingField label="Публичный сертификат PEM"><textarea aria-label="Сертификат библиотеки" spellCheck={false} placeholder="-----BEGIN CERTIFICATE-----" value={value.certificate} onChange={e=>setValue({...value,certificate:e.target.value})}/></SettingField>
  <p className="settings-muted">Импортируйте публичный сертификат сервиса.</p>
- <SettingField label="Ключ этого устройства"><input aria-label="Ключ библиотеки" type="password" autoComplete="off" value={key} placeholder="Пусто — сохранить существующий ключ" onChange={e=>setKey(e.target.value)}/></SettingField>
- <p className="settings-muted">Ключ хранится в системной связке ключей.</p>
+ <p className="settings-muted">Локальная сеть: ключи, регистрация и вход не требуются. Доступ ограничен адресами LAN на Hub.</p>
  <SettingField label="Подключить библиотеку и передавать метрики" className="hub-toggle"><input type="checkbox" checked={value.enabled} onChange={e=>setValue({...value,enabled:e.target.checked})}/></SettingField>
  <SettingField label="Передавать тексты запросов и итоговых ответов" className="hub-toggle"><input type="checkbox" checked={value.shareText} onChange={e=>setValue({...value,shareText:e.target.checked})}/></SettingField>
  <p className="settings-muted">Тексты запросов и ответов передаются в Hub. Файлы и скриншоты — нет. Не отправляйте секреты.</p>
- <div className="settings-actions"><button className="btn" disabled={!dirty||busy} onClick={()=>{setValue(saved);setKey("");}}>Отменить</button><button className="btn primary" disabled={!ready||busy||!dirty} onClick={()=>void run(async()=>{const c=await config(value,key||undefined,saved);setValue(c);setSaved(c);setKey("");if(c.enabled){const me=await request<{name:string}>("me");await refresh();setNotice(`Подключено: ${me.name}`);}else setNotice("Передача отключена.");})}>Сохранить и проверить</button></div>
+ <div className="settings-actions"><button className="btn" disabled={!dirty||busy} onClick={()=>{setValue(saved);}}>Отменить</button><button className="btn primary" disabled={!ready||busy||!dirty} onClick={()=>void run(async()=>{const c=await config(value,undefined,saved);setValue(c);setSaved(c);if(c.enabled){const me=await request<{name:string}>("me");await refresh();setNotice(`Подключено: ${me.name}`);}else setNotice("Передача отключена.");})}>Сохранить и проверить</button></div>
  </div></section>
- <section className="settings-group"><h2>Библиотека</h2><div className="settings-actions"><button className="btn" disabled={!saved.enabled||dirty||busy} onClick={()=>void run(refresh)}>Обновить каталог</button><button className="btn" disabled={!saved.endpoint||dirty} onClick={()=>void run(()=>openUrl(saved.endpoint))}>Открыть Web UI</button></div>
+ <section className="settings-group"><h2>Библиотека</h2><div className="settings-actions"><button className="btn" disabled={!saved.enabled||dirty||busy} onClick={()=>void run(refresh)}>Обновить каталог</button><button className="btn" disabled={!saved.endpoint||dirty} onClick={()=>void run(()=>openUrl(saved.endpoint+"/remote"))}>Открыть Web UI</button></div>
  {!items.length&&<p className="settings-muted">Каталог пуст.</p>}
  {items.filter(x=>x.enabled).map(item=><article className="capability-skill" key={item.id}><div className="capability-item"><div><strong>{item.title}</strong><p>{item.description}</p><small>{item.kind} · {item.revision.slice(0,12)} {saved.installed[item.id]===item.revision?"· установлено":""}</small></div><button className="btn" disabled={busy||dirty} onClick={()=>void run(async()=>{const pkg=await install(item,false,await hubOrigin(saved));const c=await config();setSaved(c);setValue(c);setNotice(`Пакет сохранён: ${pkg.path}. Навыки доступны обоим агентам при следующей отправке.`);})}>Скачать / применить</button></div>
  {(item.kind==="prompt"||item.kind==="runbook")&&<button className="btn" disabled={busy||dirty} onClick={()=>void run(async()=>{const pkg=await install(item,false,await hubOrigin(saved)),text=Object.values(pkg.manifest.files).join("\n\n");store.setDraft([store.getDraft(),text].filter(Boolean).join("\n\n"));setNotice("Добавлено в черновик текущего чата. Сообщение не отправлено.");})}>Добавить в черновик</button>}</article>)}

@@ -36,6 +36,7 @@ pub struct SecretNamespace {
 }
 
 /// Hub device key (`endpoint`) and cached model-admin key (`endpoint#model-admin`).
+#[cfg(test)]
 pub const HUB_SECRETS: SecretNamespace = SecretNamespace {
     legacy: "dev.local.opencodedesktop.hub",
     suffix: "hub",

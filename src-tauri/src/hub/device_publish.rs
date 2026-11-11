@@ -49,14 +49,11 @@ pub fn cli() -> Result<(), String> {
         "publish" => {
             let data = checked_input(Path::new(value))?;
             let c = load()?;
-            let key = vault(&c.endpoint)?
-                .get_password()
-                .map_err(|_| "Нет ключа Hub")?;
             if release_identity()? != identity {
                 return Err("Подключение Hub изменилось".into());
             }
             let response=client(&c)?.post(format!("{}/api/updates/device",c.endpoint.trim_end_matches('/')))
-                .timeout(Duration::from_secs(120)).bearer_auth(key).json(&data).send().map_err(|_| "Соединение прервано; публикация не подтверждена. Проверьте Hub без повторной отправки пакета.")?;
+                .timeout(Duration::from_secs(120)).header("X-Enki-Device-Name", &c.label).header("X-Enki-Platform", std::env::consts::OS).json(&data).send().map_err(|_| "Соединение прервано; публикация не подтверждена. Проверьте Hub без повторной отправки пакета.")?;
             let status = response.status();
             if !status.is_success() {
                 return Err(format!(
