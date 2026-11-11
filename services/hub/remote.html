@@ -31,7 +31,10 @@
         <small id="session-path"></small>
       </button>
       <span id="session-status" class="status"></span>
-      <button class="new-button" data-action="new" aria-label="Новое задание">＋</button>
+      <div class="session-actions">
+        <button id="refresh-button" class="new-button" data-action="refresh" aria-label="Обновить сейчас">↻</button>
+        <button class="new-button" data-action="new" aria-label="Новое задание">＋</button>
+      </div>
     </section>
 
     <div id="alerts" class="alerts"></div>
@@ -72,6 +75,11 @@
       <button class="filter" data-filter="workshop">Мастерская</button>
     </div>
     <div id="session-results" class="session-results"></div>
+  </dialog>
+
+  <dialog id="install-dialog" class="sheet small-sheet">
+    <div class="sheet-head"><h2>Установка Enki</h2><button class="icon" data-action="close-install" aria-label="Закрыть">×</button></div>
+    <div id="install-content"></div>
   </dialog>
 
   <dialog id="new-dialog" class="sheet small-sheet">

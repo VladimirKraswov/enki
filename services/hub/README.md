@@ -38,7 +38,7 @@ See [Windows bootstrap](../../docs/WINDOWS-BOOTSTRAP.md).
 
 Selected skills/prompts/templates update every5minutes while agents are idle. New unselected packages are not installed automatically. MCP updates require deliberate review. Downloaded revisions have SHA256 checks and safe paths; local edits are preserved with an error. Old revisions remain in cache. Rollback: GET manifest `?revision=HASH`, publish its original files with current `expectedRevision`; devices pull this current version. Only packages are shared, not provider configuration or device secrets.
 
-Private self-signed TLS produces browser warnings until owner explicitly trusts the certificate. Do not bypass errors with agent tools. After fingerprint verification, manually install public certificate in browser/OS trust UI for direct Web UI access. App's isolated trust already supports sync without this extra step.
+Private self-signed TLS blocks PWA service workers and produces browser warnings until owner explicitly trusts the certificate; `/remote-certificate.crt` offers the public certificate with a fingerprint for verification. Do not bypass errors with agent tools. After fingerprint verification, manually install public certificate in browser/OS trust UI for direct Web UI access. App's isolated trust already supports sync without this extra step.
 
 ## Recorded information
 

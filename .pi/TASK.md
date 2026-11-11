@@ -1,3 +1,20 @@
+# TASK — 2026-11-12: Remote PWA trust + session sync / 2.0.70
+
+Владелец: «приложение нельзя установить», смена сессии оставляет Мастерскую.
+Live Chromium CDP: manifest errors=[], icons/start_url валидны, но installability
+not-from-secure-origin; SW register: SSL certificate error fetching script.
+Причина — self-signed Hub TLS, bypass browser warning не даёт доверенного HTTPS.
+Добавлены install sheet с точной диагностикой, platform steps, public cert
+`/remote-certificate.crt`, SHA256 и повторная проверка; native prompt errors
+не остаются молчаливыми. Нельзя обойти secure-context требование.
+Sync: selection token+device/session guards, старая история сразу скрыта,
+loading; последовательный scheduler без overlap, visibility pause/resume,
+manual ↻, online/команда refresh. Независимые message/question/queue signatures
+сохраняют ввод ответа; session list перерисовывается только по изменениям;
+scroll и draft исходной сессии сохраняются. Fixture две сессии: переключение
+обе стороны + задержанный old detail 1.5s, final title/messages первой верны.
+Mobile 390×844 main/install screenshots проверены. Hub 135 PASS. Live CT206
+assets установлены, certificate mode 0644 после выявленного EACCES и bytes OK.
 # TASK — 2026-11-12: Remote PWA / 2.0.69
 
 `/remote` превращена в PWA: manifest standalone, иконки PNG 192/512 и Apple 180,

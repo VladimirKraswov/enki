@@ -6,6 +6,7 @@ const state = {
   devices: [], deviceId: null, sessionId: null, overview: null, detail: null,
   signatures: {}, openTools: new Set(), busy: false, connected: false,
   sessionFilter: 'all', recorder: null, chunks: [], recordingTimer: null, toastTimer: null,
+  selection: 0, syncing: false, syncAgain: false, syncTimer: null, installError: '',
 };
 
 function el(tag, className, text) {
@@ -91,6 +92,10 @@ async function loadOverview() {
     if (state.deviceId) localStorage.setItem('enki.remote.device', state.deviceId);
     if (state.overview && !currentSession()) state.sessionId = state.overview.sessions?.[0]?.id || null;
     renderDevices(); renderHeader();
+    const sessionListSignature = JSON.stringify([state.deviceId, state.overview?.sessions, state.overview?.statuses, state.overview?.questions, state.overview?.permissions]);
+    if ($('sessions-dialog').open && state.signatures.sessionList !== sessionListSignature) {
+      state.signatures.sessionList = sessionListSignature; renderSessionResults();
+    }
   } catch (error) {
     state.connected = false; $('connection').className = 'connection'; $('connection').title = 'Нет связи с Hub';
   }
@@ -115,7 +120,7 @@ async function chooseDevice(id) {
 }
 function renderHeader() {
   const session = currentSession();
-  $('composer').hidden = !session; $('empty').hidden = !!session;
+  $('composer').hidden = !session; const empty = $('empty'); if (empty) empty.hidden = !!session;
   $('session-title').textContent = session?.title || 'Выбрать сессию';
   $('session-path').textContent = session ? session.directory : currentDevice()?.name || '';
   const status = session ? statusFor(session.id) : null;
@@ -127,30 +132,51 @@ function renderHeader() {
   }
 }
 async function selectSession(id) {
-  state.sessionId = id; state.detail = null; delete state.signatures.detail;
+  const selection = ++state.selection;
+  state.sessionId = id; state.detail = null;
+  delete state.signatures.detail; delete state.signatures.interactions; delete state.signatures.queue;
   if (id) localStorage.setItem('enki.remote.session', id);
+  else localStorage.removeItem('enki.remote.session');
   renderHeader();
+  $('alerts').replaceChildren(); $('queue').replaceChildren();
+  const root = $('messages'); root.replaceChildren();
+  if (id) {
+    const loading = el('div', 'empty'); loading.append(el('div', 'empty-mark', '↻'), el('h1', '', currentSession()?.title || 'Загрузка сессии'), el('p', '', 'Получаю актуальную историю с устройства…')); root.append(loading);
+  } else renderMessages([]);
   const area = $('prompt'); area.value = id ? sessionStorage.getItem('enki.remote.draft.' + id) || '' : ''; resizeComposer();
-  if (state.deviceId && id) { await api('watch', { device: state.deviceId, session: id }); await loadDetail(); }
+  if (state.deviceId && id) {
+    try { await api('watch', { device: state.deviceId, session: id }); }
+    catch (error) { toast('Сессия выбрана; повторяю синхронизацию после восстановления связи.', true); }
+    if (selection === state.selection) requestSync();
+  }
 }
 async function loadDetail() {
   if (!state.deviceId || !state.sessionId) return;
+  const selection = state.selection, device = state.deviceId, session = state.sessionId;
   try {
-    const data = await api(`session?device=${encodeURIComponent(state.deviceId)}&session=${encodeURIComponent(state.sessionId)}`);
-    if (data.detail?.session === state.sessionId) { state.detail = data.detail; renderDetail(); }
+    const data = await api(`session?device=${encodeURIComponent(device)}&session=${encodeURIComponent(session)}`);
+    if (selection === state.selection && device === state.deviceId && session === state.sessionId
+        && data.detail?.session === session) { state.detail = data.detail; renderDetail(); }
   } catch (error) { /* retain the last confirmed view and retry next poll */ }
 }
 function renderDetail() {
   const detail = state.detail; if (!detail) return;
-  const signature = JSON.stringify([detail.messages, detail.questions, detail.permissions, detail.queue, detail.status, detail.info]);
-  if (state.signatures.detail === signature) return;
-  state.signatures.detail = signature;
-  renderMessages(detail.messages || []); renderInteractions(); renderQueue(detail.queue);
-  if (detail.info?.model && !$('model').matches(':focus'))
-    fillModels($('model'), state.overview, detail.info.model.providerID + '\n' + detail.info.model.id);
+  const messageSignature = JSON.stringify([state.deviceId, detail.session, detail.messages, detail.status, detail.info]);
+  if (state.signatures.detail !== messageSignature) {
+    state.signatures.detail = messageSignature; renderMessages(detail.messages || []);
+    if (detail.info?.model && !$('model').matches(':focus'))
+      fillModels($('model'), state.overview, detail.info.model.providerID + '\n' + detail.info.model.id);
+  }
+  const interactionSignature = JSON.stringify([detail.session, detail.questions, detail.permissions]);
+  if (state.signatures.interactions !== interactionSignature) {
+    state.signatures.interactions = interactionSignature; renderInteractions();
+  }
+  const queueSignature = JSON.stringify([detail.session, detail.queue]);
+  if (state.signatures.queue !== queueSignature) { state.signatures.queue = queueSignature; renderQueue(detail.queue); }
 }
 function renderMessages(messages) {
   const root = $('messages');
+  const previousTop = root.scrollTop;
   const nearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 220;
   if (!messages.length) {
     root.replaceChildren(); const empty = el('div', 'empty');
@@ -176,6 +202,7 @@ function renderMessages(messages) {
     root.append(item);
   }
   if (nearBottom) root.scrollTop = root.scrollHeight;
+  else root.scrollTop = Math.min(previousTop, root.scrollHeight - root.clientHeight);
 }
 function workDetails(title, text, id, failed = false) {
   const detail = el('details', 'work'); detail.open = state.openTools.has(id);
@@ -236,7 +263,7 @@ async function command(kind, payload, session = state.sessionId) {
   try {
     const result = await api('command', { id: crypto.randomUUID(), device: state.deviceId, session, kind, payload });
     toast('Команда сохранена; ждём устройство…');
-    setTimeout(loadDetail, 900); setTimeout(loadOverview, 1400); return result;
+    requestSync(); return result;
   } catch (error) { toast(error.message, true); return null; }
   finally { state.busy = false; }
 }
@@ -246,6 +273,7 @@ function openSessions() {
   setTimeout(() => $('session-search').focus(), 50);
 }
 function renderSessionResults() {
+  state.signatures.sessionList = JSON.stringify([state.deviceId, state.overview?.sessions, state.overview?.statuses, state.overview?.questions, state.overview?.permissions]);
   const root = $('session-results'); root.replaceChildren();
   const search = $('session-search').value.trim().toLowerCase();
   let previousDirectory = null, count = 0;
@@ -394,10 +422,13 @@ $('dictate').addEventListener('click', async () => {
 
 $('composer').addEventListener('submit', async event => {
   event.preventDefault();
-  const text = $('prompt').value.trim(), model = selectModel();
+  const text = $('prompt').value.trim(), model = selectModel(), session = state.sessionId;
   if (!text || !model) return toast(!model ? 'Нет доступной модели' : 'Введите задание', true);
-  const result = await command('prompt', { text, model });
-  if (result) { $('prompt').value = ''; sessionStorage.removeItem('enki.remote.draft.' + state.sessionId); }
+  const result = await command('prompt', { text, model }, session);
+  if (result) {
+    if (state.sessionId === session) { $('prompt').value = ''; resizeComposer(); }
+    sessionStorage.removeItem('enki.remote.draft.' + session);
+  }
 });
 $('model').addEventListener('change', () => { const model = selectModel(); if (model && state.sessionId) void command('model.set', { model }); });
 function resizeComposer() { const area = $('prompt'); area.style.height = 'auto'; area.style.height = Math.min(180, area.scrollHeight) + 'px'; }
@@ -418,38 +449,98 @@ document.addEventListener('click', event => {
   if (action === 'new') openNew();
   if (action === 'close-new') $('new-dialog').close();
   if (action === 'install') void installApp();
+  if (action === 'close-install') $('install-dialog').close();
+  if (action === 'refresh') requestSync();
   if (action === 'settings') { $('settings-dialog').showModal(); renderSettings(); }
   if (action === 'close-settings') $('settings-dialog').close();
   if (action === 'stop') void command('stop', {});
 });
 
-for (const id of ['sessions-dialog', 'new-dialog', 'settings-dialog'])
+for (const id of ['sessions-dialog', 'new-dialog', 'settings-dialog', 'install-dialog'])
   $(id).addEventListener('click', event => { if (event.target === $(id)) $(id).close(); });
 
 let installPrompt = null;
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; });
 window.addEventListener('appinstalled', () => { installPrompt = null; toast('Enki установлен на это устройство'); });
+async function registerRemoteWorker() {
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) {
+    state.installError = 'Браузер не считает соединение доверенным HTTPS.'; return false;
+  }
+  try {
+    await navigator.serviceWorker.register('/remote-sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready; state.installError = ''; return true;
+  } catch (error) {
+    state.installError = error.message.includes('certificate')
+      ? 'Service worker заблокирован: операционная система не доверяет сертификату Hub.'
+      : 'Service worker не зарегистрирован: ' + error.message;
+    return false;
+  }
+}
+function openInstall() { renderInstall(); $('install-dialog').showModal(); }
+function renderInstall() {
+  const root = $('install-content'); root.replaceChildren();
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const status = standalone ? 'Enki уже установлен.' : state.installError || 'Проверяю возможность установки…';
+  root.append(el('p', 'install-status', status));
+  if (standalone) return;
+  const steps = el('ol', 'install-steps');
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    for (const text of ['Скачайте публичный сертификат Hub и откройте его.', 'Настройки → Загруженный профиль → Установить.', 'Настройки → Основные → Об этом устройстве → Доверие сертификатам: включите Hub.', 'Откройте страницу заново в Safari → Поделиться → На экран “Домой”.']) steps.append(el('li', '', text));
+  } else {
+    for (const text of ['Скачайте публичный сертификат Hub.', 'Добавьте его в доверенные корневые сертификаты этой ОС.', 'Закройте и снова откройте браузер, затем эту страницу.', 'Нажмите ⬇ или выберите «Установить Enki» в меню браузера.']) steps.append(el('li', '', text));
+  }
+  root.append(el('p', '', 'Для установки PWA система должна доверять HTTPS. Простого продолжения после предупреждения браузера недостаточно.'), steps);
+  const certificate = el('a', 'certificate-link', 'Скачать публичный сертификат Hub'); certificate.href = '/remote-certificate.crt'; certificate.download = 'enki-hub.crt'; root.append(certificate);
+  root.append(el('p', 'fingerprint', 'SHA-256: 55:CC:65:2F:9F:58:6D:AA:0A:EA:35:EF:93:6D:8F:3C:77:F8:6A:B5:3C:14:E8:64:3D:19:1E:35:04:20:20:FC'));
+  root.append(button('Проверить снова', async () => {
+    const ok = await registerRemoteWorker(); renderInstall();
+    toast(ok ? 'HTTPS и service worker готовы. Перезагрузите страницу и нажмите ⬇.' : 'Сертификат ещё не доверен системой.', !ok);
+  }, true));
+}
 async function installApp() {
   if (matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)
     return toast('Enki уже работает как установленное приложение');
-  if (installPrompt) {
-    const prompt = installPrompt; installPrompt = null; await prompt.prompt();
-    const choice = await prompt.userChoice;
-    if (choice.outcome !== 'accepted') toast('Установка отменена'); return;
+  if (installPrompt && !state.installError) {
+    try {
+      const prompt = installPrompt; installPrompt = null; await prompt.prompt();
+      const choice = await prompt.userChoice;
+      if (choice.outcome === 'accepted') return;
+    } catch (error) { state.installError = error.message; }
   }
-  if (/iPhone|iPad|iPod/i.test(navigator.userAgent))
-    toast('В Safari: Поделиться → «На экран “Домой”».');
-  else toast('В меню браузера выберите «Установить приложение» / «Установить Enki».');
+  openInstall();
 }
-if ('serviceWorker' in navigator && window.isSecureContext)
-  window.addEventListener('load', () => navigator.serviceWorker.register('/remote-sw.js', { scope: '/' }).catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => void registerRemoteWorker());
 window.addEventListener('offline', () => { $('connection').className = 'connection'; $('connection').title = 'Нет сети'; });
-window.addEventListener('online', () => { void loadOverview(); });
+window.addEventListener('online', requestSync);
 
-async function poll() { await loadOverview(); await loadDetail(); }
+function scheduleSync(delay = 2500) {
+  clearTimeout(state.syncTimer);
+  if (!document.hidden) state.syncTimer = setTimeout(() => void syncNow(), delay);
+}
+async function syncNow() {
+  if (document.hidden) return;
+  if (state.syncing) { state.syncAgain = true; return; }
+  state.syncing = true; $('refresh-button').classList.add('syncing');
+  try {
+    await loadOverview(); await loadDetail();
+    if (state.connected) $('connection').title = 'Hub на связи · обновлено ' + new Date().toLocaleTimeString('ru-RU');
+  } finally {
+    state.syncing = false; $('refresh-button').classList.remove('syncing');
+    if (state.syncAgain) { state.syncAgain = false; void syncNow(); }
+    else scheduleSync();
+  }
+}
+function requestSync() {
+  clearTimeout(state.syncTimer);
+  if (state.syncing) state.syncAgain = true;
+  else void syncNow();
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(state.syncTimer); else requestSync(); });
+
 void (async () => {
   state.deviceId = localStorage.getItem('enki.remote.device');
   state.sessionId = localStorage.getItem('enki.remote.session');
-  await loadOverview(); if (state.sessionId) await selectSession(state.sessionId);
-  setInterval(poll, 2500);
+  await loadOverview();
+  if (state.sessionId) await selectSession(state.sessionId);
+  else { selectSession(null); requestSync(); }
 })();

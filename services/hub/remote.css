@@ -39,6 +39,15 @@ button:focus-visible, textarea:focus, select:focus, input:focus { outline: 2px s
 .status.busy { color: var(--warn); }
 .status.waiting { color: var(--warn); }
 .new-button { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--raised); color: var(--accent); font-size: 23px; }
+.session-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+#refresh-button { color: var(--muted); font-size: 21px; }
+#refresh-button.syncing { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.install-status { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); }
+.install-steps { padding-left: 22px; color: var(--muted); line-height: 1.55; }
+.fingerprint { overflow-wrap: anywhere; font: 11px ui-monospace, monospace; color: var(--muted); }
+.certificate-link { display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 12px 0; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { #refresh-button.syncing { animation: none; } }
 .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 18px; overscroll-behavior: contain; }
 .empty { text-align: center; color: var(--muted); padding: 15vh 20px 20px; }
 .empty h1 { color: var(--text); font-size: 24px; font-weight: 500; margin: 10px 0; }

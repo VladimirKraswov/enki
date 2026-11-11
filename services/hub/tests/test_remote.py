@@ -79,6 +79,11 @@ class RemoteHTTP(HTTP):
         text = worker.decode()
         self.assertIn("url.pathname.startsWith('/api/')",text)
         self.assertNotIn("cache.addAll(SHELL)", text.split('self.addEventListener(\'fetch\'')[1])
+        code, headers, certificate = self.req('/remote-certificate.crt')
+        self.assertEqual(code,200)
+        self.assertEqual(headers['Content-Type'],'application/x-x509-ca-cert')
+        self.assertIn('attachment; filename="enki-hub.crt"',headers['Content-Disposition'])
+        self.assertIn(b'BEGIN CERTIFICATE',certificate)
 
     def test_page_needs_no_login_and_asr_uses_existing_service(self):
         code, _, body = self.req('/remote')
