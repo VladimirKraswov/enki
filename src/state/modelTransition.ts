@@ -45,8 +45,8 @@ export function parseTransitionProgress(properties: Record<string, unknown> | un
 
 const PHASE_TEXT: Record<TransitionPhase, string> = {
   planning: "Проверяем, помещается ли история в выбранную модель…",
-  summary_model: "Готовим текущую модель для сжатия истории…",
-  summarizing: "Сжимаем историю текущей моделью. Полная история останется в чате…",
+  summary_model: "Готовим модель для сжатия истории…",
+  summarizing: "Сжимаем историю. Полная история останется в чате…",
   verifying: "Проверяем размер сжатой истории…",
   target_model: "Готовим выбранную модель…",
   ready: "Выбранная модель готова.",

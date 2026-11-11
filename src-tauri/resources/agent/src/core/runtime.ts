@@ -72,6 +72,9 @@ export interface RuntimeSettings {
   noDiscoveredExtensions: boolean;
   gitProgram: string | null;
   compaction: { enabled: boolean; reserveTokens?: number; keepRecentTokens?: number; triggerRatio?: number };
+  /** Explicit SDK retry policy override; absent means the imported/default
+   * policy. Tests use { enabled: false } for a deterministic failure path. */
+  retry?: { enabled?: boolean; maxRetries?: number; baseDelayMs?: number };
   /** The managed browser is opt-in in Enki's settings; its tools load only when on. */
   browserEnabled: boolean;
   /** Persisted LSP switch: when off, the configured language servers are not loaded. */
@@ -342,7 +345,7 @@ export class Runtime {
   sdkSettings(): SettingsSpec {
     const s = this.settings();
     const imported = this.configProjection.settings;
-    const retry = imported.retry && typeof imported.retry === "object" ? imported.retry as SettingsSpec["retry"] : { enabled: true, maxRetries: 3 };
+    const retry = s.retry ?? (imported.retry && typeof imported.retry === "object" ? imported.retry as SettingsSpec["retry"] : { enabled: true, maxRetries: 3 });
     return { compaction: s.compaction, retry, ...(Object.keys(imported).length ? { imported } : {}),
       ...(this.config.settingsInMemory ? { inMemory: true } : {}) };
   }

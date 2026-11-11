@@ -25,7 +25,7 @@ export interface Harness {
   token: string;
   credentials: Credentials;
   data: string;
-  model: (id?: "large" | "small" | "medium" | "vision") => ModelRef;
+  model: (id?: "large" | "small" | "medium" | "vision" | "huge") => ModelRef;
   request<T>(method: string, route: string, body?: unknown, headers?: Record<string, string>): Promise<{ status: number; body: T }>;
   command(request: CommandRequest): Promise<{ status: number; body: CommandReceipt }>;
   waitReceipt(id: string, states: string[], timeoutMs?: number): Promise<CommandReceipt>;
@@ -41,11 +41,13 @@ export interface HarnessOptions {
   ptyModule?: RuntimeConfig["ptyModule"];
   /** Explicit synthetic legacy sources (never the owner's real profile). */
   legacy?: RuntimeConfig["legacy"];
+  /** Register the second scripted provider (the fallback-compaction role). */
+  altModel?: boolean;
 }
 
 export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   const data = options.data ?? tempDir("runtime");
-  const scripted = options.scripted ?? await scriptedRuntime(path.join(data, "scripted-agent"));
+  const scripted = options.scripted ?? await scriptedRuntime(path.join(data, "scripted-agent"), { altProvider: options.altModel === true });
   const runtime = await Runtime.create({
     dataDir: data, host: "local", broker: options.broker ?? NO_BROKER, credentials: "memory", userPiAgentDir: path.join(data, "no-user-pi"),
     legacy: options.legacy ?? {}, allowModelNetwork: false, version: "test", modelRuntime: scripted.modelRuntime, capabilities: async () => null,
@@ -64,7 +66,7 @@ export async function harness(options: HarnessOptions = {}): Promise<Harness> {
   let stopping: Promise<void> | undefined;
   const h: Harness = {
     runtime, scripted, base, token, credentials, data,
-    model: (id = "large") => ({ providerID: scripted.provider, modelID: scripted.models[id] }),
+    model: (id = "large") => ({ providerID: id === "huge" ? scripted.altProvider ?? scripted.provider : scripted.provider, modelID: scripted.models[id] }),
     request,
     command: (command) => request<CommandReceipt>("POST", "/commands", command),
     waitReceipt: async (id, states, timeoutMs = 20_000) => {

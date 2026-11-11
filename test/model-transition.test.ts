@@ -84,7 +84,7 @@ describe("session.context_transition projection", () => {
     const event = { type: "session.context_transition", properties: { sessionID: "s1", operation: "mt-1", phase: "summarizing", source: { providerID: "big", modelID: "b" }, target: model, recovery: ["retry", "bogus"] } };
     const parsed = parseTransitionProgress(event.properties)!;
     expect(parsed).toMatchObject({ phase: "summarizing", operation: "mt-1", recovery: ["retry"] });
-    expect(transitionText(parsed)).toMatch(/Сжимаем историю текущей моделью/);
+    expect(transitionText(parsed)).toMatch(/Сжимаем историю\. Полная история/);
     expect(parseTransitionProgress({ sessionID: "s1", phase: "nope", target: model })).toBeNull();
     const contextTransition = vi.fn();
     const host = { queue: vi.fn(), replaceQueues: vi.fn(), dialog: vi.fn(), schedule: vi.fn(), notice: vi.fn(), broker: vi.fn(), contextTransition } as unknown as RuntimeSyncHost;

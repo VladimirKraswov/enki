@@ -233,6 +233,8 @@ export function Composer() {
   return (
     <div className="composer-wrap">
       {selection && <ModelSelectionDialog {...selection}
+        question={selection.pending && s.activeSessionId
+          ? Object.values(s.chat.questions).find(q => q.sessionID === s.activeSessionId)?.questions[0]?.question ?? null : null}
         status={modelServices.statusFor(selection.providerID, selection.modelID, undefined, engineId)}
         onClose={() => { selectionAbort.current?.abort(); selectionTicket.current++; setSelection(null); }} onRetry={() => void selectModel(selection.providerID, selection.modelID)}/>}
       {!connected && !store.currentHost() && <RuntimeStartupStatus progress={s.connection.startup} error={s.connection.error} onRetry={() => void store.retryConnection()}/>}

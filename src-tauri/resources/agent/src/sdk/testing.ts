@@ -12,14 +12,18 @@ export { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall, type FauxRe
 export interface ScriptedRuntime {
   modelRuntime: SdkModelRuntime;
   provider: string;
-  models: { large: string; small: string; medium: string; vision: string };
+  models: { large: string; small: string; medium: string; vision: string; huge: string };
   setResponses(steps: FauxResponseStep[]): void;
   appendResponses(steps: FauxResponseStep[]): void;
+  /** Only when the harness was created with the alt provider; the fallback-compaction role. */
+  altProvider: string | null;
+  setAltResponses(steps: FauxResponseStep[]): void;
+  altCalls(): number;
   pending(): number;
   calls(): number;
 }
 
-export async function scriptedRuntime(agentDir: string): Promise<ScriptedRuntime> {
+export async function scriptedRuntime(agentDir: string, options: { altProvider?: boolean } = {}): Promise<ScriptedRuntime> {
   const modelRuntime = await createModelRuntime({ agentDir, credentials: { kind: "memory" }, allowNetwork: false });
   const faux = fauxProvider({
     provider: "enki-scripted",
@@ -44,12 +48,31 @@ export async function scriptedRuntime(agentDir: string): Promise<ScriptedRuntime
   // The scripted provider needs no secret; a runtime-only key satisfies the
   // SDK's "auth configured" preflight without touching any credential store.
   await modelRuntime.setRuntimeApiKey("enki-scripted", "scripted-test-key");
+  // A second provider stands in for the fallback-compaction role (another
+  // account whose quota survived, with a very large window).
+  let alt: ReturnType<typeof fauxProvider> | null = null;
+  if (options.altProvider) {
+    alt = fauxProvider({
+      provider: "enki-scripted-alt",
+      models: [
+        { id: "scripted-alt-huge", name: "Scripted alt huge", contextWindow: 1_000_000, maxTokens: 8_000, reasoning: false, input: ["text"] },
+        { id: "scripted-alt-small", name: "Scripted alt small", contextWindow: 4_000, maxTokens: 512, reasoning: false, input: ["text"] },
+      ],
+      tokensPerSecond: 100_000,
+      tokenSize: { min: 16, max: 32 },
+    });
+    modelRuntime.registerNativeProvider(alt.provider);
+    await modelRuntime.setRuntimeApiKey("enki-scripted-alt", "scripted-alt-key");
+  }
   return {
     modelRuntime,
     provider: "enki-scripted",
-    models: { large: "scripted-large", small: "scripted-small", medium: "scripted-medium", vision: "scripted-vision" },
+    models: { large: "scripted-large", small: "scripted-small", medium: "scripted-medium", vision: "scripted-vision", huge: "scripted-alt-huge" },
     setResponses: (steps) => faux.setResponses(steps),
     appendResponses: (steps) => faux.appendResponses(steps),
+    altProvider: alt ? "enki-scripted-alt" : null,
+    setAltResponses: (steps) => { if (!alt) throw new Error("alt provider is not registered"); alt.setResponses(steps); },
+    altCalls: () => alt?.state.callCount ?? 0,
     pending: () => faux.getPendingResponseCount(),
     calls: () => faux.state.callCount,
   };

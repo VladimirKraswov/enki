@@ -10,7 +10,7 @@ import { steeringText } from "../policy/prompt.ts";
 import {
   ownedSessionFile, appendRecoveryToolResult, bindSessionUi, openSessionReader, contextUsage, estimateSessionContext, findModel, isThinkingLevel, openAgentSession, sessionReaderOf, shutdownSession,
   IMAGE_TOKEN_ALLOWANCE, type SessionContextEstimate,
-  setSessionCompaction,
+  setSessionCompaction, catalogSnapshot,
   type SdkAssistantMessage, type SdkEvent, type SdkImage, type SdkModel, type SdkModelRuntime, type SdkSession, type SdkSessionRuntime, type SdkCommandActions, type ResourceSpec, type SettingsSpec,
 } from "../sdk/adapter.ts";
 import { entriesPage, entriesToMessages } from "../sdk/history.ts";
@@ -20,6 +20,7 @@ import type { CommandLedger } from "../store/commands.ts";
 import type { EventJournal } from "../store/events.ts";
 import { INTERRUPTED_TOOL_TEXT, type ToolJournal } from "../execution/tools.ts";
 import type { InteractionBroker } from "../interaction/broker.ts";
+import { availabilityProblem, classifyModelFailure, pickCompactionAlternatives, probeModelAvailability, type AlternativeCandidate } from "../models/availability.ts";
 import { createUiBridge, type UiDiagnostics } from "../interaction/ui-bridge.ts";
 import type { SessionCatalog, SessionRecord } from "./catalog.ts";
 import { syncOwnedFile } from "../platform/owned-sync.ts";
@@ -57,6 +58,9 @@ export interface RunOutcome {
 export interface PromptInput { text: string; images: SdkImage[] }
 
 const PREFLIGHT_MS = 60_000;
+/** The tiny availability probe before a summary call must never add real delay
+ * to a healthy model; a verdict beyond this stays `unknown`. */
+const SUMMARY_PROBE_MS = 10_000;
 
 export type ContextTransitionCode = "invalid_budget" | "model_not_found" | "source_model_missing" | "estimate_unavailable"
   | "prompt_too_large" | "handoff_required" | "compaction_failed" | "does_not_fit" | "cancelled" | "variant_unavailable";
@@ -77,8 +81,8 @@ export class ContextTransitionError extends Error {
 export type ContextTransitionPhase = "planning" | "summary_model" | "summarizing" | "verifying" | "target_model" | "ready" | "failed" | "cancelled";
 const PHASE_TEXT: Partial<Record<ContextTransitionPhase, string>> = {
   planning: "Проверка контекста перед сменой модели",
-  summary_model: "Подготовка текущей модели для сжатия истории",
-  summarizing: "Сжатие истории текущей моделью",
+  summary_model: "Подготовка модели для сжатия истории",
+  summarizing: "Сжатие истории",
   verifying: "Проверка размера сжатой истории",
   target_model: "Подготовка выбранной модели",
 };
@@ -938,30 +942,110 @@ export class SessionWorker {
     if ((before.usage ?? before.estimate) > source.contextWindow)
       throw new ContextTransitionError("handoff_required", `История превышает контекст и текущей модели ${sourceRef.providerID}/${sourceRef.modelID}, поэтому её нельзя сжать перед переходом в ${name}. История сохранена; выберите модель с большим контекстом или начните новый чат с ограниченной передачей.`, ["larger_model", "new_session_handoff"]);
     progress("summary_model", { model: sourceRef });
-    await options.readiness?.summary?.(sourceRef); fenced();
-    // The lease above names the source; the SDK must still be on that exact model.
-    if (this.session.model?.provider !== sourceRef.providerID || this.session.model?.id !== sourceRef.modelID)
-      throw new ContextTransitionError("cancelled", "Модель изменилась во время подготовки; переключение не выполнено.");
-    progress("summarizing", { model: sourceRef, tokens: before.tokens });
-    let compaction: Awaited<ReturnType<SdkSession["compact"]>>;
-    try { compaction = await this.session.compact(); }
-    catch (error) {
-      fenced();
-      throw new ContextTransitionError("compaction_failed", `Текущая модель ${sourceRef.providerID}/${sourceRef.modelID} не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена; повторите или начните новый чат с ограниченной передачей.`, ["retry", "larger_model", "new_session_handoff"]);
+    // A quota/auth/unreachable source model cannot summarize at all; a huge
+    // summary call would only repeat the same provider verdict. The tiny probe
+    // is advisory: `unknown` (no saved access, unsupported API, timeout) keeps
+    // the normal attempt, and a compact() failure is classified the same way.
+    const summarySignal = this.resourceAbort.signal;
+    let problem = availabilityProblem(await probeModelAvailability(this.deps.modelRuntime, source,
+      AbortSignal.any([summarySignal, AbortSignal.timeout(SUMMARY_PROBE_MS)])));
+    let summaryRef: ModelRef = sourceRef;
+    const summarize = async (ref: ModelRef): Promise<Awaited<ReturnType<SdkSession["compact"]>>> => {
+      await options.readiness?.summary?.(ref); fenced();
+      if (this.session.model?.provider === ref.providerID && this.session.model?.id === ref.modelID) {
+        // The lease names the exact model the SDK must use for the summary.
+      } else if (ref.providerID === sourceRef.providerID && ref.modelID === sourceRef.modelID) {
+        throw new ContextTransitionError("cancelled", "Модель изменилась во время подготовки; переключение не выполнено.");
+      } else {
+        const next = findModel(this.deps.modelRuntime, ref.providerID, ref.modelID);
+        if (!next) throw new ContextTransitionError("model_not_found", `Модель сжатия ${ref.providerID}/${ref.modelID} не найдена в каталоге Pi.`);
+        await this.session.setModel(next); fenced();
+      }
+      progress("summarizing", { model: ref, tokens: before.tokens });
+      return this.session.compact();
+    };
+    let compaction: Awaited<ReturnType<SdkSession["compact"]>> | undefined;
+    if (!problem) {
+      try { compaction = await summarize(sourceRef); }
+      catch (error) {
+        fenced();
+        if (error instanceof ContextTransitionError) throw error;
+        problem = availabilityProblem(classifyModelFailure(error));
+        if (!problem)
+          throw new ContextTransitionError("compaction_failed", `Текущая модель ${sourceRef.providerID}/${sourceRef.modelID} не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена; повторите или начните новый чат с ограниченной передачей.`, ["retry", "larger_model", "new_session_handoff"]);
+      }
     }
+    if (!compaction) {
+      const neededTokens = before.usage ?? before.estimate;
+      const cause = problem ?? "модель не смогла выполнить запрос";
+      // The source model cannot take the work (quota/auth/dead server): offer
+      // the nearest OTHER provider's model that can hold the whole context,
+      // with explicit user consent. Stop closes the question via summarySignal.
+      const candidates = pickCompactionAlternatives(catalogSnapshot(this.deps.modelRuntime), sourceRef, neededTokens);
+      const candidate = candidates[0];
+      const sourceName = `${sourceRef.providerID}/${sourceRef.modelID}`;
+      if (!candidate)
+        throw new ContextTransitionError("compaction_failed", `Модель ${sourceName} не может сжать историю: ${cause}. Настроенной модели другого провайдера с контекстом не меньше ${neededTokens + 4096} токенов не найдено. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff"]);
+      if (!await this.askFallbackSummary(candidate, sourceName, cause, name, summarySignal)) {
+        fenced();
+        throw new ContextTransitionError("compaction_failed", `Переключение не выполнено: сжатие истории моделью ${candidate.name} отклонено. ${sourceName}: ${cause}. История сохранена, текущая модель осталась.`, ["retry", "larger_model", "new_session_handoff"]);
+      }
+      fenced();
+      summaryRef = { providerID: candidate.providerID, modelID: candidate.modelID };
+      progress("summary_model", { model: summaryRef, fallback: true });
+      try { compaction = await summarize(summaryRef); }
+      catch (error) {
+        fenced();
+        await this.restoreResidency(sourceRef);
+        if (error instanceof ContextTransitionError) throw error;
+        throw new ContextTransitionError("compaction_failed", `Модель ${candidate.name} тоже не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена.`, ["retry", "larger_model", "new_session_handoff"]);
+      }
+    }
+    const restoreOffSource = async () => {
+      if (summaryRef.providerID !== sourceRef.providerID || summaryRef.modelID !== sourceRef.modelID) await this.restoreResidency(sourceRef);
+    };
     result.compacted = true;
     fenced();
-    if (!compaction.summary.trim())
+    if (!compaction.summary.trim()) {
+      await restoreOffSource();
       throw new ContextTransitionError("compaction_failed", "Сжатие не вернуло выжимку; модель не переключена. История сохранена.", ["retry", "new_session_handoff"], true);
-    progress("verifying", { model: sourceRef });
+    }
+    progress("verifying", { model: summaryRef });
     // SDK usage is null right after compaction; the bounded message estimate
     // (and the SDK's own estimate, whichever is larger) decides the fit.
     const after = this.contextEstimate(true);
     const reported = compaction.estimatedTokensAfter;
     const tokensAfter = Math.max(after.tokens, typeof reported === "number" && Number.isFinite(reported) ? reported : 0);
     result.tokensAfter = tokensAfter;
-    if (tokensAfter + incoming > budget.limit)
+    if (tokensAfter + incoming > budget.limit) {
+      await restoreOffSource();
       throw new ContextTransitionError("does_not_fit", `После сжатия история всё ещё не помещается в выбранную модель ${name} (≈${tokensAfter + incoming} из ${budget.limit} токенов); переключение не выполнено. История сохранена.`, ["larger_model", "new_session_handoff"], true);
+    }
+  }
+
+  /** Consent gate for summarizing with another provider's model when the
+   * current model cannot take the work (quota/auth/dead server). */
+  private async askFallbackSummary(candidate: AlternativeCandidate, sourceName: string, problem: string,
+    targetName: string, signal: AbortSignal): Promise<boolean> {
+    const answer = await this.deps.interactions.askQuestion({
+      sessionID: this.id, directory: this.directory, signal,
+      questions: [{
+        question: `Модель ${sourceName} не может сжать историю перед переходом в ${targetName}: ${problem}. Сжать историю моделью ${candidate.name} (контекст ${candidate.contextWindow} токенов) от другого провайдера и продолжить переход? Полная история останется в чате.`,
+        header: "Сжатие истории",
+        options: [{ label: "Сжать и продолжить" }, { label: "Отменить переход" }],
+        custom: false,
+      }],
+    });
+    return "answers" in answer && answer.answers[0]?.[0] === "Сжать и продолжить";
+  }
+
+  /** Best-effort return of SDK residency to the original model after a failed
+   * fallback summary; the transcript itself is untouched either way. */
+  private async restoreResidency(ref: ModelRef): Promise<void> {
+    try {
+      const model = findModel(this.deps.modelRuntime, ref.providerID, ref.modelID);
+      if (model && (this.session.model?.provider !== ref.providerID || this.session.model?.id !== ref.modelID)) await this.session.setModel(model);
+    } catch { /* residency is informational here; history and queue stay intact */ }
   }
 
   history(): MessageDTO[] {

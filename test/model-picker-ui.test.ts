@@ -76,6 +76,25 @@ it("labels sections without making their headings selectable and removes empty s
   } finally { act(() => root.unmount()); }
 });
 
+it("points the user to a consent question the waiting transition is blocked on", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLDialogElement.prototype.showModal = vi.fn(function(this: HTMLDialogElement) { this.open = true; });
+  HTMLDialogElement.prototype.close = vi.fn(function(this: HTMLDialogElement) { this.open = false; });
+  const node = document.createElement("div"); document.body.append(node);
+  const root = createRoot(node), close = vi.fn();
+  const question = "Модель a/x не может сжать историю перед переходом в b/y: исчерпан лимит запросов провайдера. Сжать историю моделью DeepSeek Flash?";
+  try {
+    act(() => root.render(createElement(ModelSelectionDialog,
+      { label: "Y", pending: true, error: "", progress: "Сжимаем историю. Полная история останется в чате…", question, onRetry: vi.fn(), onClose: close })));
+    expect(node.textContent).toContain("Модель ждёт ответа в чате");
+    expect(node.textContent).toContain("DeepSeek Flash");
+    const go = [...node.querySelectorAll("button")].find(b => b.textContent === "Перейти к вопросу");
+    expect(go).toBeDefined();
+    act(() => go!.click());
+    expect(close).toHaveBeenCalledTimes(1);
+  } finally { act(() => root.unmount()); }
+});
+
 it("uses a modal warning with retry, allows cancelling the pending readiness check", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   HTMLDialogElement.prototype.showModal = vi.fn(function(this: HTMLDialogElement) { this.open = true; });
