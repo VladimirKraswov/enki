@@ -7,22 +7,26 @@ const h = vi.hoisted(() => ({
   running: false,
   installCalls: [] as boolean[],
   checkCalls: 0,
+  clearCalls: 0,
+  keepBuildOnCheck: false,
   controller: {
     prepared: false,
     s: {
       channel: "stable" as const, busy: "", waiting: false, downloaded: false, error: "", notice: "",
-      release: null as null | { available: boolean; version?: string; kind?: string; binary?: { state: string } },
+      release: null as null | { available: boolean; version?: string; kind?: string; digest?: string; binary?: { state: string } },
       status: null as null | { nativeVersion: string; hot: { uiVersion: string }; build: { stage: string | null } },
     },
     snapshot() { return this.s; },
     async refresh() { return this.s.status; },
     async check() {
       h.checkCalls++;
+      const build = h.keepBuildOnCheck ? this.s.status?.build ?? { stage: null } : { stage: null };
       this.s.release = { available: true, version: "2.0.99", kind: "source", binary: { state: "unavailable" } };
-      this.s.status = { nativeVersion: "2.0.21", hot: { uiVersion: "2.0.21" }, build: { stage: null } };
+      this.s.status = { nativeVersion: "2.0.21", hot: { uiVersion: "2.0.21" }, build };
     },
     async download() { this.s.downloaded = true; },
     async build() { this.s.status = { ...this.s.status!, build: { stage: "compiling" } }; },
+    async clear() { h.clearCalls++; this.s.status = { ...this.s.status!, build: { stage: null } }; },
     async install(running: boolean) { h.installCalls.push(running); this.s.waiting = running; },
     preparedFlag() { return this.prepared; },
     compiling() { return this.s.status?.build.stage === "compiling"; },
@@ -35,6 +39,7 @@ vi.mock("../src/updates/runtime", () => ({
     check: () => h.controller.check(),
     download: () => h.controller.download(),
     build: () => h.controller.build(),
+    clear: () => h.controller.clear(),
     install: (running: boolean) => h.controller.install(running),
     prepared: () => h.controller.preparedFlag(),
     compiling: () => h.controller.compiling(),
@@ -67,6 +72,18 @@ describe("desktop updates control", () => {
     expect(prepared.kind).toBe("source");
     expect(prepared.stage).toBe("compiling");
     expect(prepared.stageText).toBe("Сборка приложения");
+  });
+  it("does not mistake a ready artifact for an older digest for the current release", async () => {
+    h.keepBuildOnCheck = true;
+    h.controller.prepared = false;
+    h.controller.s.busy = "";
+    h.controller.s.release = { available: true, version: "2.0.100", kind: "source", digest: "c".repeat(64), binary: { state: "unavailable" } };
+    h.controller.s.status = { nativeVersion: "2.0.74", hot: { uiVersion: "2.0.74" }, build: { stage: "ready", digest: "d".repeat(64) } };
+    const before = h.clearCalls;
+    const result = await run("prepare");
+    expect(h.clearCalls).toBe(before + 1);
+    expect(result.stage).toBe("compiling");
+    h.keepBuildOnCheck = false;
   });
   it("apply refuses an unprepared build and defers while agents run", async () => {
     h.running = true;

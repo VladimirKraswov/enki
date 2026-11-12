@@ -688,15 +688,17 @@ async function updatesCommand(params: Params): Promise<unknown> {
   if (action === "status") return updatesSnapshot();
   const snap = () => updates.snapshot();
   if (action === "prepare") {
-    // A previous 'up to date' answer is not a permanent state: prepare must
-    // re-check the Hub, otherwise an auto-apply never sees a later release.
-    if (!snap().release?.available) await updates.check();
+    // Explicit prepare always asks Hub. A cached available release can itself be
+    // stale after a newer publication; prepared artifacts are digest-bound.
+    await updates.check();
     const release = snap().release;
     if (!release?.available) return updatesSnapshot();
     if (snap().busy) return updatesSnapshot();
     if (release.kind === "hot") {
       if (!snap().downloaded) await updates.download();
     } else if (release.kind === "source" && !updates.prepared() && !updates.compiling()) {
+      // A ready artifact for an older digest must not satisfy this release.
+      if (snap().status?.build.stage === "ready") await updates.clear();
       if (release.binary?.state === "ready" && !snap().downloaded) await updates.download();
       else await updates.build();
     }

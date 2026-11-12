@@ -1,3 +1,18 @@
+# TASK — 2026-11-12: activity sort + updater freshness / 2.0.75
+
+Владелец: активный Mac с loader ниже неактивных VPN/Mash в «Недавних». Sidebar
+сортировал только Session.time.updated, которое не меняется на каждом событии.
+Добавлены sessionActivityAt (live lastEventAt + observed busy/waiting/idle +
+stored updated), activityOrderSignature для стабильной подписки, единая
+sortSessionsByActivity для recent и project lists. 2 PASS + build.
+Обнаружен updater stale-prepared: explicit prepare смотрел cached available73 и
+не проверял Hub; ready artifact старого digest принимался. Теперь prepare всегда
+check Hub и очищает ready при digest mismatch. Control 8 PASS.
+Hub/Remote 74 доработан: stale detail sanitized, first history before longpoll,
+history cache record.updated, нет очереди при offline; Hub deployed. 2.0.74
+опубликован, но установлен72, prepared73 — для перехода на75 требуется один раз
+очистить prepared files в настройках; затем новый prepare строит75 и дальше
+автодоставка исправлена.
 # TASK — 2026-11-12: honest stale state + immediate history / 2.0.74
 
 Владелец: Remote «ужасно синхронизируется»: Mac offline хотя открыт, Мастерская

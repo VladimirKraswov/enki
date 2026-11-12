@@ -668,6 +668,7 @@ class Store {
   private activityDirectories = new Map<string, string>();
   private activitySessions = new Map<string, Session>();
   private activityRevisions = new Map<string, number>();
+  private statusObservedAt = new Map<string, number>();
   private activityLookups = new Map<string, Promise<Session | undefined>>();
   private editBranchBusy = false;
   private conversationAtBottom = true;
@@ -938,6 +939,7 @@ class Store {
       // Revalidate persisted attention on every connection, including the same runtime.
       this.activitySessions.clear();
       this.activityRevisions.clear();
+      this.statusObservedAt.clear();
       this.activityLookups.clear();
       // The transcript cache is emptied below; its LRU bookkeeping goes with it.
       this.historyLoaded.clear();
@@ -2628,6 +2630,26 @@ class Store {
     this.persistPrefs();
   }
 
+  /** Latest observed activity for sidebar ordering. Stored session time alone
+   * is stale during a running turn, so live events and status changes count. */
+  sessionActivityAt(id: string): number {
+    const slot = this.state.chat.sessions[id]?.lastEventAt ?? 0;
+    const observed = this.statusObservedAt.get(id) ?? 0;
+    const session = this.activitySessions.get(id) ?? this.state.sessions.find(x => x.id === id)
+      ?? this.state.recentSessionList.sessions.find(x => x.id === id);
+    return Math.max(slot, observed, session?.time.updated ?? 0);
+  }
+  /** Stable subscription key: a new event or status change rerenders the sidebar,
+   * while unrelated state updates keep the previous shallow snapshot. */
+  activityOrderSignature(): string {
+    const entries: string[] = [];
+    for (const [id, slot] of Object.entries(this.state.chat.sessions))
+      entries.push(id + ":" + Math.floor((slot.lastEventAt ?? 0) / 1_000));
+    for (const [id, at] of this.statusObservedAt)
+      entries.push(id + ":s:" + Math.floor(at / 1_000));
+    return entries.sort().join("|");
+  }
+
   modelInfo(providerID: string, modelID: string): ModelInfo | null {
     return (
       this.state.providers.find((p) => p.id === providerID)?.models[modelID] ??
@@ -3747,6 +3769,8 @@ class Store {
     const wasRunning = previous?.type === "busy" || previous?.type === "retry";
     const running = status.type === "busy" || status.type === "retry";
     const finished = wasRunning && status.type === "idle";
+    const changed = !previous || previous.type !== status.type;
+    if (changed && (running || finished || status.type === "waiting")) this.statusObservedAt.set(id, Date.now());
     if (previous?.type === status.type && !running) return;
     if (running) this.clearUnread(id);
     if (running || status.type === "waiting") this.ensureActivitySweep();
@@ -3828,6 +3852,7 @@ class Store {
     this.updateSidebarSession(null, id);
     this.activityDirectories.delete(id);
     this.activitySessions.delete(id);
+    this.statusObservedAt.delete(id);
     this.activityRevisions.set(id, (this.activityRevisions.get(id) ?? 0) + 1);
     const unreadSessions = { ...this.state.prefs.unreadSessions };
     delete unreadSessions[id];

@@ -17,7 +17,7 @@ import { Icon } from "./Icon";
 import { pathBasename } from "../util/paths";
 import { isNative } from "../native/platform";
 import { WORKSHOP_TITLE } from "../workshop/workspace";
-import { liveStatusConfirmed, sessionStatusConfirmed, sessionWorkMark } from "../state/sidebar";
+import { liveStatusConfirmed, sessionStatusConfirmed, sessionWorkMark, sortSessionsByActivity } from "../state/sidebar";
 import { useStreamStalled } from "./useStreamStalled";
 import { SESSION_DROP_ATTRIBUTE, startSessionDrag } from "../chat/sessionDrag";
 export const pickFolder = pickProjectFolder;
@@ -50,7 +50,7 @@ const sidebarSnapshot = (s: import('../state/types').AppState) => ({
   prefs:s.prefs, connection:s.connection, directory:s.directory, activeSessionId:s.activeSessionId,
   projects:s.projects, projectSessionLists:s.projectSessionLists,
   recentSessionList:s.recentSessionList, sessions:s.sessions, archivedSessions:s.archivedSessions,
-  activityStatuses:s.activityStatuses,
+  activityStatuses:s.activityStatuses, activityOrder:store.activityOrderSignature(),
   pending:Object.keys(s.chat.permissions).join('|')+';'+Object.keys(s.chat.questions).join('|'),
 });
 export function Sidebar() {
@@ -188,7 +188,7 @@ export function Sidebar() {
     );
   };
   const recent = s.recentSessionList;
-  const visibleRecent = recent.sessions.filter((session) => !store.isProjectHidden(session.directory) && !store.isWorkshopSession(session));
+  const visibleRecent = sortSessionsByActivity(recent.sessions.filter((session) => !store.isProjectHidden(session.directory) && !store.isWorkshopSession(session)), id => store.sessionActivityAt(id));
   return (
     <aside
       className="sidebar"
@@ -249,7 +249,7 @@ export function Sidebar() {
         {(all ? dirs : dirs.slice(0, 7)).map((dir) => {
           const expanded = store.isProjectExpanded(dir);
           const list = s.projectSessionLists[dir];
-          const sessions = list?.sessions.filter((session) => !session.time.archived) ?? [];
+          const sessions = sortSessionsByActivity(list?.sessions.filter((session) => !session.time.archived) ?? [], id => store.sessionActivityAt(id));
           const shown = shownByProject[dir] ?? 8;
           const name = projectName(dir);
           return <section className="project-group" key={dir} aria-label={`Проект ${name}`}

@@ -44,6 +44,12 @@ export const emptyRecentList = (): RecentList => ({
   ...emptySidebarList(), archived: false, cursor: null,
 });
 
+export function sortSessionsByActivity(sessions: Session[], activityAt: (id: string) => number): Session[] {
+  return [...sessions].sort((a, b) =>
+    Math.max(b.time.updated, activityAt(b.id)) - Math.max(a.time.updated, activityAt(a.id))
+    || a.id.localeCompare(b.id));
+}
+
 /** Replay changes received during a list request, including deletions. */
 export function mergeSidebarSessions(
   snapshot: Session[], changes: Map<string, Session | null> = new Map(),
