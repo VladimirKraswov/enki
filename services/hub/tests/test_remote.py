@@ -98,6 +98,16 @@ class RemoteAPI(unittest.TestCase):
         self.assertEqual(stale['detail']['permissions'],[])
         self.assertEqual(stale['detail']['status'],{'type':'unknown'})
 
+    def test_offline_duplicate_host_is_hidden_while_same_name_is_live(self):
+        other = self.h.lan_actor('MacBook', 'windows')
+        overview = {'version':'2.0.78','sessions':[], 'providers':{'all':[]}, 'settings':{}}
+        self.h.remote.sync(self.mac, {'overview':overview})
+        self.h.remote.sync(other, {'overview':overview})
+        with self.h.connection() as c:
+            c.execute('UPDATE remote_state SET updated=0 WHERE device=?', (self.mac['id'],))
+        devices = self.h.remote.overview()['devices']
+        self.assertEqual([d['id'] for d in devices if d['name']=='MacBook'], [other['id']])
+
     def test_invalid_or_cross_device_commands_fail_closed(self):
         for data in [
             {'device':self.mac['id'],'kind':'shell','payload':{}},

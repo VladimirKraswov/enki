@@ -55,7 +55,10 @@ pinned HTTPS и LAN boundary, нет нового порта или проток
 доставляется push-подобно, а после обрыва обычный HTTP запрос восстанавливается.
 Регулярный Remote transport не использует native bridge: Runtime читает только
 публичный descriptor подключения (endpoint, certificate, label) и открывает
-pinned HTTPS напрямую к Hub. Native updater и desktop commands вызываются только
+pinned HTTPS напрямую к Hub. `process.platform` нормализуется в native имена
+(macos/windows/linux), иначе создаётся второй offline-двойник; Hub также скрывает
+неактивный дубль с тем же именем при живом устройстве. Device version берётся из
+Info.plist, а не из hash артефакта Runtime. Native updater и desktop commands вызываются только
 по явной команде и больше не могут заблокировать очередь. Direct transport
 проверяет сертификат, LAN endpoint и отправляет device headers без credentials. Watchdog 30с fencing-поколением заменяет
 зависший bridge call живым циклом; отдельный backoff ограничен. Выбранная история запрашивается до overview

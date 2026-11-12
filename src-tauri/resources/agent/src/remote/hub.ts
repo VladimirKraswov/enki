@@ -9,6 +9,21 @@ import type { Runtime } from "../core/runtime.ts";
 
 type HubConfig = { enabled: boolean; endpoint: string; certificate: string; label: string };
 export type HubRequest = (route: string, body: unknown, signal: AbortSignal) => Promise<unknown>;
+const HUB_PLATFORM: Record<string, string> = { darwin: "macos", win32: "windows", linux: "linux" };
+export function hubPlatform(value: string = process.platform): string { return HUB_PLATFORM[value] ?? value; }
+let cachedNativeVersion: string | null = null;
+function nativeVersion(fallback: string): string {
+  if (cachedNativeVersion) return cachedNativeVersion;
+  try {
+    const plist = path.resolve(path.dirname(process.execPath), "../../../..", "Info.plist");
+    const stat = fs.lstatSync(plist);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size < 1024 * 1024) {
+      const match = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(fs.readFileSync(plist, "utf8"));
+      if (match?.[1] && /^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$/.test(match[1])) cachedNativeVersion = match[1];
+    }
+  } catch { /* non-bundle runtime */ }
+  return cachedNativeVersion ?? fallback;
+}
 
 function descriptor(runtime: Runtime): HubConfig | null {
   const candidates = [
@@ -34,13 +49,18 @@ function descriptor(runtime: Runtime): HubConfig | null {
 function direct(config: HubConfig): HubRequest {
   const url = new URL(config.endpoint);
   return (route, body, signal) => new Promise((resolve, reject) => {
+    if (route === "remote/sync" && body && typeof body === "object" && "overview" in body
+      && body.overview && typeof body.overview === "object") {
+      const overview = body.overview as Record<string, unknown>;
+      body = { ...body, overview: { ...overview, version: nativeVersion(String(overview.version ?? "")) } };
+    }
     const raw = JSON.stringify(body);
     const request = https.request({
       hostname: url.hostname, port: url.port || 443, path: "/api/" + route, method: "POST",
       ca: config.certificate, rejectUnauthorized: true, timeout: 15_000,
       headers: {
         "Content-Type": "application/json", "Content-Length": Buffer.byteLength(raw),
-        "X-Enki-Device-Name": config.label, "X-Enki-Platform": process.platform,
+        "X-Enki-Device-Name": config.label, "X-Enki-Platform": hubPlatform(),
       },
     }, response => {
       const parts: Buffer[] = []; let size = 0;

@@ -1,3 +1,15 @@
+# TASK — 2026-11-12: Hub device identity for direct sync / 2.0.78
+
+После77 direct sync работал непрерывно, но создал второй Mac: Node отправлял
+platform=darwin, существующий device — macos. Телефон смотрел на старый offline.
+Hub lan_actor нормализует darwin→macos/win32→windows; текущий77 сразу стал
+online без переустановки (проверено live: Mac online age1с, Workshop работает).
+Дополнительно direct header platform нормализован, device version из Info.plist,
+Hub скрывает offline-дубль того же имени при живом. Live Chromium (ignore cert):
+Mac в сети, Workshop, queue empty, oldQueue false, current messages; service worker
+ожидаемо блокирован сертификатом только в тестовом context. RemoteAPI5 PASS
+(включая duplicate), transport3/typecheck. Deploy Hub выполнен. Релиз78 закрепляет
+идентичность для будущих Node-клиентов; установка после текущего агента.
 # TASK — 2026-11-12: direct pinned Remote transport / 2.0.77
 
 76 после restart снова один sync и тишина. Native bridge hub.request/hub.identity

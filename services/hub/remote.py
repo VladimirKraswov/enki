@@ -163,6 +163,11 @@ class Remote:
                 item['overview'] = json.loads(row['payload'])
                 item['updated'] = row['updated']
             devices.append(item)
+        # A pre-fix Node client could register the same host as a second
+        # platform name. Keep it hidden while the live identity with that name
+        # exists; its snapshots remain cached and are not deleted.
+        live_names = {item['name'] for item in devices if item['online']}
+        devices = [item for item in devices if item['online'] or item['name'] not in live_names]
         return {'devices': devices, 'serverTime': now, 'authorization': 'lan-only'}
 
     def session(self, query):

@@ -251,6 +251,9 @@ class Hub:
         """Trusted LAN identity, not a login. Device names route Runtime traffic;
         browsers without a device name use the shared owner console identity."""
         name, platform = scrub(name, 80), scrub(platform, 32)
+        # Node clients report process.platform; native clients report std OS.
+        # Both must identify the SAME device or Remote shows a false offline twin.
+        platform = {'darwin': 'macos', 'win32': 'windows'}.get(platform, platform)
         now = int(time.time()*1000)
         with self.lock, self.connection() as c:
             row = None
