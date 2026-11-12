@@ -1,3 +1,17 @@
+# TASK — 2026-11-12: Remote stale queue / 2.0.71
+
+Владелец прислал phone screenshot: Workshop idle, но старое «В очереди: Это
+приложение нельзя установить». Live Hub remote_detail updated=1794433819826
+(часы назад), queue sending; локальная SQLite queue уже пуста. Commands по item:
+несколько rejected Hub HTTP502 и final cancelled. Значит UI показывал stale cache,
+не живую задачу. Overview продолжал обновляться, detail watched Workshop — нет.
+RemoteControl.detail теперь формирует live envelope независимо от history;
+fitRemoteDetail <=3.5MiB: text/reasoning/tool bounds, recent messages, явный
+historyError, ошибка historyPage не блокирует queue/status/questions. Полная
+локальная история не меняется. Browser маркирует snapshot queue >20s как stale.
+Новые remote-detail 3 PASS (1000 large messages; pathological parts; small);
+existing remote integration 2 PASS; Hub135 PASS. Static stale UI установлен на
+CT206; требуется новый Runtime для обновления живого detail.
 # TASK — 2026-11-12: Remote PWA trust + session sync / 2.0.70
 
 Владелец: «приложение нельзя установить», смена сессии оставляет Мастерскую.

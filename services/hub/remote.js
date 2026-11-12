@@ -156,12 +156,15 @@ async function loadDetail() {
   try {
     const data = await api(`session?device=${encodeURIComponent(device)}&session=${encodeURIComponent(session)}`);
     if (selection === state.selection && device === state.deviceId && session === state.sessionId
-        && data.detail?.session === session) { state.detail = data.detail; renderDetail(); }
+        && data.detail?.session === session) {
+      state.detailStale = !!data.updated && Date.now() - data.updated > 20_000;
+      state.detail = { ...data.detail, snapshotAt: data.updated }; renderDetail();
+    }
   } catch (error) { /* retain the last confirmed view and retry next poll */ }
 }
 function renderDetail() {
   const detail = state.detail; if (!detail) return;
-  const messageSignature = JSON.stringify([state.deviceId, detail.session, detail.messages, detail.status, detail.info]);
+  const messageSignature = JSON.stringify([state.deviceId, detail.session, detail.messages, detail.status, detail.info, detail.historyError]);
   if (state.signatures.detail !== messageSignature) {
     state.signatures.detail = messageSignature; renderMessages(detail.messages || []);
     if (detail.info?.model && !$('model').matches(':focus'))
@@ -171,19 +174,21 @@ function renderDetail() {
   if (state.signatures.interactions !== interactionSignature) {
     state.signatures.interactions = interactionSignature; renderInteractions();
   }
-  const queueSignature = JSON.stringify([detail.session, detail.queue]);
+  const queueSignature = JSON.stringify([detail.session, detail.queue, state.detailStale]);
   if (state.signatures.queue !== queueSignature) { state.signatures.queue = queueSignature; renderQueue(detail.queue); }
 }
 function renderMessages(messages) {
   const root = $('messages');
   const previousTop = root.scrollTop;
   const nearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 220;
+  const warning = state.detail?.historyError || '';
   if (!messages.length) {
-    root.replaceChildren(); const empty = el('div', 'empty');
+    root.replaceChildren(); if (warning) root.append(el('div', 'queue-item', warning)); const empty = el('div', 'empty');
     empty.append(el('div', 'empty-mark', '⌁'), el('h1', '', currentSession()?.title || 'Сессия'), el('p', '', 'Напишите или надиктуйте первое задание.'));
     root.append(empty); return;
   }
   root.replaceChildren();
+  if (warning) root.append(el('div', 'queue-item', warning));
   for (const message of messages) {
     const item = el('article', `message ${message.info.role}${message.info.error ? ' error' : ''}`);
     item.append(el('div', 'message-role', message.info.role === 'user' ? 'Вы' : message.info.modelID || 'Enki'));
@@ -252,6 +257,7 @@ function renderInteractions() {
 }
 function renderQueue(queue) {
   const root = $('queue'); root.replaceChildren();
+  if (state.detailStale) root.append(el('div', 'queue-item stale', 'Снимок очереди устарел; жду подтверждение от устройства.'));
   for (const item of queue?.items || []) root.append(el('div', 'queue-item', `В очереди: ${item.text}`));
   for (const item of queue?.corrections || []) root.append(el('div', 'queue-item', `Уточнение: ${item.text} · ${item.state}`));
   if (queue?.pausedReason) root.append(button('Возобновить очередь', () => void command('queue.resume', { model: selectModel() })));

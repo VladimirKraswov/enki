@@ -72,6 +72,7 @@ button:focus-visible, textarea:focus, select:focus, input:focus { outline: 2px s
 .answers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .queue { padding: 0 16px; }
 .queue-item { color: var(--warn); border-top: 1px solid var(--line); padding: 8px 2px; font-size: 13px; }
+.queue-item.stale { color: #e5bd75; }
 .composer { padding: 10px 14px calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, var(--bg) 12%); }
 .composer-box { max-width: 880px; margin: auto; background: var(--raised); border: 1px solid #3b4b40; border-radius: 18px; padding: 8px 10px; box-shadow: 0 8px 28px #0005; }
 .composer textarea { display: block; width: 100%; border: 0; background: transparent; resize: none; min-height: 48px; max-height: 180px; padding: 8px 5px; line-height: 1.45; font-size: 16px; }

@@ -19,11 +19,37 @@ function text(value: unknown, limit = 200_000): string {
   return value;
 }
 
-function boundedMessages(messages: MessageDTO[]): MessageDTO[] {
+function boundedMessages(messages: MessageDTO[], textLimit = 30_000): MessageDTO[] {
   // Remote views are bounded. The full local transcript is never rewritten.
-  return messages.map(message => ({ ...message, parts: message.parts.map(part => part.type === "tool" && part.state
-    ? { ...part, state: { ...part.state, output: typeof part.state.output === "string" ? part.state.output.slice(-12_000) : part.state.output, metadata: undefined } }
-    : part) }));
+  return messages.map(message => ({ ...message, parts: message.parts.map(part => {
+    if ((part.type === "text" || part.type === "reasoning") && typeof part.text === "string" && part.text.length > textLimit)
+      return { ...part, text: "[… начало сокращено для Remote …]\n" + part.text.slice(-textLimit) };
+    return part.type === "tool" && part.state
+      ? { ...part, state: { ...part.state, output: typeof part.state.output === "string" ? part.state.output.slice(-12_000) : part.state.output, metadata: undefined } }
+      : part;
+  }) }));
+}
+
+const REMOTE_DETAIL_BUDGET = 3_500_000;
+function remoteBytes(value: unknown): number { return Buffer.byteLength(JSON.stringify(value)); }
+
+/** A large/corrupt transcript must never prevent queue/status/interactions from
+ * reaching Hub. Keep recent text, explicitly mark truncation, and retain the
+ * live detail envelope even in the pathological case where history must be empty. */
+export function fitRemoteDetail(detail: Record<string, unknown>): Record<string, unknown> {
+  const original = Array.isArray(detail.messages) ? detail.messages as MessageDTO[] : [];
+  let messages = boundedMessages(original);
+  let result: Record<string, unknown> = { ...detail, messages };
+  if (remoteBytes(result) <= REMOTE_DETAIL_BUDGET) return result;
+  messages = boundedMessages(original, 4_000);
+  result = { ...detail, messages };
+  while (messages.length > 1 && remoteBytes(result) > REMOTE_DETAIL_BUDGET) {
+    messages = messages.slice(Math.max(1, Math.ceil(messages.length / 2)));
+    result = { ...detail, messages };
+  }
+  if (remoteBytes(result) > REMOTE_DETAIL_BUDGET)
+    return { ...detail, messages: [], historyError: "История слишком велика для Remote. Актуальные статус и очередь показаны; полная история доступна на компьютере." };
+  return { ...result, historyError: "Показан сокращённый конец истории. Полная история сохранена на компьютере." };
 }
 
 export class RemoteControl {
@@ -116,13 +142,18 @@ export class RemoteControl {
   detail(sessionID: string): Record<string, unknown> {
     const record = this.runtime.catalog.get(sessionID);
     if (!record) return { session: sessionID, missing: true, messages: [] };
-    const history = this.runtime.registry.historyPage(record, 100);
-    return {
-      session: sessionID, info: sessionDTO(record), messages: boundedMessages(history.messages),
+    const live = {
+      session: sessionID, info: sessionDTO(record),
       queue: this.runtime.queue.state(sessionID), status: this.runtime.statuses(record.directory)[sessionID] ?? { type: "idle" },
       questions: this.runtime.interactions.pendingQuestions(record.directory).filter(q => q.sessionID === sessionID),
       permissions: this.runtime.interactions.pendingPermissions(record.directory).filter(p => p.sessionID === sessionID),
     };
+    try {
+      const history = this.runtime.registry.historyPage(record, 100);
+      return fitRemoteDetail({ ...live, messages: history.messages });
+    } catch {
+      return { ...live, messages: [], historyError: "Не удалось прочитать историю для Remote. Актуальные статус и очередь показаны; откройте историю на компьютере." };
+    }
   }
 
   private record(command: RemoteCommand): SessionRecord {
