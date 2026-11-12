@@ -1,8 +1,8 @@
 /* Enki Remote PWA: cache only the static shell. Never cache chats, commands,
  * snapshots, Hub administration or microphone/ASR requests. */
 'use strict';
-const CACHE = 'enki-remote-shell-v1';
-const SHELL = ['/remote', '/remote.html', '/remote.css', '/remote.js', '/remote.webmanifest', '/remote-icon-192.png', '/remote-icon-512.png'];
+const CACHE = 'enki-remote-shell-v2';
+const SHELL = ['/remote', '/remote.html', '/remote.css', '/remote.js', '/remote-sync.js', '/remote.webmanifest', '/remote-icon-192.png', '/remote-icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

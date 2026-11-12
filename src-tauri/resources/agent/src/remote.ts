@@ -3,15 +3,14 @@
 // executes them through its dispatcher, queue and interaction broker.
 import type { Runtime, RuntimeSettings } from "./core/runtime.ts";
 import { validSettings } from "./core/runtime.ts";
-import { providers } from "./models/catalog.ts";
 import { refreshCatalog } from "./sdk/adapter.ts";
 import { sessionDTO, type SessionRecord } from "./sessions/catalog.ts";
 import path from "node:path";
 import { validDirectory } from "./platform/paths.ts";
-import { isModelRef, isReadOnlyOrigin, type CommandRequest, type MessageDTO, type ModelRef } from "./protocol.ts";
-
-type RemoteCommand = { id: string; session: string | null; kind: string; payload: Record<string, unknown> };
-type SyncAnswer = { commands?: RemoteCommand[]; watch?: string | null };
+import { isModelRef, isReadOnlyOrigin, type CommandRequest, type ModelRef } from "./protocol.ts";
+import { remoteOverview, remoteDetail } from "./remote/snapshot.ts";
+import { RemoteSyncTransport, type RemoteCommand } from "./remote/sync.ts";
+export { fitRemoteDetail } from "./remote/snapshot.ts";
 
 function text(value: unknown, limit = 200_000): string {
   if (typeof value !== "string") throw new Error("Нужен текст.");
@@ -19,142 +18,29 @@ function text(value: unknown, limit = 200_000): string {
   return value;
 }
 
-function boundedMessages(messages: MessageDTO[], textLimit = 30_000): MessageDTO[] {
-  // Remote views are bounded. The full local transcript is never rewritten.
-  return messages.map(message => ({ ...message, parts: message.parts.map(part => {
-    if ((part.type === "text" || part.type === "reasoning") && typeof part.text === "string" && part.text.length > textLimit)
-      return { ...part, text: "[… начало сокращено для Remote …]\n" + part.text.slice(-textLimit) };
-    return part.type === "tool" && part.state
-      ? { ...part, state: { ...part.state, output: typeof part.state.output === "string" ? part.state.output.slice(-12_000) : part.state.output, metadata: undefined } }
-      : part;
-  }) }));
-}
-
-const REMOTE_DETAIL_BUDGET = 3_500_000;
-function remoteBytes(value: unknown): number { return Buffer.byteLength(JSON.stringify(value)); }
-
-/** A large/corrupt transcript must never prevent queue/status/interactions from
- * reaching Hub. Keep recent text, explicitly mark truncation, and retain the
- * live detail envelope even in the pathological case where history must be empty. */
-export function fitRemoteDetail(detail: Record<string, unknown>): Record<string, unknown> {
-  const original = Array.isArray(detail.messages) ? detail.messages as MessageDTO[] : [];
-  let messages = boundedMessages(original);
-  let result: Record<string, unknown> = { ...detail, messages };
-  if (remoteBytes(result) <= REMOTE_DETAIL_BUDGET) return result;
-  messages = boundedMessages(original, 4_000);
-  result = { ...detail, messages };
-  while (messages.length > 1 && remoteBytes(result) > REMOTE_DETAIL_BUDGET) {
-    messages = messages.slice(Math.max(1, Math.ceil(messages.length / 2)));
-    result = { ...detail, messages };
-  }
-  if (remoteBytes(result) > REMOTE_DETAIL_BUDGET)
-    return { ...detail, messages: [], historyError: "История слишком велика для Remote. Актуальные статус и очередь показаны; полная история доступна на компьютере." };
-  return { ...result, historyError: "Показан сокращённый конец истории. Полная история сохранена на компьютере." };
-}
-
 export class RemoteControl {
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private running = false;
-  private stopped = false;
-  private readonly results = new Map<string, { ok: boolean; result: unknown }>();
   private updates: unknown = null;
   private updatesAt = 0;
-  private readonly abort = new AbortController();
+  private readonly transport: RemoteSyncTransport;
 
-  constructor(private readonly runtime: Runtime, private readonly intervalMs = 2_000) {}
-
-  start(): void {
-    if (this.timer || this.running || this.stopped) return;
-    void this.tick();
+  constructor(private readonly runtime: Runtime, intervalMs = 1_000) {
+    this.transport = new RemoteSyncTransport(runtime, intervalMs, {
+      beforeSync: signal => this.beforeSync(signal), overview: () => this.overview(),
+      detail: session => this.detail(session), execute: (command, signal) => this.execute(command, signal),
+    });
   }
+  start(): void { this.transport.start(); }
+  stop(): void { this.transport.stop(); }
 
-  stop(): void {
-    this.stopped = true;
-    this.abort.abort();
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-  }
-
-  private schedule(): void {
-    if (this.stopped) return;
-    this.timer = setTimeout(() => { this.timer = null; void this.tick(); }, this.intervalMs);
-    this.timer.unref();
-  }
-
-  private async tick(): Promise<void> {
-    if (this.running || this.stopped || this.runtime.draining) { this.schedule(); return; }
-    this.running = true;
+  private async beforeSync(signal: AbortSignal): Promise<void> {
+    if (Date.now()-this.updatesAt <= 10_000) return;
     try {
-      const identity = await this.runtime.config.broker.call<{ scope: string | null }>("hub.identity", {}, this.abort.signal, 5_000);
-      if (!identity.scope) return;
-      if (Date.now()-this.updatesAt > 10_000) {
-        try {
-          this.updates = await this.runtime.config.broker.call("updates.control", { action: "status" }, this.abort.signal, 5_000);
-          this.updatesAt = Date.now();
-        } catch { /* older Enki or remote runtimes without update control */ }
-      }
-      const response = await this.runtime.config.broker.call<SyncAnswer>("hub.request", {
-        path: "remote/sync", scope: identity.scope,
-        body: { overview: this.overview() },
-      }, this.abort.signal, 15_000);
-      // Commands are completed individually: one bad session never blocks others.
-      for (const command of response.commands ?? []) {
-        if (this.stopped) break;
-        let result: unknown, ok = false;
-        const previous = this.results.get(command.id);
-        if (previous) { ok = previous.ok; result = previous.result; }
-        else {
-          try { result = await this.execute(command); ok = true; }
-          catch (error) { result = { error: error instanceof Error ? error.message : String(error) }; }
-          this.results.set(command.id, { ok, result });
-          if (this.results.size > 500) this.results.delete(this.results.keys().next().value!);
-        }
-        try {
-          await this.runtime.config.broker.call("hub.request", { path: "remote/complete", scope: identity.scope,
-            body: { id: command.id, ok, result } }, this.abort.signal, 10_000);
-        } catch { /* delivered state is retried only by an explicit owner action */ }
-      }
-      if (response.watch) {
-        await this.runtime.config.broker.call("hub.request", { path: "remote/sync", scope: identity.scope,
-          body: { overview: this.overview(), detail: this.detail(response.watch) } }, this.abort.signal, 15_000);
-      }
-    } catch {
-      // Hub absence must not affect local chats. The next bounded poll reconnects.
-    } finally {
-      this.running = false;
-      this.schedule();
-    }
+      this.updates = await this.runtime.config.broker.call("updates.control", { action: "status" }, signal, 5_000);
+      this.updatesAt = Date.now();
+    } catch { /* older Enki or remote runtimes without update control */ }
   }
-
-  overview(): Record<string, unknown> {
-    const sessions = this.runtime.catalog.recent({ archived: false, limit: 200 }).records.map(sessionDTO);
-    const providersDTO = providers(this.runtime.modelRuntime, null, this.runtime.modelAccess?.snapshot());
-    return {
-      version: this.runtime.config.version, instance: this.runtime.instance, startedAt: this.runtime.startedAt,
-      host: this.runtime.config.host, hostId: this.runtime.hostId, platform: process.platform,
-      sessions, statuses: this.runtime.statuses(null), providers: providersDTO,
-      settings: this.runtime.settings(), projects: this.runtime.catalog.directories(),
-      questions: this.runtime.interactions.pendingQuestions(), permissions: this.runtime.interactions.pendingPermissions(),
-      activity: this.runtime.activity(), queues: this.runtime.queue.sessions(null), updates: this.updates,
-    };
-  }
-
-  detail(sessionID: string): Record<string, unknown> {
-    const record = this.runtime.catalog.get(sessionID);
-    if (!record) return { session: sessionID, missing: true, messages: [] };
-    const live = {
-      session: sessionID, info: sessionDTO(record),
-      queue: this.runtime.queue.state(sessionID), status: this.runtime.statuses(record.directory)[sessionID] ?? { type: "idle" },
-      questions: this.runtime.interactions.pendingQuestions(record.directory).filter(q => q.sessionID === sessionID),
-      permissions: this.runtime.interactions.pendingPermissions(record.directory).filter(p => p.sessionID === sessionID),
-    };
-    try {
-      const history = this.runtime.registry.historyPage(record, 100);
-      return fitRemoteDetail({ ...live, messages: history.messages });
-    } catch {
-      return { ...live, messages: [], historyError: "Не удалось прочитать историю для Remote. Актуальные статус и очередь показаны; откройте историю на компьютере." };
-    }
-  }
+  overview(): Record<string, unknown> { return remoteOverview(this.runtime, this.updates); }
+  detail(sessionID: string): Record<string, unknown> { return remoteDetail(this.runtime, sessionID); }
 
   private record(command: RemoteCommand): SessionRecord {
     if (!command.session) throw new Error("Не указана сессия.");
@@ -171,7 +57,7 @@ export class RemoteControl {
       kind === "prompt" || kind === "steer" ? { source: "manual", sourceId: null } : undefined);
   }
 
-  private async execute(command: RemoteCommand): Promise<unknown> {
+  private async execute(command: RemoteCommand, signal: AbortSignal): Promise<unknown> {
     const payload = command.payload;
     switch (command.kind) {
       case "prompt": {
@@ -244,7 +130,7 @@ export class RemoteControl {
       }
       case "update.check": case "update.prepare": case "update.apply": {
         const action = command.kind.slice("update.".length);
-        const result = await this.runtime.config.broker.call("updates.control", { action }, this.abort.signal, 120_000);
+        const result = await this.runtime.config.broker.call("updates.control", { action }, signal, 120_000);
         this.updatesAt = 0;
         return { update: result };
       }

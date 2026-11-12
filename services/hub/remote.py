@@ -7,6 +7,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import threading
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -26,6 +27,7 @@ def encode(value):
 class Remote:
     def __init__(self, connection, lock, fault):
         self.connection, self.lock, self.Fault = connection, lock, fault
+        self.changed = threading.Condition()
         with connection() as c:
             c.executescript('''
                 CREATE TABLE IF NOT EXISTS remote_state(
@@ -42,6 +44,14 @@ class Remote:
                 CREATE INDEX IF NOT EXISTS remote_queue ON remote_commands(device,state,created);
             ''')
 
+            for table, column in [('remote_state','revision'),('remote_detail','revision')]:
+                columns = {row[1] for row in c.execute(f'PRAGMA table_info({table})')}
+                if column not in columns:
+                    c.execute(f'ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0')
+            columns = {row[1] for row in c.execute('PRAGMA table_info(remote_state)')}
+            if 'detail_revision' not in columns:
+                c.execute('ALTER TABLE remote_state ADD COLUMN detail_revision INTEGER NOT NULL DEFAULT 0')
+
     def identity(self, value, field='id'):
         if not isinstance(value, str) or not ID.fullmatch(value):
             raise self.Fault(400, f'Некорректный идентификатор {field}.')
@@ -57,29 +67,49 @@ class Remote:
         return value
 
     def sync(self, actor, data):
-        """Runtime heartbeat: publish a fresh snapshot and take a bounded command page."""
+        # One atomic revisioned snapshot: overview and watched detail together.
         if not isinstance(data, dict) or not isinstance(data.get('overview'), dict):
             raise self.Fault(400, 'Нужен снимок устройства.')
         overview = self.bounded(data['overview'])
         detail = data.get('detail')
+        if detail is not None:
+            if not isinstance(detail, dict) or not ID.fullmatch(str(detail.get('session', ''))):
+                raise self.Fault(400, 'Некорректный снимок сессии.')
+            detail = self.bounded(detail, 4 * 1024 * 1024)
+        overview_raw = encode(overview)
+        detail_raw = encode(detail) if detail is not None else None
         now = int(time.time() * 1000)
+        changed = False
         with self.lock, self.connection() as c:
-            c.execute('INSERT INTO remote_state VALUES(?,?,?) ON CONFLICT(device) DO UPDATE SET payload=excluded.payload,updated=excluded.updated',
-                      (actor['id'], encode(overview), now))
+            old = c.execute('SELECT payload,revision,detail_revision FROM remote_state WHERE device=?',(actor['id'],)).fetchone()
+            revision = old['revision'] if old else 0
+            detail_revision = old['detail_revision'] if old else 0
+            if old is None or old['payload'] != overview_raw:
+                revision += 1; changed = True
+            if detail is not None:
+                previous = c.execute('SELECT payload,revision FROM remote_detail WHERE device=? AND session=?',
+                                     (actor['id'],detail['session'])).fetchone()
+                if previous is None or previous['payload'] != detail_raw:
+                    detail_revision += 1; revision += 1; changed = True
+                c.execute('''INSERT INTO remote_detail(device,session,payload,updated,revision) VALUES(?,?,?,?,?)
+                    ON CONFLICT(device,session) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,revision=excluded.revision''',
+                    (actor['id'],detail['session'],detail_raw,now,detail_revision))
+            c.execute('''INSERT INTO remote_state(device,payload,updated,revision,detail_revision) VALUES(?,?,?,?,?)
+                ON CONFLICT(device) DO UPDATE SET payload=excluded.payload,updated=excluded.updated,
+                    revision=excluded.revision,detail_revision=excluded.detail_revision''',
+                (actor['id'],overview_raw,now,revision,detail_revision))
             c.execute('UPDATE devices SET seen=?,app_version=? WHERE id=?',
-                      (now, str(overview.get('version', ''))[:40], actor['id']))
-            if isinstance(detail, dict) and ID.fullmatch(str(detail.get('session', ''))):
-                c.execute('INSERT INTO remote_detail VALUES(?,?,?,?) ON CONFLICT(device,session) DO UPDATE SET payload=excluded.payload,updated=excluded.updated',
-                          (actor['id'], detail['session'], encode(self.bounded(detail, 4 * 1024 * 1024)), now))
-            watch = c.execute('SELECT session FROM remote_watch WHERE device=?', (actor['id'],)).fetchone()
+                      (now,str(overview.get('version',''))[:40],actor['id']))
+            watch = c.execute('SELECT session FROM remote_watch WHERE device=?',(actor['id'],)).fetchone()
             rows = c.execute("SELECT * FROM remote_commands WHERE device=? AND state IN ('queued','delivered') ORDER BY created LIMIT 20",
                              (actor['id'],)).fetchall()
             for row in rows:
-                c.execute("UPDATE remote_commands SET state='delivered',updated=? WHERE id=? AND state='queued'", (now, row['id']))
-        return {'commands': [{'id': r['id'], 'session': r['session'], 'kind': r['kind'],
-                              'payload': json.loads(r['payload'])} for r in rows],
-                'watch': watch['session'] if watch else None, 'serverTime': now}
-
+                c.execute("UPDATE remote_commands SET state='delivered',updated=? WHERE id=? AND state='queued'",(now,row['id']))
+        if changed:
+            with self.changed:self.changed.notify_all()
+        return {'commands':[{'id':r['id'],'session':r['session'],'kind':r['kind'],'payload':json.loads(r['payload'])} for r in rows],
+                'watch':watch['session'] if watch else None,'serverTime':now,
+                'revision':revision,'detailRevision':detail_revision}
     def complete(self, actor, data):
         if not isinstance(data, dict) or type(data.get('ok')) is not bool:
             raise self.Fault(400, 'Нужен результат команды.')
@@ -97,16 +127,37 @@ class Remote:
                       (state, encode(result), now, id_))
         return {'id': id_, 'state': state}
 
-    def overview(self):
+    def overview(self, query=None):
+        query = query or {}
+        device = query.get('device',[''])[0]
+        since_raw = query.get('since',[''])[0]
+        if not device or not since_raw:
+            return self._overview()
+        self.identity(device,'device')
+        try:since = int(since_raw)
+        except (TypeError,ValueError):raise self.Fault(400,'Некорректная ревизия.')
+        if since < 0:raise self.Fault(400,'Некорректная ревизия.')
+        deadline = time.monotonic() + 20
+        while True:
+            result = self._overview()
+            current = next((item for item in result['devices'] if item['id']==device),None)
+            if current is None or current.get('revision',0) > since:
+                result['waited'] = True; return result
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                result['waited'] = True; return result
+            with self.changed:self.changed.wait(min(remaining,1))
+    def _overview(self):
         devices = []
         with self.connection() as c:
-            rows = c.execute('''SELECT d.id,d.name,d.platform,d.app_version,d.seen,r.payload,r.updated
+            rows = c.execute('''SELECT d.id,d.name,d.platform,d.app_version,d.seen,r.payload,r.updated,r.revision,r.detail_revision
                 FROM devices d LEFT JOIN remote_state r ON r.device=d.id
                 WHERE d.revoked=0 AND (r.payload IS NOT NULL OR d.platform IN ('macos','windows','linux')) ORDER BY d.seen DESC''').fetchall()
         now = int(time.time() * 1000)
         for row in rows:
             item = {'id': row['id'], 'name': row['name'], 'platform': row['platform'],
                     'appVersion': row['app_version'], 'seen': row['seen'],
+                    'revision': row['revision'] or 0, 'detailRevision': row['detail_revision'] or 0,
                     'online': bool(row['payload'] and now-row['updated'] < 15_000)}
             if row['payload']:
                 item['overview'] = json.loads(row['payload'])
@@ -118,7 +169,7 @@ class Remote:
         device = self.identity(query.get('device', [''])[0], 'device')
         session = self.identity(query.get('session', [''])[0], 'session')
         with self.connection() as c:
-            row = c.execute('SELECT payload,updated FROM remote_detail WHERE device=? AND session=?',
+            row = c.execute('SELECT payload,updated,revision FROM remote_detail WHERE device=? AND session=?',
                             (device, session)).fetchone()
             commands = c.execute('SELECT id,kind,state,result,created,updated FROM remote_commands WHERE device=? AND session=? ORDER BY created DESC LIMIT 30',
                                  (device, session)).fetchall()
@@ -128,7 +179,8 @@ class Remote:
             item['result'] = json.loads(item['result']) if item['result'] else None
             result.append(item)
         return {'detail': json.loads(row['payload']) if row else None,
-                'updated': row['updated'] if row else None, 'commands': result}
+                'updated': row['updated'] if row else None,
+                'revision': row['revision'] if row else None, 'commands': result}
 
     def watch(self, data):
         device = self.identity(data.get('device'), 'device')
@@ -181,7 +233,7 @@ class Remote:
         if method == 'POST' and route == 'complete':
             return self.complete(actor, data)
         if method == 'GET' and route == 'overview':
-            return self.overview()
+            return self.overview(query)
         if method == 'GET' and route == 'session':
             return self.session(query)
         if method == 'GET' and route == 'command':

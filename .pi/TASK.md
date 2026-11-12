@@ -1,3 +1,20 @@
+# TASK — 2026-11-12: versioned Remote sync architecture / 2.0.72
+
+После 2.0.71 live Workshop detail всё ещё стар (40кс), overview свежий. Раздельные
+requests позволяли такому противоречию. Runtime разделён: remote/snapshot.ts
+(read-only live envelope+history bound), remote/sync.ts (single atomic request,
+watch, commands, 1s/backoff/reconnect), remote.ts command adapter. Больше нет
+второго optional detail request. Hub additive migrations revision/detailRevision;
+overview+detail одной SQLite transaction; unchanged heartbeat freshness без
+revision increment. Browser remote-sync.js sole scheduler, AbortController при
+selection, visibility, non-overlap; overview long-poll since revision до20с,
+detailRevision skip unchanged. WebSocket не добавлен: pinned HTTPS/LAN сохранены,
+long-poll даёт push и простое восстановление без нового порта/executor.
+Tests: agent typecheck PASS, remote detail3+integration2 PASS; Hub revision
+atomic/longpoll wakeup, полный suite перед release. Browser mobile fixture live
+queue add/remove без refresh, JS errors0; steady revision change 54ms.
+Hub CT206 backup integrity ok, migrated/deployed, live revisions visible. Runtime
+72 нужен для атомарного watched detail и устранения stale Workshop queue.
 # TASK — 2026-11-12: Remote stale queue / 2.0.71
 
 Владелец прислал phone screenshot: Workshop idle, но старое «В очереди: Это

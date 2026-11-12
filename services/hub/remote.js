@@ -1,4 +1,5 @@
 /* Enki Remote — mobile-first LAN client. All model/chat content is text, never HTML. */
+import { RemoteSynchronizer } from '/remote-sync.js';
 'use strict';
 
 const $ = id => document.getElementById(id);
@@ -7,6 +8,7 @@ const state = {
   signatures: {}, openTools: new Set(), busy: false, connected: false,
   sessionFilter: 'all', recorder: null, chunks: [], recordingTimer: null, toastTimer: null,
   selection: 0, syncing: false, syncAgain: false, syncTimer: null, installError: '',
+  revision: 0, detailRevision: null, detailStale: false, longPoll: false,
 };
 
 function el(tag, className, text) {
@@ -24,9 +26,9 @@ function toast(message, error = false) {
   node.className = error ? 'show error' : 'show';
   clearTimeout(state.toastTimer); state.toastTimer = setTimeout(() => node.className = '', 4500);
 }
-async function api(path, body) {
-  const response = await fetch('/api/remote/' + path, body === undefined ? {} : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+async function api(path, body, signal) {
+  const response = await fetch('/api/remote/' + path, body === undefined ? { signal } : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
   });
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
@@ -82,13 +84,16 @@ function selectModel(select = $('model')) {
   return { providerID, modelID: rest.join('\n') };
 }
 
-async function loadOverview() {
+async function loadOverview(signal) {
   try {
-    const data = await api('overview');
+    const params = state.deviceId && state.revision ? `?device=${encodeURIComponent(state.deviceId)}&since=${state.revision}` : '';
+    const data = await api('overview' + params, undefined, signal);
+    state.longPoll = !!data.waited;
     state.devices = data.devices; state.connected = true;
     $('connection').className = 'connection online'; $('connection').title = 'Hub на связи';
     if (!currentDevice()) state.deviceId = data.devices.find(device => device.online)?.id || data.devices[0]?.id || null;
     const device = currentDevice(); state.overview = device?.overview || null;
+    state.revision = device?.revision || 0;
     if (state.deviceId) localStorage.setItem('enki.remote.device', state.deviceId);
     if (state.overview && !currentSession()) state.sessionId = state.overview.sessions?.[0]?.id || null;
     renderDevices(); renderHeader();
@@ -97,6 +102,7 @@ async function loadOverview() {
       state.signatures.sessionList = sessionListSignature; renderSessionResults();
     }
   } catch (error) {
+    if (error?.name === 'AbortError') return;
     state.connected = false; $('connection').className = 'connection'; $('connection').title = 'Нет связи с Hub';
   }
 }
@@ -115,6 +121,7 @@ function renderDevices() {
 async function chooseDevice(id) {
   state.deviceId = id; state.overview = currentDevice()?.overview || null;
   state.sessionId = state.overview?.sessions?.[0]?.id || null; state.detail = null;
+  state.revision = 0; state.detailRevision = null;
   delete state.signatures.detail; delete state.signatures.models;
   renderHeader(); await selectSession(state.sessionId);
 }
@@ -134,6 +141,7 @@ function renderHeader() {
 async function selectSession(id) {
   const selection = ++state.selection;
   state.sessionId = id; state.detail = null;
+  state.detailRevision = null; state.detailStale = false;
   delete state.signatures.detail; delete state.signatures.interactions; delete state.signatures.queue;
   if (id) localStorage.setItem('enki.remote.session', id);
   else localStorage.removeItem('enki.remote.session');
@@ -150,14 +158,17 @@ async function selectSession(id) {
     if (selection === state.selection) requestSync();
   }
 }
-async function loadDetail() {
+async function loadDetail(signal) {
   if (!state.deviceId || !state.sessionId) return;
+  const publishedRevision = currentDevice()?.detailRevision;
+  if (state.detail && publishedRevision && publishedRevision === state.detailRevision && !state.detailStale) return;
   const selection = state.selection, device = state.deviceId, session = state.sessionId;
   try {
-    const data = await api(`session?device=${encodeURIComponent(device)}&session=${encodeURIComponent(session)}`);
+    const data = await api(`session?device=${encodeURIComponent(device)}&session=${encodeURIComponent(session)}`, undefined, signal);
     if (selection === state.selection && device === state.deviceId && session === state.sessionId
         && data.detail?.session === session) {
       state.detailStale = !!data.updated && Date.now() - data.updated > 20_000;
+      state.detailRevision = data.revision ?? publishedRevision;
       state.detail = { ...data.detail, snapshotAt: data.updated }; renderDetail();
     }
   } catch (error) { /* retain the last confirmed view and retry next poll */ }
@@ -519,29 +530,12 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => void reg
 window.addEventListener('offline', () => { $('connection').className = 'connection'; $('connection').title = 'Нет сети'; });
 window.addEventListener('online', requestSync);
 
-function scheduleSync(delay = 2500) {
-  clearTimeout(state.syncTimer);
-  if (!document.hidden) state.syncTimer = setTimeout(() => void syncNow(), delay);
-}
-async function syncNow() {
-  if (document.hidden) return;
-  if (state.syncing) { state.syncAgain = true; return; }
-  state.syncing = true; $('refresh-button').classList.add('syncing');
-  try {
-    await loadOverview(); await loadDetail();
-    if (state.connected) $('connection').title = 'Hub на связи · обновлено ' + new Date().toLocaleTimeString('ru-RU');
-  } finally {
-    state.syncing = false; $('refresh-button').classList.remove('syncing');
-    if (state.syncAgain) { state.syncAgain = false; void syncNow(); }
-    else scheduleSync();
-  }
-}
-function requestSync() {
-  clearTimeout(state.syncTimer);
-  if (state.syncing) state.syncAgain = true;
-  else void syncNow();
-}
-document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(state.syncTimer); else requestSync(); });
+const synchronizer = new RemoteSynchronizer(async signal => {
+  await loadOverview(signal); await loadDetail(signal);
+  if (state.connected) $('connection').title = 'Hub на связи · обновлено ' + new Date().toLocaleTimeString('ru-RU');
+  return { immediate: state.longPoll };
+}, syncing => $('refresh-button').classList.toggle('syncing', syncing));
+function requestSync() { synchronizer.refresh(); }
 
 void (async () => {
   state.deviceId = localStorage.getItem('enki.remote.device');

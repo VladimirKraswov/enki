@@ -38,19 +38,30 @@ Runtime и Hub остаются источниками данных при во�
 warning не включает service worker. Кнопка ⬇ диагностирует это и предлагает
 `/remote-certificate.crt` (только public certificate) с SHA-256 для сверки.
 
-Remote detail ограничен 3.5 МиБ до отправки: текст/вывод сокращаются с явной
-пометкой, сохраняются последние сообщения, а live queue/status/questions никогда
-не выбрасываются. Ошибка чтения истории даёт warning, но не блокирует live-снимок.
-Полная локальная история не изменяется. Browser отмечает queue snapshot старше
-20 секунд как устаревший, не выдавая его за подтверждённое текущее состояние.
+## Архитектура синхронизации
 
-Синхронизация последовательная, без overlapping polls; скрытая вкладка не
-опрашивается, возврат/online/команда инициируют refresh. ↻ делает ручной refresh.
-Selection token и device/session check отбрасывают поздние detail responses;
-при смене сессии старая история сразу скрывается. Messages/questions/queue имеют
-независимые signatures, поэтому streaming не стирает редактируемый ответ, а
-session sheet не пересоздаёт кнопки без реальных изменений. Scroll и draft
-сохраняются; отправленный draft очищается только для исходной сессии.
+Runtime `remote/snapshot.ts` строит read-only overview/detail, `remote/sync.ts`
+владеет reconnect/backoff и одним атомарным sync request, `remote.ts` выполняет
+typed commands через существующие Runtime interfaces. Browser `remote-sync.js`
+является единственным scheduler: отменяет stale request при выборе, не запускает
+overlap и останавливается в скрытой вкладке.
+
+Hub в одной SQLite transaction сохраняет overview+watched detail и монотонные
+revision/detailRevision. Heartbeat без изменений обновляет freshness, но не
+revision. Browser long-poll `overview?device=…&since=…` спит до20с и просыпается
+при новой ревизии; detail revision позволяет не скачивать неизменённую историю.
+Это выбрано вместо дополнительного WebSocket stack: сохраняется существующий
+pinned HTTPS и LAN boundary, нет нового порта или протокола команд. Изменение
+доставляется push-подобно, а после обрыва обычный HTTP запрос восстанавливается.
+Runtime sync каждую1с, transient backoff до10с, изменение watch/команда вызывает
+следующий snapshot немедленно.
+
+Remote detail ограничен 1.2МиБ до отправки (whole HTTP body Hub 2МиБ): текст/
+вывод сокращаются с явной пометкой, сохраняются последние сообщения, а live
+queue/status/questions никогда не выбрасываются. Ошибка чтения истории даёт
+warning, но не блокирует live-снимок. Полная локальная история не изменяется.
+Browser отмечает queue snapshot старше20с как устаревший, не выдавая его за
+подтверждённое текущее состояние.
 
 ## Диктовка
 

@@ -2,6 +2,7 @@ import http.server
 import http.client
 import json
 import threading
+import time
 import unittest
 from test_http import HTTP
 from test_hub import m
@@ -47,6 +48,34 @@ class RemoteAPI(unittest.TestCase):
         detail = self.h.remote.session({'device':[self.mac['id']],'session':['session-1']})
         self.assertEqual(detail['detail']['messages'][0]['info']['role'],'user')
         self.assertEqual(detail['commands'][0]['state'],'done')
+
+    def test_revisioned_atomic_detail_and_long_poll_wakeup(self):
+        overview = {'version':'2.0.72','sessions':[], 'providers':{'all':[]}, 'settings':{}}
+        detail = {'session':'session-1','messages':[], 'queue':{'items':[{'id':'old'}]}, 'status':{'type':'idle'}}
+        first = self.h.remote.sync(self.mac, {'overview':overview,'detail':detail})
+        self.assertGreater(first['revision'],0)
+        self.assertEqual(first['detailRevision'],1)
+        listed = self.h.remote.overview()['devices'][0]
+        self.assertEqual(listed['revision'],first['revision'])
+        self.assertEqual(listed['detailRevision'],1)
+        same = self.h.remote.sync(self.mac, {'overview':overview,'detail':detail})
+        self.assertEqual(same['revision'],first['revision'])
+        self.assertGreaterEqual(same['serverTime'],first['serverTime'])
+        answer = {}
+        def wait_for_change():
+            answer.update(self.h.remote.overview({'device':[self.mac['id']],'since':[str(first['revision'])]}))
+        thread = threading.Thread(target=wait_for_change);thread.start()
+        time.sleep(.05)
+        detail['queue'] = {'items':[]}
+        changed = self.h.remote.sync(self.mac, {'overview':overview,'detail':detail})
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(answer['waited'])
+        self.assertEqual(answer['devices'][0]['revision'],changed['revision'])
+        self.assertGreater(changed['revision'],first['revision'])
+        current = self.h.remote.session({'device':[self.mac['id']],'session':['session-1']})
+        self.assertEqual(current['revision'],changed['detailRevision'])
+        self.assertEqual(current['detail']['queue']['items'],[])
 
     def test_invalid_or_cross_device_commands_fail_closed(self):
         for data in [
