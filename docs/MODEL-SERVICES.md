@@ -5,6 +5,15 @@ SDK). It — not the window — discovers Hub routes, holds whole-turn Hub lease
 decides when a model may be called. Older 0.2.x clients (OpenCode or Pi CLI) are
 still served by the same Hub through their own provider blocks.
 
+## Сохранённая модель и обновление каталога
+
+Проверка доступности — наблюдение, а не идентичность выбранной модели. Если
+обновление каталога временно не подтвердило провайдера, текущая модель чата
+остаётся отдельной строкой «Текущая модель» с пометкой «выбор чата сохранён».
+Другие неподтверждённые модели по-прежнему скрыты. Runtime проверяет доступ при
+реальной отправке; UI не выдаёт отсутствие проверки за отказ и не подменяет
+сохранённый выбор провайдером по умолчанию.
+
 ## Hub coordinator
 
 The normal path for the owner's shared models is:

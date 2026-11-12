@@ -53,6 +53,9 @@ revision. Browser long-poll `overview?device=…&since=…` спит до20с и
 Это выбрано вместо дополнительного WebSocket stack: сохраняется существующий
 pinned HTTPS и LAN boundary, нет нового порта или протокола команд. Изменение
 доставляется push-подобно, а после обрыва обычный HTTP запрос восстанавливается.
+Статус необязательного updater-а загружается в фоне и никогда не задерживает
+session sync. Watchdog 30с fencing-поколением заменяет зависший bridge call живым
+циклом; отдельный backoff ограничен.
 Runtime sync каждую1с, transient backoff до10с, изменение watch/команда вызывает
 следующий snapshot немедленно.
 

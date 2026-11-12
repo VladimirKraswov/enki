@@ -21,6 +21,7 @@ function text(value: unknown, limit = 200_000): string {
 export class RemoteControl {
   private updates: unknown = null;
   private updatesAt = 0;
+  private updatesPending = false;
   private readonly transport: RemoteSyncTransport;
 
   constructor(private readonly runtime: Runtime, intervalMs = 1_000) {
@@ -33,11 +34,17 @@ export class RemoteControl {
   stop(): void { this.transport.stop(); }
 
   private async beforeSync(signal: AbortSignal): Promise<void> {
-    if (Date.now()-this.updatesAt <= 10_000) return;
-    try {
-      this.updates = await this.runtime.config.broker.call("updates.control", { action: "status" }, signal, 5_000);
-      this.updatesAt = Date.now();
-    } catch { /* older Enki or remote runtimes without update control */ }
+    // Optional update diagnostics must never gate the session/queue transport.
+    this.requestUpdates(signal);
+  }
+  private requestUpdates(signal: AbortSignal): void {
+    if (this.updatesPending || Date.now()-this.updatesAt <= 10_000) return;
+    this.updatesPending = true;
+    this.updatesAt = Date.now();
+    void this.runtime.config.broker.call("updates.control", { action: "status" }, signal, 5_000)
+      .then(value => { this.updates = value; })
+      .catch(() => { /* older Enki or remote runtimes without update control */ })
+      .finally(() => { this.updatesPending = false; });
   }
   overview(): Record<string, unknown> { return remoteOverview(this.runtime, this.updates); }
   detail(sessionID: string): Record<string, unknown> { return remoteDetail(this.runtime, sessionID); }

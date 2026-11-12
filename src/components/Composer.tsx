@@ -2,7 +2,7 @@ import {AttachmentChip} from "./AttachmentChip";
 import { RuntimeStartupStatus } from './RuntimeStartupStatus';
 import { modelServices, isSwitching } from "../models/services";
 import { compactModelName } from "../models/display";
-import { availablePickerModels } from "../models/picker";
+import { availablePickerModels, withCurrentSelection } from "../models/picker";
 import { ModelSwitchStatus } from "./ModelSwitchStatus";
 import { ModelSelectionDialog } from "./ModelSelectionDialog";
 import { HostPicker } from "./WorkspacePicker";
@@ -163,11 +163,13 @@ export function Composer() {
   useEffect(() => { selectionAbort.current?.abort(); selectionTicket.current++; refreshTicket.current++; setSelection(null); setRefreshError(""); setRefreshing(false); }, [selectionScope]);
   useEffect(() => () => { selectionAbort.current?.abort(); selectionScopeRef.current = ""; selectionTicket.current++; refreshTicket.current++; }, []);
 
-  const modelList = useMemo(() => availablePickerModels(providers, s.connectedProviderIds,
-    (provider, model) => modelServices.manages(provider, model) && modelServices.visible(provider, model, engineId))
-    .filter(m => modelServices.visible(m.providerID, m.modelID, engineId))
-    .map(m => ({ ...m, label: compactModelName(m.label) })),
-  [providers, s.connectedProviderIds, switches.revision, engineId]);
+  const modelList = useMemo(() => withCurrentSelection(
+    availablePickerModels(providers, s.connectedProviderIds,
+      (provider, model) => modelServices.manages(provider, model) && modelServices.visible(provider, model, engineId))
+      .filter(m => modelServices.visible(m.providerID, m.modelID, engineId))
+      .map(m => ({ ...m, label: compactModelName(m.label) })),
+    providers, choice),
+  [providers, s.connectedProviderIds, switches.revision, engineId, choice?.providerID, choice?.modelID]);
 
   const refreshModels = async () => {
     if (refreshing) return;
@@ -353,7 +355,7 @@ export function Composer() {
             disabled={running || s.ui.sending || switching || !!selection?.pending}
             value={choice ? `${choice.providerID}/${choice.modelID}` : ""}
             fallbackLabel={s.modelCatalogChecking ? "Проверка доступных моделей…" : choice
-              ? `${compactModelName(store.modelInfo(choice.providerID, choice.modelID)?.name ?? choice.modelID)} · доступ не подтверждён`
+              ? compactModelName(store.modelInfo(choice.providerID, choice.modelID)?.name ?? choice.modelID)
               : "Выберите доступную модель"}
             options={modelList.map((m) => {
               const peak = m.providerID === "deepseek" ? deepseekPeakStatus(priceNow) : null;

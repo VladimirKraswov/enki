@@ -13,18 +13,34 @@ type Hooks = {
 
 export class RemoteSyncTransport {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private stopped = false;
   private failures = 0;
+  private lastActivity = Date.now();
   private watch: string | null = null;
   private readonly results = new Map<string, { ok: boolean; result: unknown }>();
-  private readonly abort = new AbortController();
+  private abort = new AbortController();
+  private generation = 0;
 
   constructor(private readonly runtime: Runtime, private readonly intervalMs: number, private readonly hooks: Hooks) {}
 
-  start(): void { if (!this.timer && !this.running && !this.stopped) void this.tick(); }
+  start(): void {
+    if (this.timer || this.running || this.stopped) return;
+    // A bridge call can be lost without settling even though it has a timeout.
+    // The watchdog is a liveness fence, not a second polling loop.
+    this.watchdog = setInterval(() => {
+      if (this.stopped || Date.now() - this.lastActivity < 30_000) return;
+      this.generation++; this.abort.abort(); this.abort = new AbortController();
+      this.running = false; this.lastActivity = Date.now(); void this.tick();
+    }, 15_000);
+    this.watchdog.unref();
+    void this.tick();
+  }
   stop(): void {
-    this.stopped = true; this.abort.abort();
+    this.stopped = true; this.generation++; this.abort.abort();
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -36,7 +52,9 @@ export class RemoteSyncTransport {
 
   private async tick(): Promise<void> {
     if (this.running || this.stopped || this.runtime.draining) { this.schedule(); return; }
+    const generation = ++this.generation;
     this.running = true;
+    this.lastActivity = Date.now();
     let immediate = false;
     try {
       const identity = await this.runtime.config.broker.call<{ scope: string | null }>("hub.identity", {}, this.abort.signal, 5_000);
@@ -72,7 +90,9 @@ export class RemoteSyncTransport {
       // Local chats are never blocked by Hub absence; bounded backoff avoids
       // hot reconnect loops while preserving automatic recovery.
     } finally {
+      if (generation !== this.generation) return;
       this.running = false;
+      this.lastActivity = Date.now();
       this.schedule(immediate ? 0 : Math.min(10_000, this.intervalMs * 2 ** Math.min(this.failures, 4)));
     }
   }

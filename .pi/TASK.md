@@ -1,3 +1,17 @@
+# TASK — 2026-11-12: model identity + Remote liveness / 2.0.73
+
+Владелец: «Kimi K3.1 Pro работает, но доступ не подтверждён», после refresh
+модель исчезла. Причина UI: selection identity использовалась как entitlement
+наблюдение; unknown/неconnected скрывались, fallback звучал как отказ. Добавлен
+withCurrentSelection: выбранная модель всегда остаётся строкой «Текущая модель»
+с честной пометкой, без подмены; fallback только имя. Другие unconfirmed скрыты.
+Picker 4 PASS, build PASS.
+Live 2.0.72 обнаружил Remote dead с14:42 (Hub revision62/detail0). Причина:
+optional updates.control awaited before core sync; native updater после auto
+restart может зависнуть и блокировать весь LAN relay. Статус обновлений теперь
+fire-and-forget, не гейтит sync. Sync watchdog 30с generation-fence перезапускает
+зависший bridge tick; backoff сохранён. transport2+detail3+integration2 PASS,
+typecheck PASS. Нужен release/apply и live проверка свежего detail.
 # TASK — 2026-11-12: versioned Remote sync architecture / 2.0.72
 
 После 2.0.71 live Workshop detail всё ещё стар (40кс), overview свежий. Раздельные

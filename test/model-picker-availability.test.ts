@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { availablePickerModels, MODEL_SECTIONS } from "../src/models/picker";
+import { availablePickerModels, MODEL_SECTIONS, withCurrentSelection } from "../src/models/picker";
 import type { ProviderInfo } from "../src/api/types";
 
 it("shows owned unloaded GPUs first, paid entitlements next and confirmed free models last", () => {
@@ -25,4 +25,26 @@ it("revoking a key hides even previously available cloud models without modifyin
   const before = JSON.stringify(provider);
   expect(availablePickerModels([provider], [], () => false)).toEqual([]);
   expect(JSON.stringify(provider)).toBe(before);
+});
+
+it("keeps the selected working model visible after a transient access refresh", () => {
+  const providers: ProviderInfo[] = [{ id: "kimi", name: "Kimi", models: {
+    pro: { id: "pro", providerID: "kimi", name: "Kimi K3.1 Pro", access: { state: "unknown" } },
+  } }];
+  const listed = availablePickerModels(providers, [], () => false);
+  expect(listed).toEqual([]);
+  const result = withCurrentSelection(listed, providers, { providerID: "kimi", modelID: "pro" });
+  expect(result).toHaveLength(1);
+  expect(result[0]).toMatchObject({ label: "Kimi K3.1 Pro", section: "Текущая модель" });
+  expect(result[0].detail).toContain("выбор чата сохранён");
+  expect(withCurrentSelection(result, providers, { providerID: "kimi", modelID: "pro" })).toBe(result);
+});
+
+it("does not duplicate a confirmed selected model and tolerates an absent catalog entry", () => {
+  const listed = availablePickerModels([{ id: "router", models: {
+    free: { id: "free", providerID: "router", access: { state: "available", kind: "free" } },
+  } }], ["router"], () => false);
+  expect(withCurrentSelection(listed, [], { providerID: "router", modelID: "free" })).toEqual(listed);
+  const absent = withCurrentSelection([], [], { providerID: "gone", modelID: "old-model" });
+  expect(absent[0]).toMatchObject({ providerID: "gone", modelID: "old-model", label: "old-model" });
 });

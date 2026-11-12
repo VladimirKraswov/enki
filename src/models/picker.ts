@@ -3,6 +3,27 @@ import type { ProviderInfo } from "../api/types";
 export const MODEL_SECTIONS = { local: "Мои локальные модели", paid: "Платные модели", free: "Бесплатные модели" } as const;
 export interface PickerModel { providerID: string; modelID: string; label: string; section: string; detail: string }
 
+/** A chat's durable model choice is not an entitlement observation. A transient
+ * discovery failure must not make the currently selected working model vanish
+ * from its own picker (or look like a denial). Other unconfirmed models remain
+ * hidden until discovery confirms them. */
+export function withCurrentSelection(models: PickerModel[], providers: ProviderInfo[],
+  selection: { providerID: string; modelID: string } | null): PickerModel[] {
+  if (!selection || models.some(m => m.providerID === selection.providerID && m.modelID === selection.modelID)) return models;
+  const provider = providers.find(p => p.id === selection.providerID);
+  const model = provider?.models[selection.modelID];
+  const state = model?.access?.state;
+  const detail = state === "unavailable"
+    ? `${provider?.name ?? selection.providerID} · проверка не подтвердила доступ; выбор чата сохранён`
+    : state === "unknown"
+      ? `${provider?.name ?? selection.providerID} · доступ проверяется; выбор чата сохранён`
+      : `${provider?.name ?? selection.providerID} · выбрана в этом чате`;
+  return [{
+    providerID: selection.providerID, modelID: selection.modelID,
+    label: model?.name ?? selection.modelID, section: "Текущая модель", detail,
+  }, ...models];
+}
+
 /** The SDK's complete reference catalogue is useful in settings, never as an
  * entitlement list. Unknown pricing cannot establish that a model is free. */
 export function availablePickerModels(providers: ProviderInfo[], connected: readonly string[], managed: (provider: string, model: string) => boolean): PickerModel[] {
