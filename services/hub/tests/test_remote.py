@@ -77,6 +77,27 @@ class RemoteAPI(unittest.TestCase):
         self.assertEqual(current['revision'],changed['detailRevision'])
         self.assertEqual(current['detail']['queue']['items'],[])
 
+    def test_stale_detail_never_presents_old_queue_as_live(self):
+        overview = {'version':'2.0.74','sessions':[], 'providers':{'all':[]}, 'settings':{}}
+        detail = {'session':'session-1','messages':[{'info':{'role':'user'},'parts':[]}],
+                  'queue':{'sessionID':'session-1','armed':True,'items':[{'id':'old','text':'old'}]},
+                  'status':{'type':'idle'},'questions':[{'id':'q'}],'permissions':[{'id':'p'}]}
+        self.h.remote.sync(self.mac, {'overview':overview,'detail':detail})
+        fresh = self.h.remote.session({'device':[self.mac['id']],'session':['session-1']})
+        self.assertFalse(fresh['stale'])
+        self.assertFalse(fresh['detail']['snapshotStale'])
+        with self.h.connection() as c:
+            c.execute('UPDATE remote_detail SET updated=0 WHERE device=? AND session=?',(self.mac['id'],'session-1'))
+        stale = self.h.remote.session({'device':[self.mac['id']],'session':['session-1']})
+        self.assertTrue(stale['stale'])
+        self.assertTrue(stale['detail']['snapshotStale'])
+        self.assertEqual(stale['detail']['messages'][0]['info']['role'],'user')
+        self.assertEqual(stale['detail']['queue']['items'],[])
+        self.assertFalse(stale['detail']['queue']['armed'])
+        self.assertEqual(stale['detail']['questions'],[])
+        self.assertEqual(stale['detail']['permissions'],[])
+        self.assertEqual(stale['detail']['status'],{'type':'unknown'})
+
     def test_invalid_or_cross_device_commands_fail_closed(self):
         for data in [
             {'device':self.mac['id'],'kind':'shell','payload':{}},

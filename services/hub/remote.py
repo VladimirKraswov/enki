@@ -178,7 +178,18 @@ class Remote:
             item = dict(command)
             item['result'] = json.loads(item['result']) if item['result'] else None
             result.append(item)
-        return {'detail': json.loads(row['payload']) if row else None,
+        detail = json.loads(row['payload']) if row else None
+        now = int(time.time() * 1000)
+        stale = not row or now - row['updated'] > 30_000
+        if detail is not None and stale:
+            # History is useful as an explicitly stale last snapshot. Queue,
+            # status and interactions are live authority and must not lie.
+            detail = {**detail,
+                'queue': {'sessionID': detail.get('session'), 'armed': False, 'pausedReason': None, 'items': [], 'corrections': []},
+                'status': {'type': 'unknown'}, 'questions': [], 'permissions': [], 'snapshotStale': True}
+        elif detail is not None:
+            detail = {**detail, 'snapshotStale': False}
+        return {'detail': detail, 'stale': stale,
                 'updated': row['updated'] if row else None,
                 'revision': row['revision'] if row else None, 'commands': result}
 

@@ -112,7 +112,7 @@ function renderDevices() {
   if (state.signatures.devices === signature || select.matches(':focus')) return;
   state.signatures.devices = signature; select.replaceChildren();
   for (const device of state.devices) {
-    const option = el('option', '', `${device.name || 'Enki'} · ${device.online ? 'в сети' : 'офлайн'}`);
+    const option = el('option', '', `${device.name || 'Enki'} · ${device.online ? 'в сети' : device.overview ? 'нет связи' : 'нет данных'}`);
     option.value = device.id; select.append(option);
   }
   if (state.deviceId) select.value = state.deviceId;
@@ -131,8 +131,9 @@ function renderHeader() {
   $('session-title').textContent = session?.title || 'Выбрать сессию';
   $('session-path').textContent = session ? session.directory : currentDevice()?.name || '';
   const status = session ? statusFor(session.id) : null;
-  $('session-status').textContent = session ? (attention(session.id) ? 'Нужен ответ' : statusLabel(status)) : '';
-  $('session-status').className = 'status' + (status === 'busy' || status === 'retry' || attention(session?.id) ? ' busy' : '');
+  const offline = !!session && currentDevice() && !currentDevice().online;
+  $('session-status').textContent = session ? (offline ? 'Нет связи' : attention(session.id) ? 'Нужен ответ' : statusLabel(status)) : '';
+  $('session-status').className = 'status' + (offline ? ' offline' : status === 'busy' || status === 'retry' || attention(session?.id) ? ' busy' : '');
   if (session) {
     const selected = session.model ? session.model.providerID + '\n' + session.model.id : '';
     fillModels($('model'), state.overview, selected);
@@ -167,7 +168,7 @@ async function loadDetail(signal) {
     const data = await api(`session?device=${encodeURIComponent(device)}&session=${encodeURIComponent(session)}`, undefined, signal);
     if (selection === state.selection && device === state.deviceId && session === state.sessionId
         && data.detail?.session === session) {
-      state.detailStale = !!data.updated && Date.now() - data.updated > 20_000;
+      state.detailStale = !!data.stale || !!data.updated && Date.now() - data.updated > 20_000;
       state.detailRevision = data.revision ?? publishedRevision;
       state.detail = { ...data.detail, snapshotAt: data.updated }; renderDetail();
     }
@@ -192,7 +193,10 @@ function renderMessages(messages) {
   const root = $('messages');
   const previousTop = root.scrollTop;
   const nearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 220;
-  const warning = state.detail?.historyError || '';
+  const device = currentDevice();
+  const warning = device && !device.online
+    ? `Нет связи с ${device.name || 'компьютером'}. Показана последняя сохранённая история; очередь и статус скрыты до восстановления связи.`
+    : state.detailStale ? 'Hub не получает свежий снимок этой сессии. Повторяю запрос автоматически.' : state.detail?.historyError || '';
   if (!messages.length) {
     root.replaceChildren(); if (warning) root.append(el('div', 'queue-item', warning)); const empty = el('div', 'empty');
     empty.append(el('div', 'empty-mark', '⌁'), el('h1', '', currentSession()?.title || 'Сессия'), el('p', '', 'Напишите или надиктуйте первое задание.'));
@@ -268,7 +272,7 @@ function renderInteractions() {
 }
 function renderQueue(queue) {
   const root = $('queue'); root.replaceChildren();
-  if (state.detailStale) root.append(el('div', 'queue-item stale', 'Снимок очереди устарел; жду подтверждение от устройства.'));
+  if (state.detailStale) return;
   for (const item of queue?.items || []) root.append(el('div', 'queue-item', `В очереди: ${item.text}`));
   for (const item of queue?.corrections || []) root.append(el('div', 'queue-item', `Уточнение: ${item.text} · ${item.state}`));
   if (queue?.pausedReason) root.append(button('Возобновить очередь', () => void command('queue.resume', { model: selectModel() })));
@@ -531,6 +535,9 @@ window.addEventListener('offline', () => { $('connection').className = 'connecti
 window.addEventListener('online', requestSync);
 
 const synchronizer = new RemoteSynchronizer(async signal => {
+  // A selected chat must become readable immediately. The overview long-poll is
+  // for subsequent changes and must never delay the first detail request.
+  if (state.sessionId && !state.detail) await loadDetail(signal);
   await loadOverview(signal); await loadDetail(signal);
   if (state.connected) $('connection').title = 'Hub на связи · обновлено ' + new Date().toLocaleTimeString('ru-RU');
   return { immediate: state.longPoll };

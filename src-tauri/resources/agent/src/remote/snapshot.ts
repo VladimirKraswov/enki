@@ -59,8 +59,18 @@ export function remoteDetail(runtime: Runtime, sessionID: string): Record<string
     permissions: runtime.interactions.pendingPermissions(record.directory).filter(p => p.sessionID === sessionID),
   };
   try {
-    return fitRemoteDetail({ ...live, messages: runtime.registry.historyPage(record, 100).messages });
+    const stamp = record.updated ?? 0;
+    const cached = historyCache.get(runtime);
+    let messages: MessageDTO[];
+    if (cached?.session === sessionID && cached.stamp === stamp) messages = cached.messages;
+    else {
+      messages = runtime.registry.historyPage(record, 100).messages;
+      historyCache.set(runtime, { session: sessionID, stamp, messages });
+    }
+    return fitRemoteDetail({ ...live, messages });
   } catch {
     return { ...live, messages: [], historyError: "Не удалось прочитать историю для Remote. Актуальные статус и очередь показаны; откройте историю на компьютере." };
   }
 }
+
+const historyCache = new WeakMap<Runtime, { session: string; stamp: number; messages: MessageDTO[] }>();

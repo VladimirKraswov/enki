@@ -36,6 +36,7 @@ button:focus-visible, textarea:focus, select:focus, input:focus { outline: 2px s
 .session-picker strong { font-size: 17px; }
 .session-picker small { color: var(--muted); margin-top: 3px; }
 .status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.status.offline { color: var(--warn); }
 .status.busy { color: var(--warn); }
 .status.waiting { color: var(--warn); }
 .new-button { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--raised); color: var(--accent); font-size: 23px; }

@@ -1,3 +1,18 @@
+# TASK — 2026-11-12: honest stale state + immediate history / 2.0.74
+
+Владелец: Remote «ужасно синхронизируется»: Mac offline хотя открыт, Мастерская
+грузится долго, stale queue показывает вчерашнее. Live: установлен72, 73 waiting;
+Runtime не heartbeat с14:42, Hub detail 15ч. В 72 optional updates.control awaited
+до core sync (исправлено73 background+watchdog, ещё не применено).
+74: Hub session старше30с возвращает stale=true; messages остаются last snapshot,
+queue/questions/permissions очищаются, status unknown. UI «нет связи» вместо
+«офлайн», banner, не рисует stale queue и убирает непонятную фразу.
+Browser selection сначала detail, затем overview long-poll: загрузка fixture 27мс
+(было >20с); offline banner, old queue absent, JS errors0. History cache by
+record.updated (тест поймал ошибочное time.updated) — нет повторного чтения100
+сообщений в idle. Snapshot4, transport2, integration2, Hub stale test PASS.
+Hub CT206 обновлён, live stale queue sanitized. Нужен source release74+apply для
+восстановления heartbeat и свежего detail.
 # TASK — 2026-11-12: model identity + Remote liveness / 2.0.73
 
 Владелец: «Kimi K3.1 Pro работает, но доступ не подтверждён», после refresh

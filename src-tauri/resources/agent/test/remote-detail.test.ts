@@ -1,13 +1,30 @@
 import assert from "node:assert/strict";
 import { it } from "vitest";
-import { fitRemoteDetail } from "../src/remote.ts";
-import { REMOTE_DETAIL_BUDGET } from "../src/remote/snapshot.ts";
+import { fitRemoteDetail, remoteDetail, REMOTE_DETAIL_BUDGET } from "../src/remote/snapshot.ts";
 import type { MessageDTO } from "../src/protocol.ts";
 
 function message(id: string, text: string): MessageDTO {
   return { info: { id, sessionID: "session", role: "assistant", time: { created: 1 } }, parts: [{ type: "text", text } as MessageDTO["parts"][number]] };
 }
 function bytes(value: unknown): number { return Buffer.byteLength(JSON.stringify(value)); }
+
+it("reuses an unchanged transcript and refreshes it when the session is touched", () => {
+  let reads = 0;
+  const record = { id: "session", directory: "/tmp", title: "Chat", origin: "enki", created: 1, updated: 5 };
+  const runtime = {
+    catalog: { get: () => record },
+    queue: { state: () => ({ items: [], armed: false }) },
+    statuses: () => ({ session: { type: "idle" } }),
+    interactions: { pendingQuestions: () => [], pendingPermissions: () => [] },
+    registry: { historyPage: () => { reads++; return { messages: [message("m", "ok")] }; } },
+  };
+  remoteDetail(runtime as never, "session");
+  remoteDetail(runtime as never, "session");
+  assert.equal(reads, 1);
+  record.updated = 6;
+  remoteDetail(runtime as never, "session");
+  assert.equal(reads, 2);
+});
 
 it("remote detail keeps live queue and recent messages within the Hub budget", () => {
   const queue = { sessionID: "session", armed: true, pausedReason: null, items: [], corrections: [] };
