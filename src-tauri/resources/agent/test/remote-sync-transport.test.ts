@@ -3,45 +3,41 @@ import { RemoteSyncTransport } from "../src/remote/sync.ts";
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-function runtime(calls: string[], updatesHang = false) {
-  return {
-    draining: false,
-    config: { broker: { call: vi.fn(async (method: string) => {
-      if (method === "updates.control") {
-        calls.push(method);
-        return updatesHang ? new Promise(() => {}) : { stage: "idle" };
-      }
-      if (method === "hub.identity") { calls.push(method); return { scope: "scope" }; }
-      if (method === "hub.request") { calls.push(method); return { commands: [], watch: null }; }
-      return {};
-    }) } },
-  } as never;
+const runtime = { draining: false } as never;
+function responder(calls: string[], hangFirst = false) {
+  let first = hangFirst;
+  return vi.fn(async (route: string) => {
+    calls.push(route);
+    if (first) { first = false; return new Promise(() => {}); }
+    return { commands: [], watch: null };
+  });
 }
 
 it("keeps syncing on its interval without overlapping requests", async () => {
   vi.useFakeTimers();
   const calls: string[] = [];
-  const transport = new RemoteSyncTransport(runtime(calls), 1_000, {
-    overview: () => ({ version: "x" }), detail: () => ({ messages: [] }), execute: async () => ({}),
+  const request = responder(calls);
+  const transport = new RemoteSyncTransport(runtime, 1_000, {
+    request, overview: () => ({ version: "x" }), detail: () => ({ messages: [] }), execute: async () => ({}),
   });
   transport.start();
   await vi.advanceTimersByTimeAsync(3_500);
   transport.stop();
-  expect(calls.filter(x => x === "hub.request").length).toBeGreaterThanOrEqual(3);
+  expect(request.mock.calls.length).toBeGreaterThanOrEqual(3)
 });
 
 it("a stale bridge call is fenced by the watchdog and replaced by a live sync", async () => {
   vi.useFakeTimers();
   const calls: string[] = [];
-  const transport = new RemoteSyncTransport(runtime(calls), 1_000, {
-    overview: () => { throw new Error("temporary snapshot failure"); }, detail: () => ({}), execute: async () => ({}),
+  const request = responder(calls, true);
+  const transport = new RemoteSyncTransport(runtime, 1_000, {
+    request, overview: () => ({}), detail: () => ({}), execute: async () => ({}),
   });
   transport.start();
   await vi.advanceTimersByTimeAsync(16_000);
-  expect(calls.filter(x => x === "hub.identity").length).toBeGreaterThan(1);
+  expect(request).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(16_000);
   transport.stop();
-  // Failed snapshots are retried on the normal interval; no inert hook can
-  // leave the transport permanently pending.
-  expect(calls.filter(x => x === "hub.identity").length).toBeGreaterThan(1);
+  // The watchdog fences an orphaned request and starts a new generation.
+  expect(request.mock.calls.length).toBeGreaterThan(1);
 });

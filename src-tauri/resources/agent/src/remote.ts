@@ -10,6 +10,7 @@ import { validDirectory } from "./platform/paths.ts";
 import { isModelRef, isReadOnlyOrigin, type CommandRequest, type ModelRef } from "./protocol.ts";
 import { remoteOverview, remoteDetail } from "./remote/snapshot.ts";
 import { RemoteSyncTransport, type RemoteCommand } from "./remote/sync.ts";
+import { hubRequest } from "./remote/hub.ts";
 export { fitRemoteDetail } from "./remote/snapshot.ts";
 
 function text(value: unknown, limit = 200_000): string {
@@ -24,7 +25,7 @@ export class RemoteControl {
 
   constructor(private readonly runtime: Runtime, intervalMs = 1_000) {
     this.transport = new RemoteSyncTransport(runtime, intervalMs, {
-      overview: () => this.overview(),
+      request: hubRequest(runtime), overview: () => this.overview(),
       detail: session => this.detail(session), execute: (command, signal) => this.execute(command, signal),
     });
   }

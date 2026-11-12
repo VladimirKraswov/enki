@@ -53,9 +53,11 @@ revision. Browser long-poll `overview?device=…&since=…` спит до20с и
 Это выбрано вместо дополнительного WebSocket stack: сохраняется существующий
 pinned HTTPS и LAN boundary, нет нового порта или протокола команд. Изменение
 доставляется push-подобно, а после обрыва обычный HTTP запрос восстанавливается.
-Native updater не вызывается из фонового sync вообще: его bridge мог зависнуть
-после долгой работы и заблокировать Hub transport. `updates.control` выполняется
-только по явной команде обновления. Watchdog 30с fencing-поколением заменяет
+Регулярный Remote transport не использует native bridge: Runtime читает только
+публичный descriptor подключения (endpoint, certificate, label) и открывает
+pinned HTTPS напрямую к Hub. Native updater и desktop commands вызываются только
+по явной команде и больше не могут заблокировать очередь. Direct transport
+проверяет сертификат, LAN endpoint и отправляет device headers без credentials. Watchdog 30с fencing-поколением заменяет
 зависший bridge call живым циклом; отдельный backoff ограничен. Выбранная история запрашивается до overview
 long-poll, поэтому первый экран не ждёт 20с. Неизменённая история кэшируется по
 updated сессии; live queue/status читаются каждый цикл.

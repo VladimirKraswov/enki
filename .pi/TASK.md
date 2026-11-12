@@ -1,3 +1,15 @@
+# TASK — 2026-11-12: direct pinned Remote transport / 2.0.77
+
+76 после restart снова один sync и тишина. Native bridge hub.request/hub.identity
+перестаёт отвечать после первого цикла независимо от updater. Регулярный Remote
+теперь использует remote/hub.ts: читает только endpoint/public certificate/label
+из capabilities/hub/connection.json, выполняет pinned HTTPS POST напрямую с
+device headers; native broker fallback только для injected test runtimes без
+descriptor. Hub.identity кэш сбрасывается. Updates остаются explicit native.
+Manual probe: локальный HTTPS с CA из descriptor, hubRequest вернул body headers,
+native bridge не вызывался. Architecture227 modules PASS, build/typecheck PASS,
+transport8 PASS. Browser fixture already verifies mobile/stale/selection; после
+release+apply проверить live heartbeat/history on phone.
 # TASK — 2026-11-12: detach updater from Remote transport / 2.0.76
 
 После установки75 Mac снова «нет связи» через2ч: Hub overview heartbeat остановлен

@@ -1,10 +1,12 @@
 // Versioned Runtime↔Hub synchronization transport. No polling timers or command
 // execution live in the snapshot builder; no Hub data is an execution authority.
 import type { Runtime } from "../core/runtime.ts";
+import type { HubRequest } from "./hub.ts";
 
 export type RemoteCommand = { id: string; session: string | null; kind: string; payload: Record<string, unknown> };
 type SyncAnswer = { commands?: RemoteCommand[]; watch?: string | null; revision?: number; detailRevision?: number };
 type Hooks = {
+  request: HubRequest;
   overview: () => Record<string, unknown>;
   detail: (session: string) => Record<string, unknown>;
   execute: (command: RemoteCommand, signal: AbortSignal) => Promise<unknown>;
@@ -56,14 +58,11 @@ export class RemoteSyncTransport {
     this.lastActivity = Date.now();
     let immediate = false;
     try {
-      const identity = await this.runtime.config.broker.call<{ scope: string | null }>("hub.identity", {}, this.abort.signal, 5_000);
-      if (!identity.scope) return;
-      // One request and one Hub transaction. A detail response can no longer be
-      // lost behind an independently successful overview heartbeat.
-      const response = await this.runtime.config.broker.call<SyncAnswer>("hub.request", {
-        path: "remote/sync", scope: identity.scope,
-        body: { overview: this.hooks.overview(), detail: this.watch ? this.hooks.detail(this.watch) : undefined },
-      }, this.abort.signal, 15_000);
+      // One request and one Hub transaction. The direct pinned transport does
+      // not share a bridge with native updater/desktop commands.
+      const response = await this.hooks.request("remote/sync", {
+        overview: this.hooks.overview(), detail: this.watch ? this.hooks.detail(this.watch) : undefined,
+      }, this.abort.signal) as SyncAnswer;
       if (response.watch !== this.watch) { this.watch = response.watch ?? null; immediate = true; }
       this.failures = 0;
       for (const command of response.commands ?? []) {
@@ -78,8 +77,7 @@ export class RemoteSyncTransport {
           if (this.results.size > 500) this.results.delete(this.results.keys().next().value!);
         }
         try {
-          await this.runtime.config.broker.call("hub.request", { path: "remote/complete", scope: identity.scope,
-            body: { id: command.id, ok, result } }, this.abort.signal, 10_000);
+          await this.hooks.request("remote/complete", { id: command.id, ok, result }, this.abort.signal);
         } catch { /* delivered command remains durable and is retried */ }
         immediate = true;
       }
