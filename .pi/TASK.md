@@ -1,3 +1,14 @@
+# TASK — 2026-11-12: detach updater from Remote transport / 2.0.76
+
+После установки75 Mac снова «нет связи» через2ч: Hub overview heartbeat остановлен
+19:19, app/runtime живы, remote commands отсутствуют. Остаточная причина — фоновый
+updates.control через тот же native bridge, что hub.request; native updater после
+долгой работы зависает и блокирует bridge, watchdog не может обойти общий deadlock.
+Убраны updates hooks/фоновый status из RemoteSyncTransport; overview updates
+обновляется только результатом явных update.command, затем следующим snapshot.
+Тест contract: updateActions check/prepare/apply, без status; transport8 PASS,
+typecheck PASS. Следующий source release76 должен вернуть heartbeat после restart;
+75 updater уже умеет check+digest, поэтому дальнейшая подготовка штатная.
 # TASK — 2026-11-12: activity sort + updater freshness / 2.0.75
 
 Владелец: активный Mac с loader ниже неактивных VPN/Mash в «Недавних». Sidebar

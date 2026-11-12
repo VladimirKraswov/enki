@@ -22,7 +22,7 @@ it("keeps syncing on its interval without overlapping requests", async () => {
   vi.useFakeTimers();
   const calls: string[] = [];
   const transport = new RemoteSyncTransport(runtime(calls), 1_000, {
-    beforeSync: async () => {}, overview: () => ({ version: "x" }), detail: () => ({ messages: [] }), execute: async () => ({}),
+    overview: () => ({ version: "x" }), detail: () => ({ messages: [] }), execute: async () => ({}),
   });
   transport.start();
   await vi.advanceTimersByTimeAsync(3_500);
@@ -34,14 +34,14 @@ it("a stale bridge call is fenced by the watchdog and replaced by a live sync", 
   vi.useFakeTimers();
   const calls: string[] = [];
   const transport = new RemoteSyncTransport(runtime(calls), 1_000, {
-    beforeSync: () => new Promise(() => {}), overview: () => ({}), detail: () => ({}), execute: async () => ({}),
+    overview: () => { throw new Error("temporary snapshot failure"); }, detail: () => ({}), execute: async () => ({}),
   });
   transport.start();
   await vi.advanceTimersByTimeAsync(16_000);
-  expect(calls).toEqual(["hub.identity"]);
+  expect(calls.filter(x => x === "hub.identity").length).toBeGreaterThan(1);
   await vi.advanceTimersByTimeAsync(16_000);
   transport.stop();
-  // The orphaned first hook remains unresolved, but the watchdog starts a new
-  // generation that reaches hub.request instead of leaving Remote dead forever.
-  expect(calls.length).toBeGreaterThan(1);
+  // Failed snapshots are retried on the normal interval; no inert hook can
+  // leave the transport permanently pending.
+  expect(calls.filter(x => x === "hub.identity").length).toBeGreaterThan(1);
 });

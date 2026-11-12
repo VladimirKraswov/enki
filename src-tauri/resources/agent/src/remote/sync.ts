@@ -5,7 +5,6 @@ import type { Runtime } from "../core/runtime.ts";
 export type RemoteCommand = { id: string; session: string | null; kind: string; payload: Record<string, unknown> };
 type SyncAnswer = { commands?: RemoteCommand[]; watch?: string | null; revision?: number; detailRevision?: number };
 type Hooks = {
-  beforeSync: (signal: AbortSignal) => Promise<void>;
   overview: () => Record<string, unknown>;
   detail: (session: string) => Record<string, unknown>;
   execute: (command: RemoteCommand, signal: AbortSignal) => Promise<unknown>;
@@ -59,7 +58,6 @@ export class RemoteSyncTransport {
     try {
       const identity = await this.runtime.config.broker.call<{ scope: string | null }>("hub.identity", {}, this.abort.signal, 5_000);
       if (!identity.scope) return;
-      await this.hooks.beforeSync(this.abort.signal);
       // One request and one Hub transaction. A detail response can no longer be
       // lost behind an independently successful overview heartbeat.
       const response = await this.runtime.config.broker.call<SyncAnswer>("hub.request", {

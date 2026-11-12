@@ -85,6 +85,8 @@ it("LAN relay watches history and sends prompts, model changes and settings with
       await wait(() => remote.completed.some(c => c.id === id));
       expect(remote.completed.find(c => c.id === id)?.ok).toBe(true);
     }
-    expect(remote.updateActions).toEqual(expect.arrayContaining(["status", "check", "prepare", "apply"]));
+    // Update diagnostics are explicit-only: they must never gate session sync.
+    expect(remote.updateActions).toEqual(expect.arrayContaining(["check", "prepare", "apply"]));
+    expect(remote.updateActions).not.toContain("status");
   } finally { await h.stop(); }
 });

@@ -20,32 +20,17 @@ function text(value: unknown, limit = 200_000): string {
 
 export class RemoteControl {
   private updates: unknown = null;
-  private updatesAt = 0;
-  private updatesPending = false;
   private readonly transport: RemoteSyncTransport;
 
   constructor(private readonly runtime: Runtime, intervalMs = 1_000) {
     this.transport = new RemoteSyncTransport(runtime, intervalMs, {
-      beforeSync: signal => this.beforeSync(signal), overview: () => this.overview(),
+      overview: () => this.overview(),
       detail: session => this.detail(session), execute: (command, signal) => this.execute(command, signal),
     });
   }
   start(): void { this.transport.start(); }
   stop(): void { this.transport.stop(); }
 
-  private async beforeSync(signal: AbortSignal): Promise<void> {
-    // Optional update diagnostics must never gate the session/queue transport.
-    this.requestUpdates(signal);
-  }
-  private requestUpdates(signal: AbortSignal): void {
-    if (this.updatesPending || Date.now()-this.updatesAt <= 10_000) return;
-    this.updatesPending = true;
-    this.updatesAt = Date.now();
-    void this.runtime.config.broker.call("updates.control", { action: "status" }, signal, 5_000)
-      .then(value => { this.updates = value; })
-      .catch(() => { /* older Enki or remote runtimes without update control */ })
-      .finally(() => { this.updatesPending = false; });
-  }
   overview(): Record<string, unknown> { return remoteOverview(this.runtime, this.updates); }
   detail(sessionID: string): Record<string, unknown> { return remoteDetail(this.runtime, sessionID); }
 
@@ -138,7 +123,7 @@ export class RemoteControl {
       case "update.check": case "update.prepare": case "update.apply": {
         const action = command.kind.slice("update.".length);
         const result = await this.runtime.config.broker.call("updates.control", { action }, signal, 120_000);
-        this.updatesAt = 0;
+        this.updates = result;
         return { update: result };
       }
       case "providers.refresh": {
