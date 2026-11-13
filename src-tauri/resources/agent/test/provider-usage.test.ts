@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import { parseProviderUsage } from "../src/models/usage.ts";
-import { usageEndpoint } from "../src/models/probe-usage.ts";
+import { parseDeepSeekBalance, parseProviderUsage } from "../src/models/usage.ts";
+import { deepSeekBalanceEndpoint, usageEndpoint } from "../src/models/probe-usage.ts";
 
 // The shape Kimi Code publishes at `<api base>/v1/usages`.
 const payload = {
@@ -49,4 +49,24 @@ it("uses the official Kimi Code usage endpoint without duplicating /v1", () => {
   expect(usageEndpoint("https://api.kimi.com/coding")).toBe("https://api.kimi.com/coding/v1/usages");
   expect(usageEndpoint("https://api.kimi.com/coding/")).toBe("https://api.kimi.com/coding/v1/usages");
   expect(usageEndpoint("https://api.kimi.com/coding/v1")).toBe("https://api.kimi.com/coding/v1/usages");
+});
+
+it("parses the official DeepSeek balance and rejects malformed amounts", () => {
+  const value = parseDeepSeekBalance({ is_available: true, balance_infos: [
+    { currency: "CNY", total_balance: "110.25", granted_balance: "10.00", topped_up_balance: "100.25" },
+    { currency: "USD", total_balance: "15.50", granted_balance: "0.00", topped_up_balance: "15.50" },
+    { currency: "bad", total_balance: "-1", granted_balance: "0", topped_up_balance: "0" },
+  ] })!;
+  expect(value.balance).toEqual({ available: true, entries: [
+    { currency: "CNY", total: 110.25, granted: 10, toppedUp: 100.25 },
+    { currency: "USD", total: 15.5, granted: 0, toppedUp: 15.5 },
+  ] });
+  expect(value.limit5h).toBeNull();
+  expect(parseDeepSeekBalance({ is_available: true, balance_infos: [] })).toBeNull();
+  expect(parseDeepSeekBalance({ is_available: "yes", balance_infos: [{ currency: "CNY", total_balance: "1", granted_balance: "0", topped_up_balance: "1" }] })).toBeNull();
+});
+
+it("uses only DeepSeek's official HTTPS balance origin", () => {
+  expect(deepSeekBalanceEndpoint("https://api.deepseek.com/v1")).toBe("https://api.deepseek.com/user/balance");
+  expect(() => deepSeekBalanceEndpoint("https://evil.example/v1")).toThrow(/Неофициальный/);
 });

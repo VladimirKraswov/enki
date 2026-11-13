@@ -1,3 +1,12 @@
+# TASK — 2026-11-13: DeepSeek official balance / 2.0.80
+
+Официальный GET api.deepseek.com/user/balance проверен (401 без ключа).
+Добавлен parseDeepSeekBalance (CNY/USD, total/granted/topped, availability,
+bounded numeric), endpoint restricted to official HTTPS origin. probe-usage
+routes deepseek to balance, Kimi to /coding/v1/usages. Context modal adds
+DeepSeek, auto-refresh60s + manual button, monetary balance and explicit note
+that API does not publish token usage; local token total stays separate.
+Context5 + providerUsage6 + build/typecheck PASS. No password/session scraping.
 # TASK — 2026-11-13: Kimi quota UX / 2.0.79
 
 Владелец хочет квоты Kimi в модалке контекста; не хочет логин/пароль. Confirm:

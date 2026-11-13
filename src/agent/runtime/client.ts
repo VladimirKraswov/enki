@@ -423,6 +423,7 @@ export class RuntimeClient {
       monthTotal: { usedRatio: number; resetAt: string | null } | null;
       monthCode: { usedRatio: number; resetAt: string | null } | null;
       extraUsage: { balanceCents: number; monthlyUsedCents: number; monthlyChargeLimitCents: number; monthlyChargeLimitEnabled: boolean; currency: string } | null;
+      balance: { available: boolean; entries: Array<{ currency: string; total: number; granted: number; toppedUp: number }> } | null;
     }>("GET", "/providers/usage", { query: { provider: providerID, model: modelID }, signal, timeoutMs: 20_000 });
   }
   refreshProviders() { return this.request<{ errors: string[] }>("POST", "/providers/refresh", { body: {}, timeoutMs: 45000 }); }

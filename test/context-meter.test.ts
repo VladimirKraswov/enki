@@ -67,17 +67,38 @@ it("shows monthly Enki consumption and the configured limit next to the context 
 it("does not pretend a provider without an official quota API is still loading", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
-  fake.provider = { providerID: "deepseek", modelID: "deepseek-flash" };
-  fake.windows = { usage: { provider: "deepseek", tokens: 100, replies: 1, resetAt: Date.now() }, failures: [] };
+  fake.provider = { providerID: "openrouter", modelID: "some-model" };
+  fake.windows = { usage: { provider: "openrouter", tokens: 100, replies: 1, resetAt: Date.now() }, failures: [] };
   const node = document.createElement("div"); document.body.append(node); root = createRoot(node);
   act(() => root.render(createElement(ContextMeter)));
   act(() => document.querySelector<HTMLButtonElement>(".context-trigger")!.click());
   await act(async () => { await Promise.resolve(); });
   const text = document.body.textContent ?? "";
-  expect(text).toContain("Квота провайдера · DeepSeek");
+  expect(text).toContain("Квота провайдера · openrouter");
   expect(text).toContain("не публикует официальный остаток квоты");
   expect(text).not.toContain("Запрашиваю официальную квоту");
   expect(text).not.toContain("Квота подписки ·");
+});
+
+it("shows DeepSeek's official monetary balance without inventing a token quota", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  fake.provider = { providerID: "deepseek", modelID: "deepseek-flash" };
+  fake.windows = { usage: { provider: "deepseek", tokens: 1284688599, replies: 50, resetAt: new Date(2026, 11, 1).getTime() }, failures: [] };
+  fake.quota = { limit5h: null, limit7d: null, monthTotal: null, monthCode: null, extraUsage: null,
+    balance: { available: true, entries: [{ currency: "CNY", total: 110.25, granted: 10, toppedUp: 100.25 }] } };
+  const node = document.createElement("div"); document.body.append(node); root = createRoot(node);
+  act(() => root.render(createElement(ContextMeter)));
+  act(() => document.querySelector<HTMLButtonElement>(".context-trigger")!.click());
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("Официальный баланс · DeepSeek");
+  expect(text).toContain("Остаток CNY");
+  expect(text).toContain("110,25");
+  expect(text).toContain("подарено / пополнено");
+  expect(text).toContain("не публикует остаток или расход токенов");
+  expect(text).toContain("1\u00A0284\u00A0688\u00A0599");
+  expect(text).not.toContain("Осталось до лимита");
 });
 
 it("shows the provider's own quota when it answers, with reset times", async () => {
