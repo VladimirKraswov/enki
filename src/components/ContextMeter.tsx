@@ -15,22 +15,24 @@ export function ContextMeter() {
   const provider = choice?.providerID ?? null;
   const limit = provider ? store.monthlyLimit(provider) : undefined;
   const [quota, setQuota] = useState<ProviderUsage | null>(null);
-  const [quotaFailed, setQuotaFailed] = useState(false);
+  const [quotaError, setQuotaError] = useState("");
   const [monthly, setMonthly] = useState<Awaited<ReturnType<typeof loadMonthlyUsage>> | null>(null);
   const [monthlyFailed, setMonthlyFailed] = useState(false);
   const [draftLimit, setDraftLimit] = useState<string | null>(null);
   // Only providers that actually publish a quota are asked (Kimi Code `/usages`);
   // others keep the honest local counter below.
   const QUOTA_PROVIDERS = new Set(["kimi-coding"]);
+  const supportsQuota = !!provider && QUOTA_PROVIDERS.has(provider);
+  const providerName = s.providers?.find(item => item.id === provider)?.name ?? provider;
   useEffect(() => {
-    if (!open || !provider || !choice || !QUOTA_PROVIDERS.has(provider)) { setQuota(null); setQuotaFailed(false); return; }
+    if (!open || !provider || !choice || !supportsQuota) { setQuota(null); setQuotaError(""); return; }
     let live = true;
-    setQuota(null); setQuotaFailed(false);
+    setQuota(null); setQuotaError("");
     void store.client.providerUsage(provider, choice.modelID)
       .then(value => { if (live) setQuota(value); })
-      .catch(() => { if (live) setQuotaFailed(true); });
+      .catch(error => { if (live) setQuotaError(error instanceof Error ? error.message : String(error)); });
     return () => { live = false; };
-  }, [open, provider, choice?.modelID]);
+  }, [open, provider, choice?.modelID, supportsQuota]);
   useEffect(() => {
     if (!open || !provider) return;
     let alive = true;
@@ -112,8 +114,9 @@ export function ContextMeter() {
           Сжать сейчас
         </button>}
         {provider && <>
-          <strong>Квота подписки · {provider}</strong>
-          {quota ? <>
+          <strong>{supportsQuota ? "Квота подписки" : "Квота провайдера"} · {providerName}</strong>
+          {!supportsQuota ? <p className="muted">Провайдер не публикует официальный остаток квоты. Ниже — расход по записям Enki на этом устройстве; это не данные кабинета провайдера.</p>
+          : quota ? <>
             {([["5 часов", quota.limit5h], ["Неделя", quota.limit7d], ["Месяц · Код", quota.monthCode], ["Месяц · всего", quota.monthTotal]] as const)
               .filter(([, entry]) => !!entry)
               .map(([label, entry]) => <div key={label}>
@@ -124,8 +127,8 @@ export function ContextMeter() {
                 <progress max={100} value={Math.round(entry!.usedRatio * 100)} aria-label={`Израсходовано: ${label}`} />
               </div>)}
             {quota.extraUsage && <div className="kv"><span>Доп. квота</span><b>{quota.extraUsage.monthlyChargeLimitEnabled ? "включена" : "не включена"} · {Math.round(quota.extraUsage.balanceCents / 100).toLocaleString("ru-RU")} {quota.extraUsage.currency === "CNY" ? "¥" : quota.extraUsage.currency}</b></div>}
-          </> : <p className="muted">{quotaFailed ? "Провайдер не вернул квоту; ниже — расход по данным Enki." : "Запрашиваю квоту у провайдера…"}</p>}
-          <strong>Месячный расход · {provider}</strong>
+          </> : <p className="muted">{quotaError ? `Не удалось получить квоту Kimi: ${quotaError}` : "Запрашиваю официальную квоту Kimi…"}</p>}
+          <strong>Месячный расход · {providerName}</strong>
           <div className="kv">
             <span>Токенов с 1-го числа</span>
             <b>{monthly ? n(monthly.usage.tokens) : monthlyFailed ? "не удалось загрузить" : "…"}</b>
@@ -150,7 +153,7 @@ export function ContextMeter() {
               onBlur={e => saveLimit(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") saveLimit((e.target as HTMLInputElement).value); }} />
           </label>
-          <p className="muted">Провайдер не публикует остаток квоты. Это расход по записям Enki на этом устройстве; реальный сброс квоты может привязываться к дате подписки. Без заданного лимита процентов нет, с заданным — «расход / ваш лимит».</p>
+          <p className="muted">{supportsQuota ? "Официальные окна Kimi Code показаны выше; сброс берётся из ответа API. " : ""}Нижний месячный расход считается по записям Enki на этом устройстве и не является остатком подписки. Без заданного лимита процентов нет, с заданным — «расход / ваш лимит».</p>
         </>}
       </FloatingPopover>}
     </div>

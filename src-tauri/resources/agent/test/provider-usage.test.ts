@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { parseProviderUsage } from "../src/models/usage.ts";
+import { usageEndpoint } from "../src/models/probe-usage.ts";
 
 // The shape Kimi Code publishes at `<api base>/v1/usages`.
 const payload = {
@@ -42,4 +43,10 @@ it("returns null when the answer contains no usable quota", () => {
   expect(parseProviderUsage({})).toBeNull();
   expect(parseProviderUsage({ usages: {} })).toBeNull();
   expect(parseProviderUsage({ usages: { limit5h: {} } })).toBeNull();
+});
+
+it("uses the official Kimi Code usage endpoint without duplicating /v1", () => {
+  expect(usageEndpoint("https://api.kimi.com/coding")).toBe("https://api.kimi.com/coding/v1/usages");
+  expect(usageEndpoint("https://api.kimi.com/coding/")).toBe("https://api.kimi.com/coding/v1/usages");
+  expect(usageEndpoint("https://api.kimi.com/coding/v1")).toBe("https://api.kimi.com/coding/v1/usages");
 });

@@ -8,7 +8,7 @@ vi.mock("../src/usage/windows", async (original) => {
   return { ...real, loadMonthlyUsage: vi.fn(async () => fake.windows) };
 });
 vi.mock("../src/state/store", () => ({
-  useAppState: () => ({ activeSessionId: "pi-chat" }),
+  useAppState: () => ({ activeSessionId: "pi-chat", providers: [{ id: "kimi-coding", name: "Kimi For Coding" }, { id: "deepseek", name: "DeepSeek" }] }),
   store: {
     engineIdFor: () => "pi", isRunning: () => fake.running,
     conversation: () => ({ capabilities: { compaction: true } }),
@@ -45,7 +45,7 @@ it("shows monthly Enki consumption and the configured limit next to the context 
   act(() => root.render(createElement(ContextMeter)));
   act(() => document.querySelector<HTMLButtonElement>(".context-trigger")!.click());
   await act(async () => { await Promise.resolve(); });
-  expect(document.body.textContent).toContain("Месячный расход · kimi-coding");
+  expect(document.body.textContent).toContain("Месячный расход · Kimi For Coding");
   expect(document.body.textContent).toContain("4\u00A0000");
   // Без лимита процентов нет — никаких выдуманных цифр.
   expect(document.body.textContent).not.toContain("Осталось до лимита");
@@ -62,6 +62,22 @@ it("shows monthly Enki consumption and the configured limit next to the context 
   expect(document.body.textContent).toContain("Осталось до лимита");
   expect(document.body.textContent).toContain("6\u00A0000");
   expect(document.body.textContent).toContain("Месяц 40%");
+});
+
+it("does not pretend a provider without an official quota API is still loading", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  fake.provider = { providerID: "deepseek", modelID: "deepseek-flash" };
+  fake.windows = { usage: { provider: "deepseek", tokens: 100, replies: 1, resetAt: Date.now() }, failures: [] };
+  const node = document.createElement("div"); document.body.append(node); root = createRoot(node);
+  act(() => root.render(createElement(ContextMeter)));
+  act(() => document.querySelector<HTMLButtonElement>(".context-trigger")!.click());
+  await act(async () => { await Promise.resolve(); });
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("Квота провайдера · DeepSeek");
+  expect(text).toContain("не публикует официальный остаток квоты");
+  expect(text).not.toContain("Запрашиваю официальную квоту");
+  expect(text).not.toContain("Квота подписки ·");
 });
 
 it("shows the provider's own quota when it answers, with reset times", async () => {
@@ -81,7 +97,7 @@ it("shows the provider's own quota when it answers, with reset times", async () 
   act(() => document.querySelector<HTMLButtonElement>(".context-trigger")!.click());
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   const text = document.body.textContent ?? "";
-  expect(text).toContain("Квота подписки · kimi-coding");
+  expect(text).toContain("Квота подписки · Kimi For Coding");
   expect(text).toContain("5 часов");
   expect(text).toContain("100%");
   expect(text).toContain("Месяц · всего");

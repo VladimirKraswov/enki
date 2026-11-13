@@ -1,3 +1,13 @@
+# TASK — 2026-11-13: Kimi quota UX / 2.0.79
+
+Владелец хочет квоты Kimi в модалке контекста; не хочет логин/пароль. Confirm:
+официальный GET api.kimi.com/coding/v1/usages exists (401 without token), Kimi
+OAuth token already resolved via catalogueRequest. Existing parser covers 5h/7d/
+monthTotal/monthCode/reset/extra. UI fixes: supportsQuota only kimi-coding; for
+other providers show clear «не публикует официальную квоту» instead of endless
+«Запрашиваю»; provider display name Kimi For Coding; concrete quota error.
+usageEndpoint avoids /v1 duplication. ContextMeter4 + providerUsage4 + build/
+typecheck PASS. Release79 publishes UI/runtime. No password storage.
 # TASK — 2026-11-12: Hub device identity for direct sync / 2.0.78
 
 После77 direct sync работал непрерывно, но создал второй Mac: Node отправлял
