@@ -22,7 +22,7 @@ no second agent loop.
   `INFERNIX_TMP_CPU_PLACEMENT=physical,24`, MTP with three drafts,
   4 GiB host prefix cache and persistent expert/prefix state.
 - The VM is pinned to host NUMA node 0: 236 GiB allocated (231 GiB visible),
-  40 hardware threads. Node 1 serves the host and all other VMs; V100 is stopped.
+  40 hardware threads. Node 1 serves the host and all other VMs; the two old V100 VMs were removed.
   Both inference units use `CPUAffinity=0-39` and `NUMAPolicy=bind, node0`, but
   only one engine is active at a time. Infernix reserves 24 expert workers;
   Qwen's Strata pool independently uses 32 of 40 when Qwen is active.
@@ -34,9 +34,12 @@ no second agent loop.
 
 ## Measured after final cleanup
 
-- Warm cycle: Ornith → Qwen **50 s**; Qwen → Ornith **58 s**. First Qwen start
-  after a VM reboot is cold (about 112 s), then the retained arena/page cache
-  keeps later cycles near a minute.
+- Warm cycle: Ornith → Qwen **50 s**; Qwen → Ornith **58 s**. A cold Qwen start
+  after its service was stopped is about **112 s**; the retained arena/page
+  cache keeps later warm cycles near a minute.
+- A failed target cannot leave the gateway in `warming` forever: it watches
+  systemd `NRestarts` for both units, stops a crash-looping target and restores
+  the previous model. Startup readiness is bounded to 240 s.
 - Qwen tool call: valid `{"city":"Moscow"}`, about 64.6 tok/s.
 - Ornith short tool call: valid JSON; decode is reasoning-dependent.
 - Maximum decode with thinking off: Qwen **110.6 short / 115.3 at ~52K**, Ornith

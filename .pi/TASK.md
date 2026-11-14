@@ -1,3 +1,27 @@
+# TASK — 2026-11-14: FreeCAD MCP, old V100 cleanup, normal Ornith switching
+
+FreeCAD 1.1.4 on the Mac now has the pinned `neka-nat/freecad-mcp` addon0.1.31
+and MCP server; the Enki shared-MCP bridge (SDK1.32.0) was installed, and
+`freecad` is registered in the global capability registry with localhost-only
+RPC and auto-start. Real Enki chats drove FreeCAD through `mesh_freecad_*`:
+Ornith created/verified 12×8×4 mm box (384 mm³), Qwen 9×6×5 mm (270 mm³);
+both closed the test documents. Vision remains Qwen-only.
+
+By owner confirmation, Proxmox VM5100 (Qwen27B V100) and VM5151
+(Gemma/Artemis V100) were destroyed with their disks. Hub catalog now only has
+`local-qwen`, `local-qwen-next`, `local-ornith`; the `v100` service/key and
+reservations are gone. Active Enki providers are local-qwen, local-ornith,
+deepseek, kimi-coding. Old V100 weights no longer exist; histories/backup
+configs are not rewritten.
+
+Ornith is present in the model picker/Hub as 256K NVFP4 (old nested 128K/Q4
+metadata fixed). Gateway crash-loop bug fixed: it detects systemd `NRestarts`
+for Qwen/Infernix, stops a failing target, restores the previous model, and
+bounds readiness to240s. Cycle measured after fix: Ornith→Qwen112s cold,
+Qwen→Ornith58s warm. Enki-driven Qwen→Ornith selection returned
+`ENKI_SWITCH_ORNITH_OK`; Infernix active, Qwen active-unloaded, FreeCAD RPC up.
+Server/docs only; no Desktop release.
+
 # TASK — 2026-11-14: dedicated NUMA node 0 for inference VM
 
 По уточнению владельца VM5200 отдана целиком host node0: 236 GiB allocated

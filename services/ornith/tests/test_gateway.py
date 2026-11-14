@@ -105,6 +105,30 @@ class GatewayTest(unittest.TestCase):
             self.module.start_unit("strata-api")
         self.assertEqual(run.call_args.args[0], ["systemctl", "start", "--no-block", "strata-api"])
 
+    def test_wait_for_aborts_on_service_restart_loop(self):
+        with mock.patch.object(self.module, "service_restarts", side_effect=[0, 1]), \
+                mock.patch.object(self.module, "ornith_ready", return_value=False), \
+                mock.patch.object(self.module.time, "sleep"), \
+                mock.patch("subprocess.run", return_value=mock.Mock(returncode=1)):
+            with self.assertRaises(RuntimeError) as caught:
+                self.module.wait_for(self.module.ORNITH, timeout=10, baseline_restarts=0)
+        self.assertIn("restarted 1 time", str(caught.exception))
+
+    def test_failed_target_is_stopped_before_previous_model_restore(self):
+        self.module.STATE.active = self.module.QWEN
+        with mock.patch.object(self.module, "qwen_action"), \
+                mock.patch.object(self.module, "wait_gpu_free"), \
+                mock.patch.object(self.module, "start_unit", return_value=0), \
+                mock.patch.object(self.module, "wait_for", side_effect=RuntimeError("crash loop")), \
+                mock.patch.object(self.module, "stop_ornith") as stop_target, \
+                mock.patch.object(self.module, "activate_qwen") as restore_qwen:
+            self.module.switch_to(self.module.ORNITH, 7)
+        stop_target.assert_called_once_with()
+        restore_qwen.assert_called_once_with()
+        self.assertEqual(self.module.STATE.active, self.module.QWEN)
+        self.assertEqual(self.module.STATE.phase, "failed")
+        self.assertIn("crash loop", self.module.STATE.error)
+
     def test_qwen_transport_failure_is_not_ready(self):
         with mock.patch.object(self.module, "strata_key", return_value="key"), \
                 mock.patch.object(self.module, "request", side_effect=ConnectionRefusedError(111, "Connection refused")):

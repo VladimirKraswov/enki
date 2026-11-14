@@ -187,14 +187,30 @@ def qwen_action(action: str):
         raise RuntimeError(f"Qwen {action} failed: {status}")
 
 
-def start_unit(unit: str):
+def service_restarts(unit: str) -> int | None:
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "-p", "NRestarts", "--value", unit],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode:
+            return None
+        return int(result.stdout.strip())
+    except (TypeError, ValueError, OSError, subprocess.SubprocessError):
+        return None
+
+
+def start_unit(unit: str) -> int | None:
     import subprocess
     # A model service is intentionally stopped/started on every switch; an old
     # failed attempt or systemd's start-rate limit must not block the next one.
     subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
+    baseline = service_restarts(unit)
     result = subprocess.run(["systemctl", "start", "--no-block", unit], capture_output=True, timeout=30)
     if result.returncode:
         raise RuntimeError(f"systemctl start {unit} failed")
+    return baseline
 
 
 def stop_qwen_service():
@@ -204,22 +220,28 @@ def stop_qwen_service():
         raise RuntimeError("systemctl stop strata-api failed")
 
 
-def activate_qwen():
+def activate_qwen() -> int | None:
     state = qwen_model_state()
     if state is None:
-        start_unit("strata-api")
-    elif state == "unloaded":
+        return start_unit("strata-api")
+    if state == "unloaded":
         qwen_action("load")
+    return None
 
 
-def wait_for(model: str, timeout: int = 900):
+def wait_for(model: str, timeout: int = 240, baseline_restarts: int | None = None):
+    import subprocess
+    unit = ORNITH_SERVICE if model == ORNITH else "strata-api"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if model == ORNITH:
-            import subprocess
-            failed = subprocess.run(["systemctl", "is-failed", "--quiet", ORNITH_SERVICE], timeout=10)
-            if failed.returncode == 0:
-                raise RuntimeError(f"{ORNITH_SERVICE} failed during startup")
+        current = service_restarts(unit)
+        if baseline_restarts is not None and current is not None and current > baseline_restarts:
+            raise RuntimeError(
+                f"{unit} restarted {current - baseline_restarts} time(s) during startup"
+            )
+        failed = subprocess.run(["systemctl", "is-failed", "--quiet", unit], timeout=10)
+        if failed.returncode == 0:
+            raise RuntimeError(f"{unit} failed during startup")
         try:
             if (qwen_ready() if model == QWEN else ornith_ready()):
                 return
@@ -242,14 +264,11 @@ def switch_to(target: str, operation: int):
         with STATE.lock:
             STATE.phase = "loading"
             STATE.changed = time.monotonic()
-        if target == QWEN:
-            activate_qwen()
-        else:
-            start_unit(ORNITH_SERVICE)
+        baseline = activate_qwen() if target == QWEN else start_unit(ORNITH_SERVICE)
         with STATE.lock:
             STATE.phase = "warming"
             STATE.changed = time.monotonic()
-        wait_for(target)
+        wait_for(target, baseline_restarts=baseline)
         with STATE.lock:
             STATE.active = target
             STATE.target = target
@@ -260,7 +279,15 @@ def switch_to(target: str, operation: int):
             STATE.save()
     except Exception as exc:
         # Failed target start must not leave the previous working model offline.
+        # Stop a crash-looping target first so it cannot race the recovery.
         error = str(exc)[:1024]
+        try:
+            if target == QWEN:
+                stop_qwen_service()
+            else:
+                stop_ornith()
+        except Exception:
+            pass
         try:
             if previous == QWEN:
                 activate_qwen()
