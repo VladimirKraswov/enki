@@ -19,23 +19,28 @@ no second agent loop.
   separate MTP, calibrated `pcie-frac 0.16`, `spec 6`, expert profile and
   `conversation-cache-park-gain 1024`.
 - Ornith: 262,144 context, INT8 KV, one request, full expert RAM layout,
-  `INFERNIX_TMP_CPU_PLACEMENT=physical,20`, MTP with three drafts,
+  `INFERNIX_TMP_CPU_PLACEMENT=physical,24`, MTP with three drafts,
   4 GiB host prefix cache and persistent expert/prefix state.
+- The VM is pinned to host NUMA node 0: 236 GiB allocated (231 GiB visible),
+  40 hardware threads. Node 1 serves the host and all other VMs; V100 is stopped.
+  Both inference units use `CPUAffinity=0-39` and `NUMAPolicy=bind, node0`, but
+  only one engine is active at a time. Infernix reserves 24 expert workers;
+  Qwen's Strata pool independently uses 32 of 40 when Qwen is active.
 - Qwen remains loaded in the API but unloaded at the engine when Ornith runs;
-  its arena and Infernix's pinned experts fit together in 176 GiB VM RAM.
+  both fit in node 0 without memory on the remote node.
 - Qwen and Infernix use separate systemd units. Only Infernix starts at boot;
   Qwen starts on explicit selection. The old fixed-only watchdog is removed:
   it treated a deliberate Qwen unload as a failure and interfered with switches.
 
 ## Measured after final cleanup
 
-- Qwen → Ornith: 107.5 s; Ornith → Qwen: 72.1 s. The Infernix side must reload
-  68 GiB of weights and save/restore prefix/expert state; this is slower than
-  the removed PolyStrata backend's switch, but the cycle is reliable.
-- Qwen tool call: valid `{"city":"Moscow"}`, 67.1 tok/s.
-- Ornith tool call: valid JSON; short output varies with reasoning/drafts.
-- No failed systemd units. 700 GB free on the guest disk. The host thinpool
-  fell from 100% to 89.6% after the cleanup.
+- Warm cycle: Ornith → Qwen **50 s**; Qwen → Ornith **58 s**. First Qwen start
+  after a VM reboot is cold (about 140 s), then the retained arena/page cache
+  keeps later cycles near a minute.
+- Qwen tool call: valid `{"city":"Moscow"}`, about 64.6 tok/s.
+- Ornith short tool call: valid JSON; decode is reasoning-dependent.
+- No failed systemd units. 697 GB free on the guest disk. The host thinpool
+  fell from 100% to 89.6% after cleanup.
 
 ## Removed after acceptance
 

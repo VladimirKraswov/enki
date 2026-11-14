@@ -37,6 +37,9 @@ ProtectHome=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/strata /var/log/strata /run/strata
 MemoryAccounting=yes
+CPUAffinity=0-39
+NUMAPolicy=bind
+NUMAMask=0
 
 [Install]
 WantedBy=multi-user.target

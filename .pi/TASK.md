@@ -1,3 +1,15 @@
+# TASK — 2026-11-14: dedicated NUMA node 0 for inference VM
+
+По уточнению владельца VM5200 отдана целиком host node0: 236 GiB allocated
+(231 GiB guest), все40 потоков (affinity0-19,40-59). Остальные VM и хост —
+node1; V100 остановлена и ресурсы не резервирует; creator-studio/ai-info и
+ранее привязанные сервисы на node1. Infernix/Qwen unit CPUAffinity0-39,
+NUMAPolicy=bind,node0; работают по очереди без деления CPU. Tuning40 threads:
+w20=45.2,w24=47.4,w28=47.4 → final w24+MTP3. Qwen auto32 CPU pool workers.
+Qwen tool64.6 tok/s. Warm switch: Ornith→Qwen50.1s, Qwen→Ornith58.1s; first
+cold Qwen140s. Infernix active, Qwen active-unloaded; 0 failed units. Node0 free7G,
+node1 free93G. Switch-cache node1 experiment removed (AUTO/O_DIRECT); no vmtouch.
+
 # TASK — 2026-11-14: VM final cleanup / Qwen Strata + Ornith Infernix only
 
 По прямому поручению владельца удалены PolyStrata sources/data/unit, llama.cpp,

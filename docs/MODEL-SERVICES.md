@@ -389,15 +389,17 @@ llama.cpp оставлен выключенным fallback. Подробност
 С 14 ноября Ornith работает на Infernix `8200dfa` с NVFP4-артефактом
 `wallawalla47/Ornith-1.5-122B-NVFP4-Infernix` (75.3 GB, SHA-256 проверен),
 CUDA13.4, `--max-context 262144 --max-concurrency 1 --kv-dtype int8
---spec mtp --draft-tokens auto --host-context-mib 4096`. Публичный model ID
+--spec mtp --draft-tokens 3 --host-context-mib 4096`. Публичный model ID
 остаётся `ornith15-122b`; Pi `contextWindow` обновлён до262144.
 
-На этой VM 65K prefill — 3942 tok/s, 220K prompt — 67.4 с; PolyStrata при том же
-262K: 2130/1727 tok/s и129.2 с. Decode Infernix —45.5 tok/s при65K и39.1 при220K;
-короткая серия —47.5 tok/s против47–50 у PolyStrata. Это достигнуто физической
-CPU-командой20 и MTP3 (baseline auto6 —30.9), с совпадающими хешами ответов.
-Переключение с Qwen —60–95 с против28–32. Infernix выбран
-для приоритета 260K/long-prefill. После приёмки PolyStrata, llama.cpp и Q4 GGUF
-удалены; на VM остались только Qwen/Strata и Ornith/Infernix. Qwen и Infernix помещаются вместе (Qwen arena64 GiB + Infernix pinned
-68 GiB), поэтому Qwen API не останавливается и возврат к нему тёплый.
-Подробности: [services/infernix](../services/infernix/README.md).
+VM 5200 закреплена за host NUMA node 0: 236 GiB выделено (231 GiB видно гостю),
+все 40 аппаратных потоков. Остальные VM и хост — node 1; V100 остановлена и память
+не резервирует. Оба inference-сервиса имеют доступ ко всем CPU/node0, но работают
+по очереди: Infernix — 24 CPU expert workers, Qwen — автоматические 32 из40.
+
+Decode Infernix —45.5 tok/s при65K и39.1 при220K; холодный prefill3942/3447 tok/s,
+220K prompt —67.4 с. Тёплый цикл: Ornith→Qwen50 с, Qwen→Ornith58 с; первый
+Qwen после ребута холодный (140 с). Это достигнуто выделенным node0, CPU-team24
+и MTP3; baseline auto6 был30.9 tok/s. PolyStrata/llama.cpp/Q4 GGUF удалены;
+на VM остались только Qwen/Strata и Ornith/Infernix. Подробности:
+[services/infernix](../services/infernix/README.md).

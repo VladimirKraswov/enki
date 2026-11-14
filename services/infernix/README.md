@@ -12,10 +12,14 @@ experts (60.75 GiB) in NVFP4, MTP and DFlash2 drafters, vision and the model's
 sampling metadata. The official guide recommends 262144 context, INT8 KV, MTP
 with two confidence-gated drafts and `--host-context-mib 4096`.
 
-This VM has a 32 GB RTX 5090 and **176 GiB RAM** (not 300+ GiB): 68 GiB pinned
-for the model plus 4 GiB prefix host cache fit. The Linux `LimitMEMLOCK` must be
-infinite; the login shell's default limit here is only about 21 GiB, so Infernix
-must run under its systemd unit.
+This VM has a 32 GB RTX 5090 and is pinned to host **NUMA node 0**: 236 GiB
+allocated (231 GiB visible), all 40 hardware threads. Node 1 and its RAM belong
+to the host and other services; V100 is stopped and reserves nothing. Infernix
+uses 24 CPU expert workers, leaving 16 threads for its engine/CUDA/runtime. Qwen
+and Ornith never run simultaneously; when active, each service has the whole
+node-0 CPU mask 0–39. The Linux `LimitMEMLOCK` must be infinite; the login
+shell's default limit here is only about 21 GiB, so Infernix must run under its
+systemd unit.
 
 ## Pinned inputs
 
@@ -69,11 +73,11 @@ infernix-serve part-00001.infernix
 ```
 
 `ornith-gateway` connects to port 1922 with `ORNITH_SERVICE=ornith-infernix`
-and `ORNITH_EXCLUSIVE_RAM=0`. Keeping Qwen's unloaded API and its arena alive
-still leaves enough RAM for Infernix (68 GiB pinned + 63 GiB shared); this keeps
-the return to Qwen warm. Measured switching: Qwen→Infernix 60–95 s (Infernix
-must reload 68 GiB), Infernix→Qwen 62 s. PolyStrata at the same 262K switches in
-28–32 s.
+and `ORNITH_EXCLUSIVE_RAM=0`. Qwen's unloaded API and its arena remain on the
+same node 0; this keeps the return to Qwen warm. Measured warm cycle on the
+dedicated node: **Infernix→Qwen 50 s, Qwen→Infernix 58 s**. The first Qwen start
+after a VM reboot is cold (about 140 s); later cycles use the retained arena and
+page cache.
 
 ## Measured on this VM
 
@@ -88,8 +92,8 @@ The official artifact SHA-256 and a 262,144-token plan pass. The 250K test sent
 | 220K prefill | **3,447 tok/s** | 1,727 tok/s |
 | Decode after 220K | **39.1 tok/s** | 34.7 tok/s |
 | Short/medium decode | **47.5 tok/s median** | 47–50 tok/s |
-| Qwen→Ornith switch | 60–95 s | **28–32 s** |
-| Ornith→Qwen switch | 62 s | **28–32 s** |
+| Qwen→Ornith warm cycle | **58 s** | historical: 28–32 s (removed backend) |
+| Ornith→Qwen warm cycle | **50 s** | historical: 28–32 s (removed backend) |
 
 Infernix wins long-prompt TTFT and end-to-end time by about 1.9×; after tuning
 it also leads 65K/220K decode and reaches parity with PolyStrata on short text.
@@ -119,9 +123,10 @@ and output hashes:
 | Physical 20, DFlash2 | 46.6 |
 | Physical 20, DFlash2 tree 4 / 2 paths | 46.9 |
 
-The active unit is **physical,20 + MTP 3**. All candidate output hashes matched,
-so the gain came from placement/speculation only; weights, activation precision
-and KV dtype were unchanged. `--a8-activations` and `--expert-tail-skip` were
+The active unit is **physical,24 + MTP 3** on the 40-thread node. On this node,
+20 workers measured 45.2 tok/s, 24 measured **47.4**, and 28 measured 47.4; 24
+gives the same throughput with 16 threads left for the engine. Qwen's Strata
+pool independently picks 32 workers out of 40 when Qwen is the active service. `--a8-activations` and `--expert-tail-skip` were
 not used because they change the quality contract.
 
 Tuned acceptance: 65K decode 45.5 tok/s (was 33.8), 220K decode 39.1 (was

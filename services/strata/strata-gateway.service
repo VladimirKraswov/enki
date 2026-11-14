@@ -1,7 +1,7 @@
 [Unit]
 Description=Private inference-only Strata gateway (legacy model URL)
 After=network-online.target
-Wants=network-online.target strata-api.service
+Wants=network-online.target
 StartLimitIntervalSec=300
 StartLimitBurst=3
 
