@@ -18,6 +18,7 @@ it("compact policy is much shorter but keeps the same rules and tags", () => {
   for (const tag of ["arvela-tool-workflow-v1", "enki-work-quality-v1", "enki-user-wait-v1", "enki-schedules-v1"])
     expect(compact.join("\n")).toContain(`<${tag} session="${ID}"`);
   expect(compact.join("\n")).toContain(`directory=${JSON.stringify(DIR)}`);
+  expect(compact.join("\n")).toContain("Не заменяй Enki-таймер внешним cron");
 });
 
 it("compact quality block requires a short plan and a verified result", () => {

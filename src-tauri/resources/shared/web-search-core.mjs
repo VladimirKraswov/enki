@@ -1,28 +1,16 @@
 // Read-only search. Fixed public endpoints; no credentials, history or query logging.
 const endpoints = { exa: 'https://mcp.exa.ai/mcp', parallel: 'https://search.parallel.ai/mcp' };
 const decode = s => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&#(x[\da-f]+|\d+);/gi, (_, n) => { const v = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1),16) : Number(n); return v > 0 && v <= 0x10ffff ? String.fromCodePoint(v) : ''; }).replace(/&(amp|lt|gt|quot|apos);/g, (_, n) => ({amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"})[n]);
-const generic = new Set('official github documentation docs website site latest current search find information about how what the and for from with chrome safari tls http2 fingerprint software source code repository repositories project projects release gpl id a an are as at be by do in is it of on or to vs исходники исходный код репозиторий репозитории проект программное обеспечение и в на по как что найти официальный документация сайт'.split(' '));
+const generic = new Set('official github documentation docs website site latest current search find information about how what the and for from with chrome safari tls http2 fingerprint software source code repository repositories project projects release gpl исходники исходный код репозиторий репозитории проект программное обеспечение и в на по как что найти официальный документация сайт'.split(' '));
 export function queryAnchor(query) {
-  return (query.replace(/\b(?:site|filetype|intitle|inurl):\S+/gi,'').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._-]*/gu)||[]).find(t=>t.length>1&&!generic.has(t)) || '';
-}
-export function queryTokens(query) {
-  const stripped=query.replace(/\b(?:site|filetype|intitle|inurl):\S+/gi,'').toLowerCase();
-  return [...new Set((stripped.match(/[\p{L}\p{N}][\p{L}\p{N}._-]*/gu)||[]).filter(t=>t.length>1&&!generic.has(t)))];
+  return (query.replace(/\b(?:site|filetype|intitle|inurl):\S+/gi,'').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._-]*/gu)||[]).find(t=>t.length>2&&!generic.has(t)) || '';
 }
 export function relevantResults(results, query) {
   if(!results.length) return results;
-  const tokens=queryTokens(query);
-  if(!tokens.length) throw Error('unverified_results');
+  const anchor=queryAnchor(query);
+  if(!anchor) throw Error('unverified_results');
   const compact = value => value.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-  const scored=results.map(r=>{
-    const text=compact(r.title+' '+r.url+' '+r.snippet);
-    return {result:r,score:tokens.reduce((n,token)=>n+(text.includes(compact(token))?1:0),0)};
-  });
-  const best=Math.max(...scored.map(x=>x.score));
-  // For a multi-term research query, prefer pages that satisfy at least two
-  // terms; otherwise a common word such as "pi" would rank the number first.
-  const threshold=tokens.length>=3&&best>=2?2:1;
-  const matched=scored.filter(x=>x.score>=threshold).map(x=>x.result);
+  const matched=results.filter(r=>compact(r.title+' '+r.url+' '+r.snippet).includes(compact(anchor)));
   if(!matched.length) throw Error('irrelevant_results');
   return matched;
 }

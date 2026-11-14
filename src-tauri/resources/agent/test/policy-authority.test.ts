@@ -53,6 +53,9 @@ describe("steering, timers and wake-ups", () => {
   });
   it("hides only the exact scheduling guidance and wake marker; altered or foreign text stays", () => {
     const reminder = scheduleReminder("s", '/a"b');
+    expect(reminder).toContain("desktop_schedule");
+    expect(reminder).toContain("внешним cron");
+    expect(reminder).toContain("остановись");
     expect(visiblePromptText(`watch\n\n${reminder}`, "s")).toBe("watch");
     expect(visiblePromptText(`watch\n\n${reminder.replace("Не переключай", "Изменено Не переключай")}`, "s")).toContain("Изменено");
     expect(visiblePromptText(`watch\n\n${reminder}`, "other")).toContain(reminder);
