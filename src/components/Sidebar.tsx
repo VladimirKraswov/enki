@@ -9,7 +9,7 @@ import enkiMark from "../assets/enki-icon.png";
 import { modKeyLabel } from "../native/platform";
 import { ProjectActions, RemovedProjects } from "./ProjectActions";
 import { HostPicker, pickProjectFolder } from "./WorkspacePicker";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Session } from "../api/types";
 import { store, useAppSelector } from "../state/store";
 import { FloatingPopover } from "./FloatingPopover";
@@ -30,13 +30,16 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   const stalled = useStreamStalled(store.state.connection.streamState, store.state.connection.streamDownSince);
   const confirmed = sessionStatusConfirmed(store.state.connection, directory, store.state.directory, stalled);
   const mark = sessionWorkMark(pending, status?.type, confirmed);
-  if (mark === "waiting") return <span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>;
-  if (mark === "unconfirmed") return <span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>;
-  if (mark === "working") return <SessionSpinner/>;
+  // The timer is independent of the task state: a working or failed chat can
+  // still have a recurring Enki schedule. Never let another indicator hide it.
+  const timer = <TimerBadge tasks={timers} label="Повторяющийся таймер Enki" />;
+  const withTimer = (indicator: ReactNode) => <>{indicator}{timer}</>;
+  if (mark === "waiting") return withTimer(<span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>);
+  if (mark === "unconfirmed") return withTimer(<span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>);
+  if (mark === "working") return withTimer(<SessionSpinner/>);
   if (store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.sessionID===id&&t.state==="error"))
-    return <span className="pending-dot" aria-label="Требуется внимание" title="Проверьте ответ, ошибку или расписание чата">!</span>;
-  return <>{store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />}
-    <TimerBadge tasks={timers} label="Запланировано пробуждение"/></>;
+    return withTimer(<span className="pending-dot" aria-label="Требуется внимание" title="Проверьте ответ, ошибку или расписание чата">!</span>);
+  return <>{store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />}{timer}</>;
 }
 
 /** Collapsed projects still advertise a timer so it is not hidden behind the disclosure. */

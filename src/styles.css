@@ -3337,7 +3337,7 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .session-row-wrap, .session-item { min-width:0; }
 .session-item .title { min-width:0; flex:1 1 0; }
 .session-item > svg { flex:none; }
-.session-indicators { display:inline-flex; align-items:center; justify-content:flex-end; gap:5px; flex:0 0 30px; width:30px; min-width:30px; }
+.session-indicators { display:inline-flex; align-items:center; justify-content:flex-end; gap:5px; flex:0 0 auto; min-width:30px; }
 .session-indicators > *, .session-timer { flex:none; }
 .session-timer { display:inline-flex; color:var(--accent); }
 .project-timer { display:inline-flex; flex:none; color:var(--accent); }

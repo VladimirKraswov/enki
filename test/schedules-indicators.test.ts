@@ -46,5 +46,7 @@ it("renders a clock badge with the next-run tooltip and nothing without timers",
   expect(badge.getAttribute("role")).toBe("status");
   expect(badge.getAttribute("aria-label")).toBe("Запланировано пробуждение");
   expect(badge.getAttribute("title")).toContain("Проверка");
+  expect(badge.getAttribute("title")).toContain("каждые 15 мин");
+  expect(badge.getAttribute("title")).toContain("следующий запуск");
   act(() => root.unmount());
 });

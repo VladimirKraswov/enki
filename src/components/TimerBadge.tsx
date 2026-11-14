@@ -10,7 +10,11 @@ export function TimerBadge({ tasks, label, size = 14, className = "session-timer
 }) {
   if (!tasks.length) return null;
   const title = tasks
-    .map(task => `${task.title}: ${new Date(task.nextAt).toLocaleString("ru")}`)
+    .map(task => {
+      const cadence = task.mode === "repeat" ? `каждые ${task.minutes} мин` : "один раз";
+      const next = new Date(task.nextAt).toLocaleString("ru");
+      return `${task.title}: ${cadence}; следующий запуск ${next}`;
+    })
     .join("\n");
   return <span className={className} role="status" aria-label={label} title={title}><Icon name="clock" size={size}/></span>;
 }
