@@ -1,0 +1,34 @@
+[Unit]
+Description=Bounded RTX 5090 model-control and inference gateway
+After=network.target strata-api.service
+Wants=strata-api.service
+
+[Service]
+Type=simple
+User=root
+Environment=ORNITH_QWEN_BASE=http://127.0.0.1:1919
+Environment=ORNITH_QWEN_CONTROL=http://127.0.0.1:1920
+Environment=ORNITH_BASE=http://127.0.0.1:1922
+Environment=ORNITH_CONTROL_KEY_FILE=/etc/strata/ornith-gateway.key
+Environment=STRATA_API_ENV=/etc/strata/api.env
+Environment=ORNITH_ACTIVE_FILE=/var/lib/ornith-gateway/active.json
+Environment=ORNITH_MODEL_DIR=/srv/models/ornith-1.5-122b-ud-q4_k_xl
+Environment=ORNITH_GATEWAY_PORT=1921
+ExecStart=/usr/bin/python3 /opt/ornith/gateway.py
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=60
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ornith-gateway /var/log/ornith-gateway
+StateDirectory=ornith-gateway
+StateDirectoryMode=0700
+LogsDirectory=ornith-gateway
+LogsDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

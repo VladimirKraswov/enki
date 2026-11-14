@@ -1,0 +1,41 @@
+[Unit]
+Description=Ornith 1.5 122B UD-Q4_K_XL (llama.cpp, RTX 5090)
+After=network.target
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=vladimir
+Group=vladimir
+WorkingDirectory=/srv/models/ornith-1.5-122b-ud-q4_k_xl
+Environment=OMP_NUM_THREADS=16
+Environment=OPENBLAS_NUM_THREADS=16
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CUDA_CACHE_PATH=/var/lib/ornith/cuda-cache
+ExecStart=/home/vladimir/src/llama-b11757/build/bin/llama-server \
+  --model /srv/models/ornith-1.5-122b-ud-q4_k_xl/Ornith-1.5-122B-UD-Q4_K_XL-00001-of-00003.gguf \
+  --alias ornith15-122b \
+  --host 127.0.0.1 --port 1922 --api-key local \
+  --gpu-layers 99 --n-cpu-moe 36 \
+  --ctx-size 131072 --flash-attn on --threads 16 --load-mode none \
+  --parallel 1 \
+  --batch-size 2048 --ubatch-size 512 \
+  --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 \
+  --metrics
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=20min
+TimeoutStopSec=120
+KillMode=control-group
+OOMPolicy=stop
+MemoryAccounting=yes
+LimitMEMLOCK=infinity
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ornith /var/log/ornith
+
+[Install]
+WantedBy=multi-user.target
