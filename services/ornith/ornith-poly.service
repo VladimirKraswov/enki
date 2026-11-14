@@ -1,0 +1,33 @@
+[Unit]
+Description=Ornith 1.5 122B Q4_K_XL on PolyStrata (RTX 5090)
+After=network-online.target nvidia-power-limit.service
+Wants=network-online.target
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=vladimir
+Group=vladimir
+WorkingDirectory=/home/vladimir/src/PolyStrata
+Environment=HOME=/home/vladimir
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/vladimir/src/PolyStrata/.venv/bin/python -u /home/vladimir/src/PolyStrata/serve/server.py --engine strata --config /home/vladimir/src/PolyStrata/strata-ornith122-ud-q4_k_xl.json --host 127.0.0.1 --port 1923
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=15min
+TimeoutStopSec=180
+KillMode=control-group
+OOMPolicy=stop
+LimitMEMLOCK=infinity
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/vladimir/src/PolyStrata-data /home/vladimir/.local/state/strata /home/vladimir/.config/strata
+MemoryAccounting=yes
+
+[Install]
+WantedBy=multi-user.target

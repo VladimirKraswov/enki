@@ -1,0 +1,25 @@
+{
+  "exe": "/home/vladimir/src/PolyStrata/engine-poly/strata-poly",
+  "args": [
+    "--model",
+    "/srv/models/ornith-1.5-122b-ud-q4_k_xl/Ornith-1.5-122B-UD-Q4_K_XL-00001-of-00003.gguf",
+    "--max-context",
+    "131072",
+    "--expert-profile",
+    "/home/vladimir/src/PolyStrata-data/packs/ornith122-ud-q4_k_xl/expert-profile.txt",
+    "--conversation-cache-mib",
+    "auto"
+  ],
+  "cwd": "/home/vladimir/src/PolyStrata",
+  "tokenizer": "/home/vladimir/src/PolyStrata-data/packs/ornith122-ud-q4_k_xl/tokenizer",
+  "model_name": "ornith-1.5-122b-ud-q4_k_xl",
+  "display_name": "Ornith 1.5 122B UD-Q4_K_XL",
+  "log": "/home/vladimir/.local/state/strata/ornith122-poly.log",
+  "lib_dirs": [
+    "/usr/local/cuda-13.3/bin",
+    "/usr/local/cuda-13.3/lib64"
+  ],
+  "port": 1923,
+  "gpu": 0,
+  "gpus_asked": true
+}

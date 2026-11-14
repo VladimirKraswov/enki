@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Small acceptance benchmark for the running Ornith gateway, no model tokens in output."""
 import json
+import os
 import time
 import urllib.request
 
-BASE = "http://127.0.0.1:1921"
+BASE = os.environ.get("ORNITH_BENCH_BASE", "http://127.0.0.1:1921")
 
 
 def chat(messages, max_tokens=64, tools=None):

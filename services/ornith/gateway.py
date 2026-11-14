@@ -3,7 +3,8 @@
 
 Not an agent loop. Only qwen38-flash-next and ornith15-122b are selectable.
 Qwen is controlled through the existing Strata API; Ornith is a systemd-owned
-llama.cpp service. Hub and Runtime remain the sources of sessions and work.
+PolyStrata service (llama.cpp remains available as a disabled fallback).
+Hub and Runtime remain the sources of sessions and work.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ AGENTS = ("pi", "opencode")
 QWEN_API = os.environ.get("ORNITH_QWEN_BASE", "http://127.0.0.1:1919")
 QWEN_CONTROL = os.environ.get("ORNITH_QWEN_CONTROL", "http://127.0.0.1:1920")
 ORNITH_API = os.environ.get("ORNITH_BASE", "http://127.0.0.1:1922")
+ORNITH_SERVICE = os.environ.get("ORNITH_SERVICE", "ornith")
 CONTROL_KEY_FILE = Path(os.environ.get("ORNITH_CONTROL_KEY_FILE", "/etc/strata/ornith-gateway.key"))
 STRATA_ENV = Path(os.environ.get("STRATA_API_ENV", "/etc/strata/api.env"))
 STATE_FILE = Path(os.environ.get("ORNITH_ACTIVE_FILE", "/var/lib/ornith-gateway/active.json"))
@@ -90,7 +92,7 @@ class State:
                     candidate = saved["active"]
                     if candidate == ORNITH:
                         import subprocess
-                        running = subprocess.run(["systemctl", "is-active", "--quiet", "ornith"], capture_output=True, timeout=5)
+                        running = subprocess.run(["systemctl", "is-active", "--quiet", ORNITH_SERVICE], capture_output=True, timeout=5)
                         if running.returncode == 0:
                             self.active = self.target = ORNITH
                     else:
@@ -146,14 +148,17 @@ def wait_gpu_free(timeout: int = 180):
 
 def stop_ornith():
     import subprocess
-    result = subprocess.run(["systemctl", "stop", "ornith"], capture_output=True, timeout=180)
+    result = subprocess.run(["systemctl", "stop", ORNITH_SERVICE], capture_output=True, timeout=180)
     if result.returncode:
-        raise RuntimeError("systemctl stop ornith failed")
+        raise RuntimeError(f"systemctl stop {ORNITH_SERVICE} failed")
     wait_gpu_free()
 
 
 def qwen_ready() -> bool:
-    status, value = request(QWEN_CONTROL, "/v1/models", key=strata_key(), timeout=10)
+    try:
+        status, value = request(QWEN_CONTROL, "/v1/models", key=strata_key(), timeout=10)
+    except (OSError, RuntimeError):
+        return False
     if status != 200 or not isinstance(value, dict):
         return False
     for model in value.get("data", []):
@@ -171,6 +176,13 @@ def qwen_action(action: str):
     status, value = request(QWEN_CONTROL, "/" + action, {}, key=strata_key(), timeout=120)
     if status != 200:
         raise RuntimeError(f"Qwen {action} failed: {status}")
+
+
+def start_unit(unit: str):
+    import subprocess
+    result = subprocess.run(["systemctl", "start", "--no-block", unit], capture_output=True, timeout=30)
+    if result.returncode:
+        raise RuntimeError(f"systemctl start {unit} failed")
 
 
 def wait_for(model: str, timeout: int = 900):
@@ -198,17 +210,11 @@ def switch_to(target: str, operation: int):
             STATE.changed = time.monotonic()
         if target == QWEN:
             if not qwen_ready():
-                import subprocess
-                result = subprocess.run(["systemctl", "start", "strata-api"], capture_output=True, timeout=30)
-                if result.returncode:
-                    raise RuntimeError("systemctl start strata-api failed")
+                start_unit("strata-api")
             else:
                 qwen_action("load")
         else:
-            import subprocess
-            result = subprocess.run(["systemctl", "start", "ornith"], capture_output=True, timeout=30)
-            if result.returncode:
-                raise RuntimeError("systemctl start ornith failed")
+            start_unit(ORNITH_SERVICE)
         with STATE.lock:
             STATE.phase = "warming"
             STATE.changed = time.monotonic()
@@ -228,8 +234,7 @@ def switch_to(target: str, operation: int):
             if previous == QWEN:
                 qwen_action("load")
             else:
-                import subprocess
-                subprocess.run(["systemctl", "start", "ornith"], capture_output=True, timeout=30)
+                start_unit(ORNITH_SERVICE)
             wait_for(previous, timeout=180)
             with STATE.lock:
                 STATE.active = previous

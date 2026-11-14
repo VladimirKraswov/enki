@@ -1,3 +1,18 @@
+# TASK — 2026-11-14: Ornith 122B PolyStrata + MTP
+
+Владелец попросил перепроверить движок и выжать скорость без снижения квантования.
+Первичное исследование было ошибочно ограничено model page 35B; полная матрица
+PolyStrata поддерживает Ornith122 и текущий UD-Q4_K_XL. Собран strata-poly
+commit67dde645 под sm120/CUDA13.3, те же SHA256 шарды, context131072, vision off,
+MTP window8 и adaptive expert/conversation cache. 65K: prefill2199.6 tok/s
+(было ~207), decode34.3, needle exact; tool43.6 valid JSON; Enki turn13.6K/
+169 tokens 1365.8/39.2, MTP60/98. Prompt batch2048 хуже (2112.8) и откачен.
+Повтор65K reuse65052, decode52.1. Q5 не ставили, чтобы не смешивать engine+quant.
+Gateway: ORNITH_SERVICE, unreachable Qwen=false, systemctl start --no-block +
+health wait (4 tests); Qwen→PolyStrata switch PASS. Poly enabled at boot,
+llama/Qwen autostart disabled, Ornith active. Новая Enki PolyStrata session
+7f5826b5 idle с ответом. App release не требуется: server-only, URLs/IDs те же.
+
 # TASK — 2026-11-13: DeepSeek official balance / 2.0.80
 
 Официальный GET api.deepseek.com/user/balance проверен (401 без ключа).

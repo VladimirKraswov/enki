@@ -5,6 +5,7 @@ import threading
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 
 class GatewayTest(unittest.TestCase):
@@ -59,6 +60,17 @@ class GatewayTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.get("/v1/model-control/status", key="wrong")
         self.assertEqual(caught.exception.code, 401)
+
+    def test_unit_start_does_not_block_on_readiness(self):
+        with mock.patch("subprocess.run") as run:
+            run.return_value.returncode = 0
+            self.module.start_unit("strata-api")
+        self.assertEqual(run.call_args.args[0], ["systemctl", "start", "--no-block", "strata-api"])
+
+    def test_qwen_transport_failure_is_not_ready(self):
+        with mock.patch.object(self.module, "strata_key", return_value="key"), \
+                mock.patch.object(self.module, "request", side_effect=ConnectionRefusedError(111, "Connection refused")):
+            self.assertFalse(self.module.qwen_ready())
 
 
 if __name__ == "__main__":

@@ -370,3 +370,16 @@ loaded=false, status=loading/error, maintenance!=serving или чужом model
 Рекламируемое наличие модели в `/v1/models` само по себе не доказывает готовность.
 Ни inspect, ни watchdog не запускают inference и не повторяют промпт.
 См. [инструкцию Strata](../services/strata/README.md).
+
+## RTX5090: Ornith 122B на PolyStrata — 2026-11-14
+
+Ornith переведён с llama.cpp на `strata-poly` с теми же проверенными UD-Q4_K_XL
+шардами, контекстом 131072 и встроенным MTP. Публичные provider/model ID и
+порт gateway 1921 не изменились, поэтому отдельного релиза Desktop не требуется.
+PolyStrata слушает только loopback 1923; Hub по-прежнему координирует общий GPU
+и целые ходы. На этой VM холодный prefill 65K ускорился примерно с 207 до
+2199,6 tok/s, decode после длинного prompt — до 34,3 tok/s; повторный prompt
+переиспользовал 65052 токена. Tool JSON и ответ Enki проверены. Qwen и llama.cpp
+не стартуют автоматически вместе с Ornith: Qwen запускается явным выбором,
+llama.cpp оставлен выключенным fallback. Подробности и точный pinned commit:
+[services/ornith](../services/ornith/README.md).
