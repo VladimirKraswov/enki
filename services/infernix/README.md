@@ -76,7 +76,7 @@ infernix-serve part-00001.infernix
 and `ORNITH_EXCLUSIVE_RAM=0`. Qwen's unloaded API and its arena remain on the
 same node 0; this keeps the return to Qwen warm. Measured warm cycle on the
 dedicated node: **Infernix→Qwen 50 s, Qwen→Infernix 58 s**. The first Qwen start
-after a VM reboot is cold (about 140 s); later cycles use the retained arena and
+after a VM reboot is cold (about 112 s); later cycles use the retained arena and
 page cache.
 
 ## Measured on this VM

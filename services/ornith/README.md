@@ -35,7 +35,7 @@ no second agent loop.
 ## Measured after final cleanup
 
 - Warm cycle: Ornith → Qwen **50 s**; Qwen → Ornith **58 s**. First Qwen start
-  after a VM reboot is cold (about 140 s), then the retained arena/page cache
+  after a VM reboot is cold (about 112 s), then the retained arena/page cache
   keeps later cycles near a minute.
 - Qwen tool call: valid `{"city":"Moscow"}`, about 64.6 tok/s.
 - Ornith short tool call: valid JSON; decode is reasoning-dependent.
@@ -53,6 +53,7 @@ The only remaining Ornith model artifact is the Infernix NVFP4 set.
 
 ## Source and tests
 
+- [Final VM audit and retrospective](AUDIT-2026-11-14.md)
 - [Infernix deployment and measured tuning](../infernix/README.md)
 - [Strata deployment and Qwen profile](../strata/README.md)
 - `gateway.py` and `ornith-gateway.service`: model lifecycle and proxy.

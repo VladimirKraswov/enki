@@ -116,7 +116,7 @@ class State:
             ready = phase == "ready"
             loader = None
             if phase in ("unloading", "loading", "warming"):
-                current = sum(f.stat().st_blocks * 512 for f in MODEL_DIR.glob("*.gguf"))
+                current = sum(f.stat().st_blocks * 512 for pattern in ("*.gguf", "*.infernix") for f in MODEL_DIR.glob(pattern))
                 loader = {"phase": "model files", "unit": "bytes", "current": current, "total": EXPECTED_BYTES}
             return {
                 "schema": 1,

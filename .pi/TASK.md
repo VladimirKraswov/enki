@@ -7,7 +7,7 @@ node1; V100 остановлена и ресурсы не резервирует
 NUMAPolicy=bind,node0; работают по очереди без деления CPU. Tuning40 threads:
 w20=45.2,w24=47.4,w28=47.4 → final w24+MTP3. Qwen auto32 CPU pool workers.
 Qwen tool64.6 tok/s. Warm switch: Ornith→Qwen50.1s, Qwen→Ornith58.1s; first
-cold Qwen140s. Infernix active, Qwen active-unloaded; 0 failed units. Node0 free7G,
+cold Qwen112s. Infernix active, Qwen active-unloaded; 0 failed units. Node0 free7G,
 node1 free93G. Switch-cache node1 experiment removed (AUTO/O_DIRECT); no vmtouch.
 
 Speed, thinking off, same prompts: Qwen short median101.1/max110.6, ~52K decode

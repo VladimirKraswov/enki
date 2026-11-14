@@ -402,7 +402,7 @@ Decode Infernix —45.5 tok/s при65K и39.1 при220K; холодный pref
 на коротком и115.3 при~52K, Ornith63.6 на прогретом коротком и52.1 при~52K;
 медианы короткой серии101.1 и54.9. Методика:
 [SPEED-2026-11-14](../services/model-eval/SPEED-2026-11-14.md). Тёплый цикл: Ornith→Qwen50 с, Qwen→Ornith58 с; первый
-Qwen после ребута холодный (140 с). Это достигнуто выделенным node0, CPU-team24
+Qwen после ребута холодный (112 с). Это достигнуто выделенным node0, CPU-team24
 и MTP3; baseline auto6 был30.9 tok/s. PolyStrata/llama.cpp/Q4 GGUF удалены;
 на VM остались только Qwen/Strata и Ornith/Infernix. Подробности:
 [services/infernix](../services/infernix/README.md).

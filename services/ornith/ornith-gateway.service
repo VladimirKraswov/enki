@@ -13,7 +13,8 @@ Environment=ORNITH_EXCLUSIVE_RAM=0
 Environment=ORNITH_CONTROL_KEY_FILE=/etc/strata/ornith-gateway.key
 Environment=STRATA_API_ENV=/etc/strata/api.env
 Environment=ORNITH_ACTIVE_FILE=/var/lib/ornith-gateway/active.json
-Environment=ORNITH_MODEL_DIR=/srv/models/ornith-1.5-122b-ud-q4_k_xl
+Environment=ORNITH_MODEL_DIR=/srv/models/ornith-infernix
+Environment=ORNITH_MODEL_BYTES=75331296516
 Environment=ORNITH_GATEWAY_PORT=1921
 ExecStart=/usr/bin/python3 /opt/ornith/gateway.py
 Restart=on-failure
