@@ -39,6 +39,9 @@ no second agent loop.
   keeps later cycles near a minute.
 - Qwen tool call: valid `{"city":"Moscow"}`, about 64.6 tok/s.
 - Ornith short tool call: valid JSON; decode is reasoning-dependent.
+- Maximum decode with thinking off: Qwen **110.6 short / 115.3 at ~52K**, Ornith
+  **63.6 warm short / 52.1 at ~52K**. Short medians were 101.1 and 54.9 tok/s.
+  Method: [SPEED-2026-11-14](../model-eval/SPEED-2026-11-14.md).
 - No failed systemd units. 697 GB free on the guest disk. The host thinpool
   fell from 100% to 89.6% after cleanup.
 

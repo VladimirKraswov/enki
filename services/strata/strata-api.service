@@ -2,7 +2,7 @@
 Description=Strata Qwen Flash Next NVFP4 (RTX 5090)
 After=network.target nvidia-power-limit.service
 Wants=nvidia-power-limit.service
-StartLimitIntervalSec=1800
+StartLimitIntervalSec=0
 StartLimitBurst=3
 
 [Service]

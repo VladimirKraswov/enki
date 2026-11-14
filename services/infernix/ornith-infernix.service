@@ -2,7 +2,7 @@
 Description=Ornith 1.5 122B NVFP4 on Infernix (RTX 5090, 262K)
 After=network-online.target nvidia-power-limit.service
 Wants=network-online.target
-StartLimitIntervalSec=1800
+StartLimitIntervalSec=0
 StartLimitBurst=3
 
 [Service]

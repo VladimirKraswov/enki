@@ -398,7 +398,10 @@ VM 5200 закреплена за host NUMA node 0: 236 GiB выделено (23
 по очереди: Infernix — 24 CPU expert workers, Qwen — автоматические 32 из40.
 
 Decode Infernix —45.5 tok/s при65K и39.1 при220K; холодный prefill3942/3447 tok/s,
-220K prompt —67.4 с. Тёплый цикл: Ornith→Qwen50 с, Qwen→Ornith58 с; первый
+220K prompt —67.4 с. Без thinking максимальная измеренная скорость: Qwen110.6
+на коротком и115.3 при~52K, Ornith63.6 на прогретом коротком и52.1 при~52K;
+медианы короткой серии101.1 и54.9. Методика:
+[SPEED-2026-11-14](../services/model-eval/SPEED-2026-11-14.md). Тёплый цикл: Ornith→Qwen50 с, Qwen→Ornith58 с; первый
 Qwen после ребута холодный (140 с). Это достигнуто выделенным node0, CPU-team24
 и MTP3; baseline auto6 был30.9 tok/s. PolyStrata/llama.cpp/Q4 GGUF удалены;
 на VM остались только Qwen/Strata и Ornith/Infernix. Подробности:

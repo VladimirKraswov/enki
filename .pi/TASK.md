@@ -10,6 +10,13 @@ Qwen tool64.6 tok/s. Warm switch: Ornith→Qwen50.1s, Qwen→Ornith58.1s; first
 cold Qwen140s. Infernix active, Qwen active-unloaded; 0 failed units. Node0 free7G,
 node1 free93G. Switch-cache node1 experiment removed (AUTO/O_DIRECT); no vmtouch.
 
+Speed, thinking off, same prompts: Qwen short median101.1/max110.6, ~52K decode
+115.3; Ornith short median54.9/max63.6, ~52K decode52.1. The switch back after
+the test hit systemd start-limit-hit; both model units now have
+StartLimitIntervalSec=0 and the gateway runs reset-failed before every start.
+Infernix was restored active, Qwen inactive, 0 failed units. Full method:
+services/model-eval/SPEED-2026-11-14.md.
+
 # TASK — 2026-11-14: VM final cleanup / Qwen Strata + Ornith Infernix only
 
 По прямому поручению владельца удалены PolyStrata sources/data/unit, llama.cpp,

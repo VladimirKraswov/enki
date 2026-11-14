@@ -189,6 +189,9 @@ def qwen_action(action: str):
 
 def start_unit(unit: str):
     import subprocess
+    # A model service is intentionally stopped/started on every switch; an old
+    # failed attempt or systemd's start-rate limit must not block the next one.
+    subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
     result = subprocess.run(["systemctl", "start", "--no-block", unit], capture_output=True, timeout=30)
     if result.returncode:
         raise RuntimeError(f"systemctl start {unit} failed")

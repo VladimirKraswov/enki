@@ -100,6 +100,18 @@ it also leads 65K/220K decode and reaches parity with PolyStrata on short text.
 On the 32 GB / PCIe 3 / DDR4 E5 VM, the author's 77–103 tok/s (i9/DDR5/PCIe 5)
 was not reproduced by the default configuration.
 
+### Maximum measured decode (thinking off)
+
+| Model | Short median | Short max | ~52K context decode |
+| --- | ---: | ---: | ---: |
+| Qwen3.8-Flash-Next | 101.1 | **110.6** | **115.3 tok/s** |
+| Ornith Infernix | 54.9 | **63.6** | 52.1 tok/s |
+
+Ornith used 24 CPU workers over 512-token generations; its third short run
+reached 63.6 tok/s as the expert cache warmed. Qwen's pool used 32 of 40 threads.
+Full method and actual token counts:
+[SPEED-2026-11-14](../model-eval/SPEED-2026-11-14.md).
+
 ## Tuning on this VM
 
 The first active configuration used the engine's default six CPU workers and

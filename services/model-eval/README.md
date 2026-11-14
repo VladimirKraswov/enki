@@ -24,6 +24,9 @@ python3 services/model-eval/run.py qwen38-flash-next --verify-only
 ```
 
 Results and generated source: `.local/model-eval/<model>/report.json`.
+Speed measurement (short/8K/65K, thinking disabled) is reproducible with
+`python3 services/model-eval/speed.py <model>`; results are in
+`SPEED-2026-11-14.md`.
 Automated pass/fail is a narrow engineering signal, not a general intelligence
 score or proof that one model is better for every task. Timing fields come from
 the engine responses; they are recorded per generation and not averaged into a
