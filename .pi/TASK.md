@@ -1,3 +1,16 @@
+# TASK — 2026-11-14: Infernix placement/MTP tuning
+
+Владелец попросил выяснить, почему PolyStrata 50 tok/s > Infernix28–34 и выжать
+больше без потери качества. Root: авто team6 на E5 даёт 4417 experts/s против
+~10650 у автора i9; PCIe3x16 против Gen5x8. PolyStrata использует22 CPU threads
+и свой K-quant placement; Infernix default6 был недонастроен. Sweep link share
+auto43/256=30.9, 0.25=31.0,0.167=27.9,0.333=31.6,0.5=28.3 — auto оставлен.
+CPU physical12=44.1,16=44.8,20=45.6,24=44.5. MTP auto=2; fixed3=47.5,
+MTP4=46.7, DFlash2=46.6/tree4=46.9. Все3 output hashes совпадают. Активно
+INFERNIX_TMP_CPU_PLACEMENT=physical,20 + MTP3. Acceptance после: 65K decode
+45.5 (was33.8),220K39.1 (was28.3), prefill3942/3447, needle exact, tool PASS.
+Сохранён tune.py, таблицы в README. Переключение не изменилось (60–95/62s).
+
 # TASK — 2026-11-14: Infernix 262K, VM cleanup, cross-model evaluation
 
 Владелец попросил обновить Strata/PolyStrata, ускорить switching и заменить Ornith

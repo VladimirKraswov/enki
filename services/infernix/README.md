@@ -60,8 +60,8 @@ sha256sum -c /path/to/Enki/services/infernix/artifacts.sha256
 ```text
 infernix-serve part-00001.infernix
   --host 127.0.0.1 --port 1922 --model-id ornith15-122b
-  --max-context 262144 --max-concurrency 2 --kv-dtype int8
-  --spec mtp --draft-tokens auto
+  --max-context 262144 --max-concurrency 1 --kv-dtype int8
+  --spec mtp --draft-tokens 3
   --host-context-mib 4096 --expert-ram-layout full
   --prefix-cache-file /var/lib/ornith-infernix/prefix-cache.bin
   --expert-state /var/lib/ornith-infernix/expert-state.bin
@@ -82,19 +82,50 @@ The official artifact SHA-256 and a 262,144-token plan pass. The 250K test sent
 | Check | Infernix NVFP4 | PolyStrata Q4_K_XL |
 | --- | ---: | ---: |
 | Context | 262,144 | 262,144 |
-| 65K prefill | **3,928 tok/s** | 2,130 tok/s |
-| 220K prompt total | **68.3 s** | 129.2 s |
-| 220K prefill | **3,445 tok/s** | 1,727 tok/s |
-| Decode after 220K | 28.3 tok/s | **34.7 tok/s** |
-| Short/medium decode | 28–34 tok/s | **47–50 tok/s** |
+| 65K prefill | **3,942 tok/s** | 2,130 tok/s |
+| 220K prompt total | **67.4 s** | 129.2 s |
+| 220K prefill | **3,447 tok/s** | 1,727 tok/s |
+| Decode after 220K | **39.1 tok/s** | 34.7 tok/s |
+| Short/medium decode | **47.5 tok/s median** | 47–50 tok/s |
 | Qwen→Ornith switch | 60–95 s | **28–32 s** |
 | Ornith→Qwen switch | 62 s | **28–32 s** |
 
-Infernix wins long-prompt TTFT and end-to-end time by about 1.9×; PolyStrata
-wins ordinary short decode and switching. On the 32 GB / PCIe 3 / DDR4 E5 VM,
-Infernix does not reproduce the author's 77–103 tok/s (their i9/DDR5/PCIe 5).
-The active choice is Infernix because the assignment prioritizes maximum speed
-at 260K. For mostly short prompts, PolyStrata is the better daily backend.
+Infernix wins long-prompt TTFT and end-to-end time by about 1.9×; after tuning
+it also leads 65K/220K decode and reaches parity with PolyStrata on short text.
+On the 32 GB / PCIe 3 / DDR4 E5 VM, the author's 77–103 tok/s (i9/DDR5/PCIe 5)
+was not reproduced by the default configuration.
+
+## Tuning on this VM
+
+The first active configuration used the engine's default six CPU workers and
+MTP auto. The VM's CPU team measured 4,417 experts/s against the author's
+~10,650, and the PCIe 3.0 link is slower than the author's Gen5×8. The default
+auto link split (43/256) was therefore already sensible; forcing 0.125/0.25/0.5
+did not improve it.
+
+Increasing the physical CPU expert team did help. The tuning harness runs the
+same three coding/3D/ESP32 prompts, temperature 0, and records both throughput
+and output hashes:
+
+| Placement / drafting | Median decode |
+| --- | ---: |
+| Default 6 workers, MTP auto (2) | 30.9 tok/s |
+| Physical 12, MTP auto | 44.1 |
+| Physical 16, MTP auto | 44.8 |
+| Physical 20, MTP auto | 45.6 |
+| Physical 24, MTP auto | 44.5 |
+| **Physical 20, MTP 3** | **47.5 tok/s** |
+| Physical 20, DFlash2 | 46.6 |
+| Physical 20, DFlash2 tree 4 / 2 paths | 46.9 |
+
+The active unit is **physical,20 + MTP 3**. All candidate output hashes matched,
+so the gain came from placement/speculation only; weights, activation precision
+and KV dtype were unchanged. `--a8-activations` and `--expert-tail-skip` were
+not used because they change the quality contract.
+
+Tuned acceptance: 65K decode 45.5 tok/s (was 33.8), 220K decode 39.1 (was
+28.3), prefill unchanged at 3,942/3,447 tok/s. Both needles and the tool JSON
+pass. `services/infernix/tune.py` is the repeatable harness.
 
 ## Acceptance gates
 

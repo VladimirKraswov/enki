@@ -392,9 +392,11 @@ CUDA13.4, `--max-context 262144 --max-concurrency 1 --kv-dtype int8
 --spec mtp --draft-tokens auto --host-context-mib 4096`. Публичный model ID
 остаётся `ornith15-122b`; Pi `contextWindow` обновлён до262144.
 
-На этой VM 65K prefill — 3928 tok/s, 220K prompt — 68.3 с; PolyStrata при том же
-262K: 2130/1727 tok/s и129.2 с. Но короткий decode Infernix 28–34 tok/s против
-47–50 у PolyStrata, а переключение с Qwen —60–95 с против28–32. Infernix выбран
+На этой VM 65K prefill — 3942 tok/s, 220K prompt — 67.4 с; PolyStrata при том же
+262K: 2130/1727 tok/s и129.2 с. Decode Infernix —45.5 tok/s при65K и39.1 при220K;
+короткая серия —47.5 tok/s против47–50 у PolyStrata. Это достигнуто физической
+CPU-командой20 и MTP3 (baseline auto6 —30.9), с совпадающими хешами ответов.
+Переключение с Qwen —60–95 с против28–32. Infernix выбран
 для приоритета 260K/long-prefill; PolyStrata `ornith-poly` остаётся выключенным
 fallback. Qwen и Infernix помещаются вместе (Qwen arena64 GiB + Infernix pinned
 68 GiB), поэтому Qwen API не останавливается и возврат к нему тёплый.
