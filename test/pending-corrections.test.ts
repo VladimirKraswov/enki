@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { PendingCorrections } from "../src/components/PendingCorrections";
+import { PendingCorrections, correctionIsVisible } from "../src/components/PendingCorrections";
 import type { PendingCorrectionDTO } from "../src-tauri/resources/agent/src/protocol";
 
 let root: Root | undefined;
@@ -24,6 +24,17 @@ it("shows the saved text while the current tool runs, including after returning 
   show([]); expect(document.querySelector("section")).toBeNull();
 });
 
+it("hides a receipt once the same steering text is visible in the transcript", () => {
+  expect(correctionIsVisible(item, [])).toBe(false);
+  expect(correctionIsVisible(item, [{ text: item.text, createdAt: item.createdAt + 1 }])).toBe(true);
+  expect(correctionIsVisible(item, [{ text: "другой текст", createdAt: item.createdAt + 1 }])).toBe(false);
+  // An older steering message with the same words must not hide a new receipt.
+  expect(correctionIsVisible(item, [{ text: item.text, createdAt: item.createdAt - 10_000 }])).toBe(false);
+  show([item], true);
+  expect(document.body.textContent).toContain(item.text);
+  show([item], true);
+  // The component itself still renders the pending receipt; Composer supplies visible texts.
+});
 it("distinguishes lost connection and uncertain delivery and never offers an automatic resend", () => {
   show([item], false); expect(document.body.textContent).toContain("Сохранено · нет связи с агентом");
   show([{ ...item, state: "uncertain", error: "Runtime перезапустилась" }]);

@@ -42,6 +42,17 @@ export function Composer() {
   const activeQueue = s.activeSessionId ? s.queues[s.activeSessionId] : undefined;
   const pendingCorrections = useMemo(() => (activeQueue?.corrections ?? [])
     .filter(item => !activeQueue?.items.some(queued => queued.commandId === item.id)), [activeQueue]);
+  const visibleSteering = useMemo(() => {
+    const slot = s.activeSessionId ? s.chat.sessions[s.activeSessionId] : undefined;
+    if (!slot) return [];
+    return slot.messageOrder.flatMap(messageID => {
+      const parts = (slot.partsByMessage[messageID] ?? []).map(partID => slot.parts[partID]).filter(Boolean);
+      if (!parts.some(part => part.metadata?.arvelaSteering === 1)) return [];
+      const text = parts.filter(part => part.type === "text" && !part.synthetic).map(part => part.text ?? "").join("\n").trim();
+      const createdAt = slot.messages[messageID]?.time.created;
+      return text && typeof createdAt === "number" ? [{ text, createdAt }] : [];
+    });
+  }, [s.activeSessionId, s.chat.sessions]);
   const switches = useSyncExternalStore(modelServices.subscribe, modelServices.snapshot);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -277,7 +288,7 @@ export function Composer() {
       {switchError && !switchState?.error && <div className="composer-error" role="alert">{switchError}</div>}
       {attachmentProgress && <div className="workspace-progress" role="status">{attachmentProgress}</div>}
       <PendingCorrections items={pendingCorrections}
-        connected={connected && s.connection.streamState === "open"}/>
+        connected={connected && s.connection.streamState === "open"} visible={visibleSteering}/>
       {store.getQueue().length > 0 && (
         <Suspense fallback={null}><PromptQueue attachments={attachments} removeFile={removeFile} focusEditor={() => textareaRef.current?.focus()} switching={switching}/></Suspense>
       )}
