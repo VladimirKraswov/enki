@@ -40,6 +40,12 @@ describe('shared resilient search',()=>{
   const s=createSearch({providers:['bing'],fetcher:async()=>new Response(rss)});
   const result=await s.search({query:'curl-impersonate official documentation'});expect(result.isError).toBe(true);expect(result.failures[0].reason).toBe('irrelevant_results');
  });
+ it('accepts a meaningful two-letter product anchor from Bing RSS',async()=>{
+  const piRss='<rss><channel><item><title>Pi - Wikipedia</title><link>https://en.wikipedia.org/wiki/Pi</link><description>mathematical constant</description></item><item><title>Pi · Documentation · Pi</title><link>https://pi.dev/docs/latest</link><description>extensible AI agent</description></item></channel></rss>';
+  const s=createSearch({providers:['bing'],fetcher:async()=>new Response(piRss)});
+  const result=await s.search({query:'Pi coding agent skills web search best practices',scope:'web'});
+  expect(result.provider).toBe('bing');expect(result.results.some((r:{url:string})=>r.url==='https://pi.dev/docs/latest')).toBe(true);expect(result.results.some((r:{url:string})=>r.url==='https://en.wikipedia.org/wiki/Pi')).toBe(false);
+ });
  it('a query-specific relevance miss does not disable the provider for a better query',async()=>{
   let calls=0;
   const s=createSearch({providers:['bing'],now:()=>1000,fetcher:async()=>{calls++;return new Response(rss);}});
