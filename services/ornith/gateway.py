@@ -3,8 +3,7 @@
 
 Not an agent loop. Only qwen38-flash-next and ornith15-122b are selectable.
 Qwen is controlled through the existing Strata API; Ornith is a systemd-owned
-PolyStrata service (llama.cpp remains available as a disabled fallback).
-Hub and Runtime remain the sources of sessions and work.
+Infernix service. Hub and Runtime remain the sources of sessions and work.
 """
 from __future__ import annotations
 

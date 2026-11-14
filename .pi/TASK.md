@@ -1,3 +1,14 @@
+# TASK — 2026-11-14: VM final cleanup / Qwen Strata + Ornith Infernix only
+
+По прямому поручению владельца удалены PolyStrata sources/data/unit, llama.cpp,
+Ornith UD-Q4_K_XL (75G), старые Strata 0.1.56/pre-0.1.56, staging, venv и legacy
+watchdog. Qwen readiness переведён на текущий app/python до удаления venv.
+Остались только Qwen Strata 0.1.59/Control0.1.59.1 и Ornith Infernix NVFP4,
+262K/physical20/MTP3. После очистки + fstrim: guest free700G, host thinpool89.6%,
+zero failed units. Полный цикл: Ornith→Qwen72.1s, Qwen→Ornith107.5s, оба tool
+JSON PASS; активен Infernix. Swap после пика снова очищен0/31G. Финальный Enki-ход на Infernix PASS.
+Только серверные и docs изменения; Desktop release не требуется.
+
 # TASK — 2026-11-14: Infernix placement/MTP tuning
 
 Владелец попросил выяснить, почему PolyStrata 50 tok/s > Infernix28–34 и выжать

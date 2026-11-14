@@ -1,7 +1,8 @@
 # Infernix: Ornith 122B at 262K on RTX 5090
 
-Status: **active production backend since 2026-11-14**. PolyStrata remains installed
-and disabled as the measured fallback.
+Status: **active production backend since 2026-11-14**. After acceptance the
+PolyStrata sources/service and Q4 GGUF were removed; Qwen on Strata is the other
+backend on this VM.
 
 ## Why evaluate it
 
@@ -138,11 +139,10 @@ pass. `services/infernix/tune.py` is the repeatable harness.
 5. Qwen → Infernix → Qwen completes and releases pinned RAM/VRAM correctly.
 6. An Enki session succeeds end-to-end before enabling the unit at boot.
 
-## Rollback
+## After acceptance
 
-Keep `ornith-poly.service` installed and disabled at boot. Rollback is:
-`systemctl disable --now ornith-infernix`, set gateway
-`ORNITH_SERVICE=ornith-poly`, `ORNITH_BASE=http://127.0.0.1:1923` and
-`ORNITH_EXCLUSIVE_RAM=0`, then start `ornith-poly` and restart the gateway.
-No Qwen data or model artifact is removed. PolyStrata's 262K config and the
-75 GB Q4 artifact remain ready.
+PolyStrata, llama.cpp, the Q4 artifact and old Strata backups were deleted by the
+owner's cleanup assignment. Only Qwen/Strata and Ornith/Infernix remain. Qwen is
+available through the same gateway when Ornith is stopped or fails; do not assume
+an uninstalled PolyStrata rollback exists. The measured PolyStrata figures above
+are retained only as historical comparison data.

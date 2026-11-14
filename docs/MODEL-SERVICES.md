@@ -397,7 +397,7 @@ CUDA13.4, `--max-context 262144 --max-concurrency 1 --kv-dtype int8
 короткая серия —47.5 tok/s против47–50 у PolyStrata. Это достигнуто физической
 CPU-командой20 и MTP3 (baseline auto6 —30.9), с совпадающими хешами ответов.
 Переключение с Qwen —60–95 с против28–32. Infernix выбран
-для приоритета 260K/long-prefill; PolyStrata `ornith-poly` остаётся выключенным
-fallback. Qwen и Infernix помещаются вместе (Qwen arena64 GiB + Infernix pinned
+для приоритета 260K/long-prefill. После приёмки PolyStrata, llama.cpp и Q4 GGUF
+удалены; на VM остались только Qwen/Strata и Ornith/Infernix. Qwen и Infernix помещаются вместе (Qwen arena64 GiB + Infernix pinned
 68 GiB), поэтому Qwen API не останавливается и возврат к нему тёплый.
 Подробности: [services/infernix](../services/infernix/README.md).

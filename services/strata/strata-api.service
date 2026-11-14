@@ -15,8 +15,8 @@ Environment=OMP_NUM_THREADS=1
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HOME=/var/lib/strata
-ExecStart=/opt/strata/venv/bin/python -u /opt/strata/app/serve/server.py --engine strata --config /etc/strata/model.json --host 127.0.0.1 --port 1920 --ready-file /run/strata/ready.json
-ExecStartPost=/opt/strata/venv/bin/python /opt/strata/ops/ready.py
+ExecStart=/opt/strata/app/python/bin/python3 -u /opt/strata/app/serve/server.py --engine strata --config /etc/strata/model.json --host 127.0.0.1 --port 1920 --ready-file /run/strata/ready.json
+ExecStartPost=/opt/strata/app/python/bin/python3 /opt/strata/ops/ready.py
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=10min
