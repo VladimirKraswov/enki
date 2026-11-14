@@ -23,6 +23,14 @@ class VerifyFixtures(unittest.TestCase):
         (self.root / "telemetry.mjs").write_text('''const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);\nexport function validateTelemetry(v){const errors=[];if(!plain(v))return {ok:false,errors:['object']};if(!Number.isInteger(v.sequence)||v.sequence<0)errors.push('sequence');if(!Number.isFinite(v.timestamp)||v.timestamp<0)errors.push('timestamp');if(!Number.isFinite(v.temperatureC)||v.temperatureC < -40||v.temperatureC>125)errors.push('temperature');if(typeof v.deviceId!=='string'||!v.deviceId||v.deviceId.length>64)errors.push('device');return {ok:!errors.length,errors};}\nconst csv=s=>/[" ,\\n]/.test(s)?'"'+s.replaceAll('"','""')+'"':s;\nexport function telemetryCsvRow(v){return validateTelemetry(v).ok?`${csv(v.deviceId)},${v.sequence},${v.timestamp},${v.temperatureC}`:'';}\n''')
         self.assertTrue(verify_task("telemetry", self.root)["pass"])
 
+    def test_debug(self):
+        (self.root / "lru_cache.py").write_text('''from collections import OrderedDict\nclass LRUCache:\n def __init__(self, capacity):\n  if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0: raise ValueError()\n  self.capacity=capacity; self.data=OrderedDict()\n def get(self, key):\n  if key not in self.data: return None\n  self.data.move_to_end(key); return self.data[key]\n def put(self, key, value):\n  if key in self.data: self.data.move_to_end(key)\n  self.data[key]=value\n  if len(self.data)>self.capacity: self.data.popitem(last=False)\n''')
+        self.assertTrue(verify_task("debug", self.root)["pass"])
+
+    def test_scheduler(self):
+        (self.root / "schedule.json").write_text('{"servers":[{"id":1,"tasks":["A","G"]},{"id":2,"tasks":["B","C"]},{"id":3,"tasks":["D","E","F","H"]}],"maxLoad":9}')
+        self.assertTrue(verify_task("scheduler", self.root)["pass"])
+
     def test_scene(self):
         (self.root / "scene3d.mjs").write_text('''export function cuboidVertices(cx,cy,cz,w,h,d){const o=[];for(const x of [-.5,.5])for(const y of [-.5,.5])for(const z of [-.5,.5])o.push([cx+x*w,cy+y*h,cz+z*d]);return o;}\nexport function projectPoint(x,y,z,c={}){const width=c.width||800,height=c.height||600,zoom=c.zoom??1,near=c.near??1;const depth=z+near;return {x:width/2+x*zoom,y:height/2-y*zoom,depth};}\nexport function projectCuboid(cx,cy,cz,w,h,d,c={}){const vertices=cuboidVertices(cx,cy,cz,w,h,d).map(v=>({x:v[0],y:v[1],z:v[2],...projectPoint(v[0],v[1],v[2],c)}));const faces=[[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]].map(f=>({f,d:f.reduce((s,i)=>s+vertices[i].depth,0)/4})).sort((a,b)=>b.d-a.d).map(x=>x.f);return {vertices,faces};}''')
         self.assertTrue(verify_task("scene3d", self.root)["pass"])

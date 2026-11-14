@@ -14,8 +14,14 @@ Speed, thinking off, same prompts: Qwen short median101.1/max110.6, ~52K decode
 115.3; Ornith short median54.9/max63.6, ~52K decode52.1. The switch back after
 the test hit systemd start-limit-hit; both model units now have
 StartLimitIntervalSec=0 and the gateway runs reset-failed before every start.
-Infernix was restored active, Qwen inactive, 0 failed units. Full method:
+Infernix was restored active, Qwen active-unloaded, 0 failed units. Full method:
 services/model-eval/SPEED-2026-11-14.md.
+
+Финальный сравнительный suite расширен до6 задач (backend, telemetry, 3D,
+ESP32, LRU debug, scheduling). Обе модели 6/6; Qwen быстрее в1.8–2 раза.
+Ornith не показал превосходства по качеству в этой выборке; Qwen остаётся
+дефолтом для кода, Infernix — для 262K/long-context. Отчёт:
+services/model-eval/RESULTS-2026-11-14.md.
 
 # TASK — 2026-11-14: VM final cleanup / Qwen Strata + Ornith Infernix only
 

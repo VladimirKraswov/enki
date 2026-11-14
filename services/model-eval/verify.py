@@ -170,6 +170,64 @@ int main() {
     return command(["g++", "-std=c++17", "-Wall", "-Wextra", "-pedantic", "-I", ".", "-x", "c++", "esp32_controller.ino", "-x", "c++", "test.cpp", "-o", "esp32_test"], directory) if not command(["g++", "--version"], directory)[0] else (1, "g++ unavailable")
 
 
+def debug_lru(directory: Path):
+    test = r'''import sys
+import unittest
+sys.path.insert(0, ".")
+from lru_cache import LRUCache
+
+class LRUTest(unittest.TestCase):
+    def test_eviction_and_recency(self):
+        c = LRUCache(2)
+        c.put(1, "a"); c.put(2, "b")
+        self.assertEqual(c.get(1), "a")
+        c.put(3, "c")
+        self.assertIsNone(c.get(2))
+        self.assertEqual(c.get(1), "a")
+        c.put(1, "A")
+        c.put(4, "d")
+        self.assertIsNone(c.get(3))
+        self.assertEqual(c.get(1), "A")
+        self.assertEqual(c.get(4), "d")
+
+    def test_invalid_capacity_and_update(self):
+        for value in (0, -1, 1.5, "2"):
+            with self.assertRaises((ValueError, TypeError)):
+                LRUCache(value)
+        c = LRUCache(1)
+        c.put("x", 1); c.put("x", 2)
+        self.assertEqual(c.get("x"), 2)
+
+unittest.main()
+'''
+    (directory / "test_lru.py").write_text(test)
+    return command(["python3", "test_lru.py"], directory)
+
+
+def scheduler(directory: Path):
+    try:
+        value = json.loads((directory / "schedule.json").read_text())
+    except Exception as exc:
+        return 1, f"invalid JSON: {exc}"
+    weights = {"A":7, "B":5, "C":4, "D":3, "E":3, "F":2, "G":2, "H":1}
+    servers = value.get("servers") if isinstance(value, dict) else None
+    if not isinstance(servers, list) or len(servers) != 3:
+        return 1, "need exactly three servers"
+    seen = []
+    loads = []
+    for server in servers:
+        tasks = server.get("tasks") if isinstance(server, dict) else None
+        if not isinstance(tasks, list):
+            return 1, "server tasks must be a list"
+        seen.extend(tasks)
+        loads.append(sum(weights.get(task, 10**6) for task in tasks))
+    if sorted(seen) != sorted(weights):
+        return 1, f"task coverage invalid: {seen}"
+    maximum = max(loads)
+    if value.get("maxLoad") != maximum or maximum != 9:
+        return 1, f"not the optimum: loads={loads}, maxLoad={value.get('maxLoad')}"
+    return 0, f"optimal assignment verified: loads={loads}"
+
 def scene3d(directory: Path):
     test = r'''import assert from "node:assert/strict";
 import { cuboidVertices, projectPoint, projectCuboid } from "./scene3d.mjs";
@@ -204,7 +262,7 @@ console.log("3D module checks passed");
 
 
 def verify_task(name: str, directory: Path):
-    files = {"backend": "backend_limiter.py", "telemetry": "telemetry.mjs", "scene3d": "scene3d.mjs", "esp32": "esp32_controller.ino"}
+    files = {"backend": "backend_limiter.py", "telemetry": "telemetry.mjs", "scene3d": "scene3d.mjs", "esp32": "esp32_controller.ino", "debug": "lru_cache.py", "scheduler": "schedule.json"}
     source = directory / files[name]
     if not source.exists() or len(source.read_text(errors="replace").strip()) < 20:
         return {"pass": False, "summary": "source missing or empty"}
@@ -214,6 +272,10 @@ def verify_task(name: str, directory: Path):
         code, output = backend(directory)
     elif name == "telemetry":
         code, output = telemetry(directory)
+    elif name == "debug":
+        code, output = debug_lru(directory)
+    elif name == "scheduler":
+        code, output = scheduler(directory)
     else:
         code, output = esp32(directory)
         if code == 0:

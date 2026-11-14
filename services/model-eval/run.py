@@ -34,7 +34,7 @@ class TokenBucket:
     @property
     def available(self) -> float: ...
 
-Требования: capacity и refill_per_second > 0; tokens > 0 и конечное число;
+Требования: capacity и refill_per_second > 0 и оба конечные числа; tokens > 0 и конечное число;
 начальное число токенов = capacity; refill не превышает capacity; отрицательное
 время не уменьшает доступные токены. Если часы ушли назад, не сдвигай сохранённую
 точку отсчёта назад: после возврата refill считается от последнего максимального
@@ -82,6 +82,43 @@ export function projectCuboid(cx, cy, cz, width, height, depth, camera = {})
 NaN; функции не зависят от DOM и не используют библиотеки. Только чистый JS.
 Ответь одним fenced-блоком с кодом.""",
     },
+    "debug": {
+        "file": "lru_cache.py",
+        "prompt": """Исправь багованный модуль lru_cache.py. Верни полный исправленный код.
+
+Исходный код:
+class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.data = {}
+    def get(self, key):
+        return self.data.get(key)
+    def put(self, key, value):
+        if len(self.data) >= self.capacity:
+            self.data.pop(next(iter(self.data)))
+        self.data[key] = value
+
+Контракт: capacity — целое > 0, иначе ValueError; ключи хешируемые.
+get(key) возвращает значение или None, успешный get делает ключ самым недавним.
+put нового ключа при заполненном кэше удаляет least-recently-used; put
+существующего обновляет значение и делает ключ самым недавним. Нельзя
+использовать глобальное состояние или внешние библиотеки. Ответь одним
+fenced-блоком с Python-кодом.""",
+    },
+    "scheduler": {
+        "file": "schedule.json",
+        "max_tokens": 1200,
+        "prompt": """Реши задачу оптимизации и верни только один fenced JSON-объект.
+
+Три одинаковых сервера. Восемь задач с весами:
+A=7, B=5, C=4, D=3, E=3, F=2, G=2, H=1.
+Каждую задачу нужно назначить ровно на один сервер. Минимизируй максимальную
+суммарную нагрузку сервера. Нужен точный оптимум.
+
+Формат: {"servers":[{"id":1,"tasks":["A",...]},{"id":2,"tasks":[...]},
+{"id":3,"tasks":[...]}],"maxLoad":<integer>}
+Все 8 id должны встречаться ровно один раз. Ответь только JSON в fenced block.""",
+    },
     "esp32": {
         "file": "esp32_controller.ino",
         "prompt": """Создай esp32_controller.ino для Arduino ESP32 с неблокирующей логикой.
@@ -102,7 +139,7 @@ def extract_code(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
         first, _, rest = text.partition("\n")
-        if first[3:].strip().lower() in {"", "python", "py", "javascript", "js", "mjs", "html", "cpp", "c++", "ino", "arduino"}:
+        if first[3:].strip().lower() in {"", "python", "py", "javascript", "js", "mjs", "html", "cpp", "c++", "ino", "arduino", "json"}:
             text = rest
         stripped = text.rstrip()
         if stripped.endswith("```"):
@@ -116,7 +153,7 @@ def extract_code(text: str) -> str:
         if not block:
             continue
         first, _, rest = block.partition("\n")
-        if first.lower() in {"python", "py", "javascript", "js", "mjs", "html", "cpp", "c++", "ino", "arduino"}:
+        if first.lower() in {"python", "py", "javascript", "js", "mjs", "html", "cpp", "c++", "ino", "arduino", "json"}:
             return rest.strip() + "\n"
         return block + "\n"
     return text + "\n"
@@ -171,7 +208,7 @@ def main() -> int:
         metadata = report.get("tasks", {}).get(name, {}).get("generation", {})
         if not args.verify_only:
             try:
-                content, metadata = chat(args.model, task["prompt"], task.get("max_tokens", 4000))
+                content, metadata = chat(args.model, task["prompt"], task.get("max_tokens", 8000))
                 (directory / "raw.txt").write_text(content)
                 source.write_text(extract_code(content))
             except Exception as exc:
