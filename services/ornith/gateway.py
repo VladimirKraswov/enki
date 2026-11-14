@@ -25,6 +25,7 @@ QWEN_API = os.environ.get("ORNITH_QWEN_BASE", "http://127.0.0.1:1919")
 QWEN_CONTROL = os.environ.get("ORNITH_QWEN_CONTROL", "http://127.0.0.1:1920")
 ORNITH_API = os.environ.get("ORNITH_BASE", "http://127.0.0.1:1922")
 ORNITH_SERVICE = os.environ.get("ORNITH_SERVICE", "ornith")
+ORNITH_EXCLUSIVE_RAM = os.environ.get("ORNITH_EXCLUSIVE_RAM", "") == "1"
 CONTROL_KEY_FILE = Path(os.environ.get("ORNITH_CONTROL_KEY_FILE", "/etc/strata/ornith-gateway.key"))
 STRATA_ENV = Path(os.environ.get("STRATA_API_ENV", "/etc/strata/api.env"))
 STATE_FILE = Path(os.environ.get("ORNITH_ACTIVE_FILE", "/var/lib/ornith-gateway/active.json"))
@@ -97,6 +98,10 @@ class State:
                             self.active = self.target = ORNITH
                     else:
                         self.active = self.target = candidate
+                        import subprocess
+                        ornith_running = subprocess.run(["systemctl", "is-active", "--quiet", ORNITH_SERVICE], capture_output=True, timeout=5)
+                        if ornith_running.returncode == 0:
+                            self.active = self.target = ORNITH
             except (OSError, ValueError):
                 pass
 
@@ -154,17 +159,22 @@ def stop_ornith():
     wait_gpu_free()
 
 
-def qwen_ready() -> bool:
+def qwen_model_state() -> str | None:
     try:
         status, value = request(QWEN_CONTROL, "/v1/models", key=strata_key(), timeout=10)
     except (OSError, RuntimeError):
-        return False
+        return None
     if status != 200 or not isinstance(value, dict):
-        return False
+        return None
     for model in value.get("data", []):
-        if model.get("id") == QWEN and model.get("status", {}).get("value") != "unloaded":
-            return True
-    return False
+        if model.get("id") == QWEN:
+            state = model.get("status", {}).get("value")
+            return str(state) if state is not None else None
+    return None
+
+
+def qwen_ready() -> bool:
+    return qwen_model_state() == "loaded"
 
 
 def ornith_ready() -> bool:
@@ -185,9 +195,29 @@ def start_unit(unit: str):
         raise RuntimeError(f"systemctl start {unit} failed")
 
 
+def stop_qwen_service():
+    import subprocess
+    result = subprocess.run(["systemctl", "stop", "strata-api"], capture_output=True, timeout=180)
+    if result.returncode:
+        raise RuntimeError("systemctl stop strata-api failed")
+
+
+def activate_qwen():
+    state = qwen_model_state()
+    if state is None:
+        start_unit("strata-api")
+    elif state == "unloaded":
+        qwen_action("load")
+
+
 def wait_for(model: str, timeout: int = 900):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if model == ORNITH:
+            import subprocess
+            failed = subprocess.run(["systemctl", "is-failed", "--quiet", ORNITH_SERVICE], timeout=10)
+            if failed.returncode == 0:
+                raise RuntimeError(f"{ORNITH_SERVICE} failed during startup")
         try:
             if (qwen_ready() if model == QWEN else ornith_ready()):
                 return
@@ -203,16 +233,15 @@ def switch_to(target: str, operation: int):
         if previous == QWEN:
             qwen_action("unload")
             wait_gpu_free()
+            if ORNITH_EXCLUSIVE_RAM:
+                stop_qwen_service()
         else:
             stop_ornith()
         with STATE.lock:
             STATE.phase = "loading"
             STATE.changed = time.monotonic()
         if target == QWEN:
-            if not qwen_ready():
-                start_unit("strata-api")
-            else:
-                qwen_action("load")
+            activate_qwen()
         else:
             start_unit(ORNITH_SERVICE)
         with STATE.lock:
@@ -232,7 +261,7 @@ def switch_to(target: str, operation: int):
         error = str(exc)[:1024]
         try:
             if previous == QWEN:
-                qwen_action("load")
+                activate_qwen()
             else:
                 start_unit(ORNITH_SERVICE)
             wait_for(previous, timeout=180)
@@ -292,6 +321,12 @@ class Handler(BaseHTTPRequestHandler):
         if model not in MODELS or agent not in AGENTS:
             return self.send_json(403, {"error": "model is not available"})
         with STATE.switch_lock:
+            if STATE.phase == "failed":
+                recovered = qwen_ready() if STATE.active == QWEN else ornith_ready()
+                if recovered:
+                    STATE.phase = "ready"
+                    STATE.error = None
+                    STATE.changed = time.monotonic()
             if STATE.phase != "ready":
                 return self.send_json(409, {"error": "another model switch is running"})
             if STATE.active_requests:

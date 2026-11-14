@@ -2,6 +2,14 @@
 
 ## Current deployment
 
+**2026-11-14 update:** Qwen control/engine moved to Strata 0.1.59.1/0.1.59;
+warm Qwen load fell from 36 to 30 s and Ornith→Qwen/Qwen→Ornith measured
+28–32 s. The legacy watchdog was disabled because it restarted the deliberately
+unloaded Qwen during switches. Qwen stays loaded when switching to PolyStrata.
+An Infernix NVFP4 candidate for 262K is staged under
+[services/infernix](../infernix/README.md); it becomes active only after its
+acceptance passes.
+
 VM 5200 has a 32 GB RTX 5090, 32 vCPU, 176 GiB RAM and a 1 TB root disk. The
 122B model does not fit VRAM, so this is GPU + system-RAM expert offload, not a
 claim of full-GPU inference.
@@ -34,6 +42,8 @@ runs are indicative rather than a controlled quality benchmark.
 | Repeated 65K request | no equivalent measurement | 65,052 tokens reused; **52.1 tok/s** decode |
 | Tool-call request | valid JSON, about 18–21 tok/s | valid JSON, **43.6 tok/s** |
 | Enki turn, 13,592 input / 169 output tokens | not measured | 1,365.8 tok/s prefill, **39.2 tok/s** decode |
+| Warm `/load` after Qwen unload | 36 s (0.1.56) | **30.2 s** (0.1.59.1) |
+| Switch to Ornith | 42 s (0.1.56) | **28–32 s** (0.1.59.1) |
 
 The 65K needle answer was exactly `ORNITH-NEEDLE-73921`. Tool arguments were
 `{"city":"Moscow"}`. MTP acceptance was 21/29 in the tool test, 22/29 after the

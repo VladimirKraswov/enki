@@ -2,7 +2,7 @@
 
 Операторские шаблоны для отдельного сервиса модели, не встроенный движок Enki.
 Профиль проверен на VM 5200: RTX 5090 32 ГБ, Xeon E5-2698 v4, DDR4,
-PCIe 3.0 ×16, 32 vCPU и около 157 ГиБ RAM. V100 и его gateway независимы.
+PCIe 3.0 ×16, 32 vCPU и 176 ГиБ RAM. V100 и его gateway независимы.
 
 ```text
 Enki Runtime / Hub                  → VM 192.168.31.71:1919
@@ -23,8 +23,8 @@ SSE и передаёт отключение клиента серверу. Ст
 
 | Путь / служба | Назначение |
 | --- | --- |
-| `/opt/strata/bin` | Собранные под sm_120 движок и GPU Vision |
-| `/opt/strata/app` | Проверенный релизный Control 0.1.56 с Python 3.12.15 |
+| `/opt/strata/bin` | Symlink на engine/Vision 0.1.59; 0.1.56 сохранён как `bin-0.1.56` |
+| `/opt/strata/app` | Symlink на Control 0.1.59.1; 0.1.56 сохранён как `app-0.1.56` |
 | `/opt/strata/venv` | Сохранённая прежняя среда; используется проверкой готовности |
 | `/opt/strata/ops` | Проверка готовности и ограниченный watchdog |
 | `/srv/models/qwen38-flash-next-strata` | Подготовленные веса, tokenizer, PLE, MTP, mmproj |
@@ -33,7 +33,12 @@ SSE и передаёт отключение клиента серверу. Ст
 | `/etc/strata/gateway-secrets.json`, `gateway.conf` | Частные данные/конфигурация шлюза; не публиковать |
 | `strata-api.service` | Один выполняемый запрос и FIFO; отдельный пользователь, readonly-система |
 | `strata-gateway.service` | Совместимые явные LAN/loopback listeners на 1919 |
-| `strata-watchdog.timer` | HTTP/process liveness без inference и повторной отправки промптов |
+| `strata-watchdog.timer` | Legacy liveness для fixed-only; в multi-model режиме 14 ноября выключен |
+
+В multi-model режиме (`ornith-gateway`) watchdog **выключен**: он считал
+намеренно выгруженный Qwen сбоем, перезапускал API во время переключения и
+портил pinned arena. Жизненным циклом владеет gateway; systemd и `Restart=on-failure`
+самого API остаются. Для отдельной fixed-модели шаблон watchdog сохранён в репозитории.
 
 Watchdog ждёт три подтверждённых сбоя, выдерживает минимум 10 минут между
 восстановлениями и ограничен тремя за час. systemd также ограничивает повторные
@@ -46,7 +51,7 @@ Vision вызывало ложный перезапуск и `start-limit-hit`; 
 содержит arena экспертов и освобождается при остановке. CUDA/NVIDIA и общий
 nvidia-power-limit.service сохраняются отдельно от движка.
 
-## Проверенный профиль
+## Проверенный профиль (историческая база 0.1.56)
 
 Комплект из [релиза Strata v0.2.10](https://github.com/Niko1221/Strata/releases/tag/v0.2.10):
 Control 0.1.56 (commit `974074c549754029882c1cea1ce0e1e7674d7ba2`),
@@ -83,6 +88,36 @@ TTFT 97 против 50–52 с. Через итоговый рабочий шл
 OpenCode/Pi read-tool turns на Medium и новый Vision-запрос. Старт до готовности
 занял около 108 с. Исходный HF-чекпойнт сохранён как данные модели; зависимостей
 от старого движка нет. Проверка Windows/Linux GUI отдельно не проводилась.
+
+## Обновление 14 ноября: Control 0.1.59.1 / engine 0.1.59
+
+Официальные пакеты [Strata v0.2.13](https://github.com/Niko1221/Strata/releases/tag/v0.2.13)
+скачаны с GitHub и проверены по опубликованным SHA-256:
+Control 0.1.59.1 (`73fb6128…c022ac`) и CUDA13 engine 0.1.59
+(`42ab04fa…42610`). Новые каталоги развёрнуты рядом, затем `/opt/strata/app`
+и `/opt/strata/bin` атомарно переведены на symlink; `app-0.1.56` и `bin-0.1.56`
+остаются для отката. Прежние модель, pack, tokenizer, MTP, профиль экспертов,
+262144 контекст, INT8 KV и gateway не менялись.
+
+Проверка на этой VM, последовательно, с пустой GPU:
+
+| Этап | 0.1.56 / PolyStrata switch | 0.1.59 / PolyStrata switch |
+| --- | ---: | ---: |
+| Qwen холодный старт | 98–100 с | 98 с |
+| Qwen `/unload` | ~22 с | **7,8 с** |
+| Qwen warm `/load` | 36 с | **30,2 с** |
+| Ornith → Qwen warm | 36 с | **30 с** |
+| Qwen → Ornith | 42 с | **28–32 с** |
+
+Длинный 21681-токен prompt: 3549 tok/s prefill и 95.9→124.4 tok/s decode
+после прогрева, маркер точный; tool call даёт валидный JSON. Это небольшая
+серия, не универсальная гарантия скорости. `strata-watchdog.timer` выключен
+и снят с автозапуска. Qwen и llama.cpp не стартуют автоматически вместе с
+Ornith; Qwen включается явным выбором через общий gateway.
+
+Откат при проблеме: остановить Qwen, вернуть symlink `app → app-0.1.56` и
+`bin → bin-0.1.56`, выполнить `daemon-reload`, запустить обычный сервис и
+проверить `/health`. Не удалять каталоги 0.1.59.1/0.1.59 до приёмки.
 
 ## Сравнение после обновления 3 ноября 2026
 
@@ -166,7 +201,7 @@ watchdog/API, вернуть прежние app/bin и `model-before.json`, уб
 ```sh
 python3 -m unittest discover -s services/strata -p 'test_*.py'
 python3 -m unittest discover -s services/hub/tests
-ssh vm-5200 'systemctl is-active strata-api strata-gateway strata-watchdog.timer'
+ssh vm-5200 'systemctl is-active strata-api strata-gateway; systemctl is-active strata-watchdog.timer || true'
 curl -fsS http://127.0.0.1:18019/health
 curl -fsS -H 'Authorization: Bearer local' http://127.0.0.1:18019/v1/models
 ```

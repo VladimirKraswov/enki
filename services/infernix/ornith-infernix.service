@@ -1,0 +1,36 @@
+[Unit]
+Description=Ornith 1.5 122B NVFP4 on Infernix (RTX 5090, 262K)
+After=network-online.target nvidia-power-limit.service
+Wants=network-online.target
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=vladimir
+Group=vladimir
+WorkingDirectory=/var/lib/ornith-infernix
+Environment=HOME=/var/lib/ornith-infernix
+ExecStart=/home/vladimir/src/Infernix/build/apps/infernix-serve /srv/models/ornith-infernix/Ornith-1.5-122B-NVFP4-Infernix-00001-of-00003.infernix --host 127.0.0.1 --port 1922 --model-id ornith15-122b --max-context 262144 --max-concurrency 2 --kv-dtype int8 --spec mtp --draft-tokens auto --host-context-mib 4096 --expert-ram-layout full --prefix-cache-file /var/lib/ornith-infernix/prefix-cache.bin --expert-state /var/lib/ornith-infernix/expert-state.bin
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=15min
+TimeoutStopSec=120
+KillMode=control-group
+OOMPolicy=stop
+LimitMEMLOCK=infinity
+OOMScoreAdjust=-500
+RuntimeDirectory=ornith-infernix
+RuntimeDirectoryMode=0700
+StateDirectory=ornith-infernix
+StateDirectoryMode=0700
+LogsDirectory=ornith-infernix
+LogsDirectoryMode=0700
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ornith-infernix /var/log/ornith-infernix /run/ornith-infernix
+MemoryAccounting=yes
+
+[Install]
+WantedBy=multi-user.target

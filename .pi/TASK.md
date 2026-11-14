@@ -1,3 +1,18 @@
+# TASK — 2026-11-14: Infernix 262K, VM cleanup, cross-model evaluation
+
+Владелец попросил обновить Strata/PolyStrata, ускорить switching и заменить Ornith
+на Infernix NVFP4 с 260K, затем сравнить Qwen/Ornith инженерными задачами.
+Сделано: Strata Control0.1.59.1/engine0.1.59 staged+A/B+promoted, SHA OK,
+app/bin symlinks with0.1.56 rollback; watchdog disabled; switch Qwen warm30s,
+Ornith28–32s. Gateway fixes: exclusive RAM option, early fail on systemd failed,
+service state recovery, no-block start, Qwen unload/load distinction (8 tests).
+Model eval 4 synthetic tasks: Qwen3/4, Ornith3/4; backend/telemetry/ESP32 pass
+both, 3D fails both for distinct real contract bugs; Qwen ~2.2x faster. Infernix
+repo8200dfa built with CUDA13.4/sm120a; 75GB artifact part1 SHA OK, parts2–3
+still downloading after host thinpool paused VM at100%. OrcaRouter135G unreferenced
+removed + fstrim; thinpool92.88%, VM running. Pending: artifact SHA, 262K plan,
+250K/tool/quality/Enki acceptance, then activate service/gateway and update context.
+
 # TASK — 2026-11-14: Ornith 122B PolyStrata + MTP
 
 Владелец попросил перепроверить движок и выжать скорость без снижения квантования.

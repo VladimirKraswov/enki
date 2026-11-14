@@ -61,6 +61,44 @@ class GatewayTest(unittest.TestCase):
             self.get("/v1/model-control/status", key="wrong")
         self.assertEqual(caught.exception.code, 401)
 
+    def test_failed_state_recovers_only_when_active_model_is_healthy(self):
+        self.module.STATE.phase = "failed"
+        self.module.STATE.error = "previous failure"
+        with mock.patch.object(self.module, "qwen_ready", return_value=True):
+            selected = self.get("/v1/model-control/select", {"model": "qwen38-flash-next", "agent": "pi"}, key="test-key")
+        self.assertTrue(selected["ready"])
+        self.assertIsNone(selected["error"])
+
+    def test_unloaded_qwen_uses_load_not_service_restart(self):
+        self.module.STATE.active = self.module.ORNITH
+        with mock.patch.object(self.module, "stop_ornith"), \
+                mock.patch.object(self.module, "qwen_model_state", return_value="unloaded"), \
+                mock.patch.object(self.module, "qwen_action") as action, \
+                mock.patch.object(self.module, "start_unit") as start, \
+                mock.patch.object(self.module, "wait_for"):
+            self.module.switch_to(self.module.QWEN, 1)
+        action.assert_called_once_with("load")
+        start.assert_not_called()
+        self.assertEqual(self.module.STATE.active, self.module.QWEN)
+        self.assertEqual(self.module.STATE.phase, "ready")
+
+    def test_exclusive_ram_stops_qwen_service(self):
+        self.module.STATE.active = self.module.QWEN
+        self.module.ORNITH_EXCLUSIVE_RAM = True
+        with mock.patch.object(self.module, "qwen_action"), \
+                mock.patch.object(self.module, "wait_gpu_free"), \
+                mock.patch.object(self.module, "stop_qwen_service") as stop_qwen, \
+                mock.patch.object(self.module, "start_unit") as start_unit, \
+                mock.patch.object(self.module, "wait_for"):
+            self.module.switch_to(self.module.ORNITH, 1)
+        stop_qwen.assert_called_once_with()
+        start_unit.assert_called_once_with(self.module.ORNITH_SERVICE)
+
+    def test_wait_for_aborts_when_owned_service_failed(self):
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0)):
+            with self.assertRaises(RuntimeError):
+                self.module.wait_for(self.module.ORNITH, timeout=1)
+
     def test_unit_start_does_not_block_on_readiness(self):
         with mock.patch("subprocess.run") as run:
             run.return_value.returncode = 0
