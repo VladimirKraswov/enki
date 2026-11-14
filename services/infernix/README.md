@@ -1,8 +1,7 @@
 # Infernix: Ornith 122B at 262K on RTX 5090
 
-Status: **staged for acceptance**, not yet the active production backend. PolyStrata
-remains the fallback until the artifact SHA-256, 262K plan, tools, quality and
-switch cycle pass on this VM.
+Status: **active production backend since 2026-11-14**. PolyStrata remains installed
+and disabled as the measured fallback.
 
 ## Why evaluate it
 
@@ -12,10 +11,10 @@ experts (60.75 GiB) in NVFP4, MTP and DFlash2 drafters, vision and the model's
 sampling metadata. The official guide recommends 262144 context, INT8 KV, MTP
 with two confidence-gated drafts and `--host-context-mib 4096`.
 
-This VM has a 32 GB RTX 5090 and **176 GiB RAM** (not 300+ GiB): about 70 GiB
-pinned for the model plus 4 GiB prefix host cache still fit. The Linux
-`LimitMEMLOCK` must be infinite; the login shell's default limit here is only
-about 21 GiB, so Infernix must run under its systemd unit.
+This VM has a 32 GB RTX 5090 and **176 GiB RAM** (not 300+ GiB): 68 GiB pinned
+for the model plus 4 GiB prefix host cache fit. The Linux `LimitMEMLOCK` must be
+infinite; the login shell's default limit here is only about 21 GiB, so Infernix
+must run under its systemd unit.
 
 ## Pinned inputs
 
@@ -69,11 +68,33 @@ infernix-serve part-00001.infernix
 ```
 
 `ornith-gateway` connects to port 1922 with `ORNITH_SERVICE=ornith-infernix`
-and `ORNITH_EXCLUSIVE_RAM=1`. The exclusive flag stops `strata-api` after Qwen
-unload so its 64 GiB private expert arena does not compete with Infernix's
-~70 GiB pinned RAM. Returning from Infernix to Qwen therefore restarts Qwen and
-is slower than a warm `/load`; this is the RAM trade-off for maximum Ornith
-speed.
+and `ORNITH_EXCLUSIVE_RAM=0`. Keeping Qwen's unloaded API and its arena alive
+still leaves enough RAM for Infernix (68 GiB pinned + 63 GiB shared); this keeps
+the return to Qwen warm. Measured switching: Qwen→Infernix 60–95 s (Infernix
+must reload 68 GiB), Infernix→Qwen 62 s. PolyStrata at the same 262K switches in
+28–32 s.
+
+## Measured on this VM
+
+The official artifact SHA-256 and a 262,144-token plan pass. The 250K test sent
+220,044 prompt tokens and recovered the exact marker. Tool JSON is valid.
+
+| Check | Infernix NVFP4 | PolyStrata Q4_K_XL |
+| --- | ---: | ---: |
+| Context | 262,144 | 262,144 |
+| 65K prefill | **3,928 tok/s** | 2,130 tok/s |
+| 220K prompt total | **68.3 s** | 129.2 s |
+| 220K prefill | **3,445 tok/s** | 1,727 tok/s |
+| Decode after 220K | 28.3 tok/s | **34.7 tok/s** |
+| Short/medium decode | 28–34 tok/s | **47–50 tok/s** |
+| Qwen→Ornith switch | 60–95 s | **28–32 s** |
+| Ornith→Qwen switch | 62 s | **28–32 s** |
+
+Infernix wins long-prompt TTFT and end-to-end time by about 1.9×; PolyStrata
+wins ordinary short decode and switching. On the 32 GB / PCIe 3 / DDR4 E5 VM,
+Infernix does not reproduce the author's 77–103 tok/s (their i9/DDR5/PCIe 5).
+The active choice is Infernix because the assignment prioritizes maximum speed
+at 260K. For mostly short prompts, PolyStrata is the better daily backend.
 
 ## Acceptance gates
 
@@ -92,4 +113,5 @@ Keep `ornith-poly.service` installed and disabled at boot. Rollback is:
 `systemctl disable --now ornith-infernix`, set gateway
 `ORNITH_SERVICE=ornith-poly`, `ORNITH_BASE=http://127.0.0.1:1923` and
 `ORNITH_EXCLUSIVE_RAM=0`, then start `ornith-poly` and restart the gateway.
-No Qwen data or model artifact is removed.
+No Qwen data or model artifact is removed. PolyStrata's 262K config and the
+75 GB Q4 artifact remain ready.

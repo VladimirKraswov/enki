@@ -10,8 +10,16 @@ Model eval 4 synthetic tasks: Qwen3/4, Ornith3/4; backend/telemetry/ESP32 pass
 both, 3D fails both for distinct real contract bugs; Qwen ~2.2x faster. Infernix
 repo8200dfa built with CUDA13.4/sm120a; 75GB artifact part1 SHA OK, parts2–3
 still downloading after host thinpool paused VM at100%. OrcaRouter135G unreferenced
-removed + fstrim; thinpool92.88%, VM running. Pending: artifact SHA, 262K plan,
-250K/tool/quality/Enki acceptance, then activate service/gateway and update context.
+removed + fstrim; thinpool92.88%, VM running. Artifact all3 SHA OK; plan262K fits; Infernix active on1922/alias ornith15-122b,
+context262144, MTP, 4906 experts, start49–52s. Acceptance: tool JSON PASS,
+65K marker exact, 220044-token marker exact; short decode28–34, 220K prompt68s.
+PolyStrata at same262K: prefill1727/total129s but decode34–50 and switch28–32.
+Infernix selected for260K priority; Poly installed/disabled fallback; Qwen active
+unloaded and both fit (no exclusive), so Qwen return stays warm. Enki models.json
+context/name updated+providers.refresh; new session01ea8339 answered exact.
+Eval: Qwen3/4, PolyOrnith3/4, InfernixOrnith3/4; Infernix only 3D pass, backend
+hit4K length. Host thinpool incident paused VM at100%; recovered via thinpool
+extend+resume, removed unreferenced OrcaRouter135G and fstrim; pool92.9%, stable.
 
 # TASK — 2026-11-14: Ornith 122B PolyStrata + MTP
 

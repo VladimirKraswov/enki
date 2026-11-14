@@ -383,3 +383,19 @@ PolyStrata слушает только loopback 1923; Hub по-прежнему 
 не стартуют автоматически вместе с Ornith: Qwen запускается явным выбором,
 llama.cpp оставлен выключенным fallback. Подробности и точный pinned commit:
 [services/ornith](../services/ornith/README.md).
+
+## RTX5090: Ornith NVFP4 на Infernix — 2026-11-14
+
+С 14 ноября Ornith работает на Infernix `8200dfa` с NVFP4-артефактом
+`wallawalla47/Ornith-1.5-122B-NVFP4-Infernix` (75.3 GB, SHA-256 проверен),
+CUDA13.4, `--max-context 262144 --max-concurrency 1 --kv-dtype int8
+--spec mtp --draft-tokens auto --host-context-mib 4096`. Публичный model ID
+остаётся `ornith15-122b`; Pi `contextWindow` обновлён до262144.
+
+На этой VM 65K prefill — 3928 tok/s, 220K prompt — 68.3 с; PolyStrata при том же
+262K: 2130/1727 tok/s и129.2 с. Но короткий decode Infernix 28–34 tok/s против
+47–50 у PolyStrata, а переключение с Qwen —60–95 с против28–32. Infernix выбран
+для приоритета 260K/long-prefill; PolyStrata `ornith-poly` остаётся выключенным
+fallback. Qwen и Infernix помещаются вместе (Qwen arena64 GiB + Infernix pinned
+68 GiB), поэтому Qwen API не останавливается и возврат к нему тёплый.
+Подробности: [services/infernix](../services/infernix/README.md).

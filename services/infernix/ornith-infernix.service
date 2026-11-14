@@ -11,7 +11,7 @@ User=vladimir
 Group=vladimir
 WorkingDirectory=/var/lib/ornith-infernix
 Environment=HOME=/var/lib/ornith-infernix
-ExecStart=/home/vladimir/src/Infernix/build/apps/infernix-serve /srv/models/ornith-infernix/Ornith-1.5-122B-NVFP4-Infernix-00001-of-00003.infernix --host 127.0.0.1 --port 1922 --model-id ornith15-122b --max-context 262144 --max-concurrency 2 --kv-dtype int8 --spec mtp --draft-tokens auto --host-context-mib 4096 --expert-ram-layout full --prefix-cache-file /var/lib/ornith-infernix/prefix-cache.bin --expert-state /var/lib/ornith-infernix/expert-state.bin
+ExecStart=/home/vladimir/src/Infernix/build/apps/infernix-serve /srv/models/ornith-infernix/Ornith-1.5-122B-NVFP4-Infernix-00001-of-00003.infernix --host 127.0.0.1 --port 1922 --model-id ornith15-122b --max-context 262144 --max-concurrency 1 --kv-dtype int8 --spec mtp --draft-tokens auto --host-context-mib 4096 --expert-ram-layout full --prefix-cache-file /var/lib/ornith-infernix/prefix-cache.bin --expert-state /var/lib/ornith-infernix/expert-state.bin
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=15min

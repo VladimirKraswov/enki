@@ -4,11 +4,14 @@
 
 **2026-11-14 update:** Qwen control/engine moved to Strata 0.1.59.1/0.1.59;
 warm Qwen load fell from 36 to 30 s and Ornith→Qwen/Qwen→Ornith measured
-28–32 s. The legacy watchdog was disabled because it restarted the deliberately
-unloaded Qwen during switches. Qwen stays loaded when switching to PolyStrata.
-An Infernix NVFP4 candidate for 262K is staged under
-[services/infernix](../infernix/README.md); it becomes active only after its
-acceptance passes.
+28–32 s on PolyStrata. The legacy watchdog was disabled because it restarted the
+deliberately unloaded Qwen during switches.
+
+Ornith is now **active on Infernix NVFP4 at 262,144 context** with the same
+public model ID; its measured 220K prompt time is 68 s against PolyStrata's
+129 s, while PolyStrata is faster on short decode (47–50 against 28–34 tok/s)
+and switching. `ornith-poly` (262K config) remains installed and disabled as
+the fallback. See [services/infernix](../infernix/README.md).
 
 VM 5200 has a 32 GB RTX 5090, 32 vCPU, 176 GiB RAM and a 1 TB root disk. The
 122B model does not fit VRAM, so this is GPU + system-RAM expert offload, not a

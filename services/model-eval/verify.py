@@ -107,6 +107,7 @@ struct SerialFake {
   void println(const char* s) { serial_output += s; serial_output += "\n"; }
   void println(int v) { serial_output += std::to_string(v); serial_output += "\n"; }
   void println(float v) { serial_output += std::to_string(v); serial_output += "\n"; }
+  void println(float v, int digits) { char b[64]; std::snprintf(b, sizeof(b), "%.*f\\n", digits, v); serial_output += b; }
   template<typename... Args> void printf(const char* fmt, Args... args) { char b[256]; std::snprintf(b, sizeof(b), fmt, args...); serial_output += b; }
 };
 extern SerialFake Serial;
@@ -120,6 +121,7 @@ class DallasTemperature {
  public:
   explicit DallasTemperature(OneWire*) {}
   void begin() { ++sensor_begin_count; }
+  int getDeviceCount() { return 1; }
   void setWaitForConversion(bool) {}
   bool isConversionComplete() { return true; }
   void requestTemperatures() { ++sensor_request_count; }
