@@ -10,6 +10,7 @@ import { PiDialog } from "./components/PiDialog";
 import { HostDialogs } from "./components/HostDialogs";
 import { PluginUiBelowComposer, PluginUiPanel } from "./components/PluginUiPanel";
 import { McpRecoveryNotice } from "./components/McpRecoveryNotice";
+import { PermissionRuntime } from "./components/PermissionCenter";
 import { RUNTIME_CAPABILITIES } from "./agent/runtime/backend";
 import { store, useAppSelector, applyTheme } from "./state/store";
 import { Sidebar } from "./components/Sidebar";
@@ -106,7 +107,7 @@ export default function App() {
         {layout.sidebarOpen && <Sidebar />}
         <BrowserPresence />
         <ScheduleRuntime />
-        <HubRuntime /><MemoryRuntime /><UpdateRuntime />
+        <HubRuntime /><MemoryRuntime /><UpdateRuntime /><PermissionRuntime />
         <div
           className="resizer-v"
           style={{ display: layout.sidebarOpen ? undefined : "none" }}

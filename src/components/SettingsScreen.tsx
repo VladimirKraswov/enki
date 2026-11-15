@@ -13,6 +13,7 @@ import { store, useAppState } from "../state/store";
 import { ACCENTS, DEFAULT_APPEARANCE } from "../state/appearance";
 import { defaultAsr, getAsrKey, setAsrKey, validateAsr } from "../voice/asr";
 import { ComputerSettings } from "./ComputerSettings";
+import { PermissionCenter } from "./PermissionCenter";
 import { AgentControlSettings } from "./AgentControlSettings";
 import { PiSettings } from "./PiSettings";
 import { UsageSettings } from "./UsageSettings";
@@ -33,6 +34,7 @@ export const SETTINGS_SECTIONS = [
   { id: "hub", title: "Облачная библиотека", group: "Общие возможности", icon: "file", description: "Общие пакеты, история и метрики устройств", keywords: "облако hub синхронизация история устройства" },
   { id: "capabilities", title: "Навыки и инструменты", group: "Общие возможности", icon: "file", description: "Общий каталог навыков и MCP для агента Enki", keywords: "skills tools MCP источники инструменты общие Pi" },
   { id: "browser", title: "Браузер", group: "Общие возможности", icon: "browser", description: "Управляемый Chromium для агента Enki", keywords: "browser playwright chromium MCP окна вкладки формы пароли" },
+  { id: "permissions", title: "Разрешения", group: "Приложение", icon: "shield", description: "Запись экрана, универсальный доступ, микрофон и файлы", keywords: "macos tcc запись экрана универсальный доступ микрофон полный доступ диск файлы" },
   { id: "computer", title: "Управление компьютером", group: "Общие возможности", icon: "monitor", description: "Только macOS: курсор агента, Cua Driver и системные разрешения", keywords: "запись экрана универсальный доступ мышь" },
   { id: "agentControl", title: "API для агентов", group: "Общие возможности", icon: "server", description: "Управление Desktop через локальный MCP без мышки", keywords: "mcp api automation управление агент subagent" },
   { id: "modelServices", title: "Сервисы моделей", group: "Общие возможности", icon: "server", description: "Переключение моделей, загрузка и доступные агенты", keywords: "inference api модели loader прогресс Pi OpenCode" },
@@ -153,6 +155,7 @@ export function SettingsScreen() {
         {capabilitiesVisited && <div hidden={section !== "capabilities"}><CapabilitiesSettings onDirtyChange={setCapabilitiesDirty} onNavigate={navigate}/></div>}
         {hubVisited && <div hidden={section !== "hub"}><HubSettings onDirtyChange={setHubDirty}/></div>}
         {browserVisited && <div hidden={section !== "browser"}><BrowserSettings onDirtyChange={setBrowserDirty}/></div>}
+        {section === "permissions" && <PermissionCenter mode="settings"/>}
         {section === "computer" && <ComputerSettings/>}
         {section === "agentControl" && <AgentControlSettings/>}
 

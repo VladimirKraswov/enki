@@ -18,6 +18,8 @@ const SRC = fileURLToPath(new URL("../src", import.meta.url));
  */
 const ALLOWED = new Set([
   "components/ComputerSettings.tsx", // Cua Driver: macOS-only integration
+  "components/PermissionCenter.tsx", // gated by platform(): macOS TCC center
+  "permissions/status.ts", // its macOS-only rows and Settings anchors
   "state/computer.ts", // its readiness message
   "voice/captureError.ts", // per-platform permission hints
   "native/platform.ts", // the detector itself

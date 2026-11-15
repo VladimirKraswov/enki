@@ -29,6 +29,7 @@ mod runtime_ui;
 mod sound;
 mod storage_info;
 mod storage_location;
+mod system_permissions;
 mod tray;
 mod updates;
 mod usage_store;
@@ -206,6 +207,9 @@ pub fn run() {
             computer::computer_status,
             computer::computer_set_enabled,
             computer::computer_action,
+            system_permissions::system_permissions_status,
+            system_permissions::system_permission_request,
+            system_permissions::system_permissions_restart,
             control::agent_control_ready,
             control::agent_control_complete,
             control::agent_control_status,
