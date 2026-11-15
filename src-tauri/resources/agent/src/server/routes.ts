@@ -173,7 +173,9 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     const current = scoped(request);
     const directory = textParam(object(request.body).directory, "directory", 4096);
     if (!validDirectory(directory)) throw new HttpError(400, "Укажите существующую папку проекта.");
-    return sessionDTO(await runtime.registry.moveToDirectory(current.id, directory));
+    const moved = await runtime.registry.moveToDirectory(current.id, directory);
+    runtime.scheduler.rehome(current.id, directory);
+    return sessionDTO(moved);
   });
   /** Create a project folder under one root, so a project does not require an
    * already existing directory on disk. */

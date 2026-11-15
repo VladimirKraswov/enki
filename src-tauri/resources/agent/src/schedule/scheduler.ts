@@ -161,6 +161,17 @@ export class Scheduler {
     return task;
   }
 
+  /** Keep a chat's timers attached after its project directory changes. */
+  rehome(sessionID: string, directory: string): number {
+    let changed = 0;
+    for (const task of this.load()) {
+      if (task.sessionID !== sessionID || task.directory === directory) continue;
+      this.save({ ...task, directory });
+      changed++;
+    }
+    return changed;
+  }
+
   /** Pause/resume. Resuming starts a full interval from now; nothing is sent immediately. */
   toggle(id: string, enabled: boolean, now = Date.now()): ScheduleDTO {
     const task = this.load().find((t) => t.id === id);

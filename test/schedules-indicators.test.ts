@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { activeTimers, directoryTimers } from "../src/schedules/indicators";
+import { activeTimers, directoryTimers, timerAriaLabel } from "../src/schedules/indicators";
 import { TimerBadge } from "../src/components/TimerBadge";
 import type { ScheduledTask } from "../src/schedules/tasks";
 
@@ -32,6 +32,12 @@ it("lists enabled timers of a project for the collapsed hint", () => {
   expect(directoryTimers(tasks, "/work/a").map(t => t.id)).toEqual(["t1"]);
   expect(directoryTimers(tasks, "/work/b").map(t => t.id)).toEqual(["t2"]);
   expect(directoryTimers(tasks, "/work/c")).toEqual([]);
+});
+
+it("distinguishes one-shot and recurring timers in the accessible label", () => {
+  expect(timerAriaLabel([task({ mode: "once" })])).toBe("Таймер Enki");
+  expect(timerAriaLabel([task(), task({ id: "t2", mode: "once" })])).toBe("Повторяющийся таймер Enki");
+  expect(timerAriaLabel([])).toBe("Таймер Enki");
 });
 
 it("renders a clock badge with the next-run tooltip and nothing without timers", () => {

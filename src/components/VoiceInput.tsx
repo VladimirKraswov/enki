@@ -269,19 +269,21 @@ export function VoiceInput({ disabled, onActiveChange, draftTarget, holdForRecov
     </div>}
     {phase === 'idle' ? <button className="icon-btn" title="Надиктовать" aria-label="Надиктовать" disabled={disabled || pending.length > 0} onClick={() => void start()}><Icon name="mic"/></button> :
             <div className="voice-recording" role="status" aria-label="Надиктовка">
-        <button className="voice-cancel icon-btn" aria-label={phase === 'requesting' || phase === 'preparing' ? 'Отменить диктовку' : phase === 'recording' ? 'Остановить диктовку' : 'Прекратить ожидание распознавания'} title={phase === 'requesting' || phase === 'preparing' ? 'Отменить' : 'Готовый текст и сохранённый звук останутся'} onClick={cancel}><Icon name="close"/></button>
         {phase === 'recording' ? <>
           <VoiceWaveform level={level}/>
           <span className="voice-ready" role="status">Можно говорить</span>
           <span className="voice-timer" title={noVad ? 'Автостоп по тишине недоступен. Остановите запись вручную.' : 'Запись остановится после минуты тишины'}>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span>
-          <button className="voice-finish icon-btn" aria-label="Закончить и распознать" title="Закончить диктовку" onClick={finish}><Icon name="stop" size={14}/></button>
-        </> : <div className="voice-preparing">
-          <span className="voice-preparing-bars" aria-hidden="true"><i/><i/><i/><i/><i/></span>
-          <span className="voice-preparing-text">
-            <b>{phase === 'requesting' ? 'Подключаю микрофон…' : phase === 'preparing' ? 'Готовлю запись…' : 'Распознаю…'}</b>
-            <small>{phase === 'transcribing' ? 'Последние фрагменты' : 'Пока не говорите'}</small>
-          </span>
-        </div>}
+          <button className="voice-finish voice-stop icon-btn" aria-label="Остановить диктовку" title="Остановить запись и распознать" onClick={finish}><Icon name="stop" size={14}/></button>
+        </> : <>
+          <button className="voice-cancel icon-btn" aria-label={phase === 'transcribing' ? 'Прекратить ожидание распознавания' : 'Отменить диктовку'} title={phase === 'transcribing' ? 'Остановить ожидание' : 'Отменить'} onClick={cancel}><Icon name="close"/></button>
+          <div className="voice-preparing">
+            <span className="voice-preparing-bars" aria-hidden="true"><i/><i/><i/><i/><i/></span>
+            <span className="voice-preparing-text">
+              <b>{phase === 'requesting' ? 'Подключаю микрофон…' : phase === 'preparing' ? 'Готовлю запись…' : 'Распознаю…'}</b>
+              <small>{phase === 'transcribing' ? 'Последние фрагменты' : 'Пока не говорите'}</small>
+            </span>
+          </div>
+        </>}
       </div>}
   </div>;
 }

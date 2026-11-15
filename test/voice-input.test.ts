@@ -83,8 +83,9 @@ it("records and transcribes even when Web Audio never resumes", async () => {
   expect(capture).toHaveBeenCalledOnce();
   // Два старта: пре-ролл во время подготовки и основная запись.
   expect(started).toHaveBeenCalledTimes(2);
-  expect(document.querySelector('button[aria-label="Закончить и распознать"]')).not.toBeNull();
-  await click("Закончить и распознать");
+  expect(document.querySelectorAll('button[aria-label="Остановить диктовку"]')).toHaveLength(1);
+  expect(document.querySelector('button[aria-label="Отменить диктовку"]')).toBeNull();
+  await click("Остановить диктовку");
   await act(async()=>{await vi.waitFor(()=>expect(stop).toHaveBeenCalledOnce());});
   // Два независимых фрагмента — пре-ролл и основная запись — распознаются оба,
   // поэтому ни одно слово не теряется и ничего не дублируется.

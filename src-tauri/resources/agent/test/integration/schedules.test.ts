@@ -55,6 +55,18 @@ it("waits while the chat is busy and pauses for a deleted chat", async () => {
   expect(h.runtime.scheduler.list({}).tasks.find((t) => t.id === created.body.id)).toMatchObject({ enabled: false, state: "error" });
 });
 
+it("moving a chat keeps its timers attached to the new project directory", async () => {
+  h = await harness();
+  const dir = h.project("timer-old"), target = h.project("timer-new");
+  const sid = await newSession(h, dir);
+  const task = h.runtime.scheduler.add({ directory: dir, sessionID: sid, title: "move", prompt: "keep", minutes: 15, mode: "repeat", model: h.model() });
+  const moved = await h.request("POST", `/sessions/${sid}/move`, { directory: target });
+  expect(moved.status).toBe(200);
+  expect(h.runtime.scheduler.list({ sessionID: sid }).tasks[0]).toMatchObject({ id: task.id, directory: target });
+  expect(h.runtime.scheduler.list({ directory: dir }).tasks).toHaveLength(0);
+  expect(h.runtime.scheduler.list({ directory: target }).tasks).toHaveLength(1);
+});
+
 it("a crash while dispatching pauses the timer; overdue repeats move forward", async () => {
   const data = tempDir("timer-crash");
   const scripted = await scriptedRuntime(path.join(data, "scripted-agent"));

@@ -2361,7 +2361,7 @@ kbd {
 /* Recording owns a full, in-flow row; files cannot displace its controls. */
 .composer-voice-active .composer-controls-left,
 .composer-voice-active .composer-controls-right,
-.composer-voice-active .composer-actions > :not(.voice-control):not(.stop-btn) { display: none; }
+.composer-voice-active .composer-actions > :not(.voice-control) { display: none; }
 .composer-voice-active .composer-actions { grid-column: 1 / -1; grid-row: 1; width: 100%; min-width: 0; }
 .composer-voice-active .voice-control { width: 100%; min-width: 0; }
 .composer-voice-active .voice-recording { position: static; width: 100%; height: auto; min-height: 44px; gap: 8px; }
@@ -3332,6 +3332,10 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .voice-recording .voice-ready { position: absolute; left: 50px; bottom: calc(100% + 3px); color: var(--text-dim); font-size: .714286rem; white-space: nowrap; }
 .voice-recording .voice-timer { color: var(--text-dim); font-size: .714286rem; }
 .voice-recording .voice-finish { background: var(--bg-raised); color: var(--text); }
+/* One stop control: while recording it is the red dictation stop; the normal
+   session stop is not rendered. */
+.voice-recording .voice-stop { background: var(--err); color: #fff; }
+.voice-recording .voice-stop:hover { opacity: .86; }
 
 /* Titles yield their width to fixed status and action slots. */
 .session-row-wrap, .session-item { min-width:0; }

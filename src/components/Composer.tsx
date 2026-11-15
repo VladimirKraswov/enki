@@ -412,12 +412,12 @@ export function Composer() {
           </div>
           <div className="composer-actions">
           <VoiceInput disabled={!connected || s.ui.workspacePreparing} onActiveChange={setVoiceActive} />
-          {((running && session) || s.ui.sending) && (
+          {!voiceActive && ((running && session) || s.ui.sending) && (
             <button
               className="stop-btn"
               onClick={() => running && session ? void store.stopSession(session.id) : store.cancelPreparation()}
-              aria-label="Остановить ответ"
-              title={running ? "Остановить ответ" : "Отменить подготовку"}
+              aria-label={running ? "Остановить сессию" : "Отменить подготовку"}
+              title={running ? "Остановить сессию" : "Отменить подготовку"}
             >
               <Icon name="stop" size={14} />
             </button>

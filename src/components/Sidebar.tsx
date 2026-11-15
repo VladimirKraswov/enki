@@ -1,6 +1,6 @@
 import {SessionSpinner} from "./SessionSpinner";
 import {taskScheduler} from "../schedules/tasks";
-import {activeTimers, directoryTimers} from "../schedules/indicators";
+import {activeTimers, directoryTimers, timerAriaLabel} from "../schedules/indicators";
 import {TimerBadge} from "./TimerBadge";
 import {ScheduleDialog} from "./ScheduleDialog";
 import { UpdateBadge } from "../updates/runtime";
@@ -32,7 +32,7 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   const mark = sessionWorkMark(pending, status?.type, confirmed);
   // The timer is independent of the task state: a working or failed chat can
   // still have a recurring Enki schedule. Never let another indicator hide it.
-  const timer = <TimerBadge tasks={timers} label="Повторяющийся таймер Enki" />;
+  const timer = <TimerBadge tasks={timers} label={timerAriaLabel(timers)} />;
   const withTimer = (indicator: ReactNode) => <>{indicator}{timer}</>;
   if (mark === "waiting") return withTimer(<span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>);
   if (mark === "unconfirmed") return withTimer(<span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>);

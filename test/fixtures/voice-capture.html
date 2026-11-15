@@ -15,7 +15,7 @@ try {
  await until(()=>document.querySelector('.voice-ready'));
  if(!called||!records[0]?.bytes)throw Error('No synthetic checkpoint');
  await wait(400);const a=document.querySelector('canvas').toDataURL();await wait(55);const b=document.querySelector('canvas').toDataURL();if(a===b)throw Error('Wave frozen');
- document.querySelector('[aria-label="Закончить и распознать"]').click();await until(()=>document.querySelector('[aria-label="Надиктовать"]'));
+ document.querySelector('[aria-label="Остановить диктовку"]').click();await until(()=>document.querySelector('[aria-label="Надиктовать"]'));
  result={pass:!document.querySelector('[role="alert"]'),calledSynthetic:called,records,text:store.getDraft()};
 } catch(e) { result={pass:false,error:String(e),records,calledSynthetic:called}; }
 await context?.close();window.fixtureNativeResult=result;if(window.webkit?.messageHandlers?.result)window.webkit.messageHandlers.result.postMessage(result);

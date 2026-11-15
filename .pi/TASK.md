@@ -1,3 +1,27 @@
+# TASK — 2026-11-15: таймеры в сессиях и единая кнопка Stop
+
+Таймеры Enki привязаны к `sessionID`, а не к видимому чату: создание из MCP
+проверяет `directory`/`session_id`, событие `schedule.updated` обновляет значок
+часа в sidebar. Исправлены два края: при переносе чата его таймеры теперь
+переезжают в новый проект (`Scheduler.rehome`), а accessible-label различает
+одноразовый и повторяющийся таймер. Регрессии: integration/schedules move и
+schedules-indicators.
+
+В composer во время диктовки остаётся одна красная кнопка «Остановить диктовку»
+(она завершает запись и запускает распознавание). Обычная белая кнопка
+«Остановить сессию» в это время не рендерится; когда диктовка не идёт, она
+работает как раньше. X-отмена показывается только до записи/при ожидании, поэтому
+рядом больше нет двух stop. Проверено в Vite fixture на 1000px и 320px; добавлены
+voice-input и composer-stop-control тесты.
+
+Таймер просили не дублировать сессию Mash: он создан в её `sessionID`
+`2349c63a-ddb7-4d4c-86f7-c5b9f389badd`, каталог `Compute Mesh`, первый запуск
+13:07, повтор каждые60 минут. Runtime хранит его; полный выход Enki останавливает
+пробуждения, внешний cron-сторож продолжает работать отдельно.
+
+Версия2.0.82. Проверки: npm test1311, runtime503+172 node, build, architecture,
+bundle, timer integration; release:local — опубликовать и проверить квитанцию.
+
 # TASK — 2026-11-14: FreeCAD MCP, old V100 cleanup, normal Ornith switching
 
 FreeCAD 1.1.4 on the Mac now has the pinned `neka-nat/freecad-mcp` addon0.1.31

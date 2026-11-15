@@ -9,6 +9,11 @@ export function activeTimers(tasks: readonly ScheduledTask[], sessionID: string)
   return tasks.filter(task => task.enabled && task.sessionID === sessionID);
 }
 
+/** Accessible label for the clock: one-shot and recurring are not the same. */
+export function timerAriaLabel(tasks: readonly ScheduledTask[]): string {
+  return tasks.some(task => task.mode !== "once") ? "Повторяющийся таймер Enki" : "Таймер Enki";
+}
+
 /** Enabled wake-ups of a project, for the collapsed-project hint. */
 export function directoryTimers(tasks: readonly ScheduledTask[], directory: string): ScheduledTask[] {
   return tasks.filter(task => task.enabled && task.directory === directory);

@@ -187,6 +187,13 @@ Recognition runs while recording, serially on short independently decodable clip
 
 The original workspace/draft owns audio and text. Navigation stops capture and preserves pending audio for explicit recovery in that draft. Cancellation before microphone permission sends nothing. Once recording has started, stopping retains recognized text and pending audio. Recovery can be retried or explicitly deleted; it is never automatically submitted on startup. Successful audio is removed. Raw audio is not uploaded to Hub or included in preferences. Microphone checkpoint delivery is browser scheduled, so a process/device crash can still lose the most recent unsaved tail; this is recovery protection, not a lossless hardware recorder.
 
+While dictation is active, the composer shows exactly one stop control: a red
+record-stop button that finishes capture and starts recognition. The ordinary
+white session-stop button is not rendered beside it, so a recording cannot be
+mistaken for a running answer. When dictation is idle the white button stops the
+session (or cancels preparation) as before; the recording stop and session stop
+have distinct accessible names.
+
 Normal quit and update activation stop capture and await final audio persistence, without waiting for ASR or interrupting agents. Native ASR multipart requests keep the existing 25MiB per-request bound, private HTTP/HTTPS policy, redirect rejection and timeout; this is a per-clip transport limit, not a dictation duration limit. The ASR adapter accepts empty text for silence only when the progressive dictation caller permits it. Ordinary attachment transcription retains its missing-text error. Credentials remain memory-only and bound to the ASR endpoint; the journal contains only endpoint/model/language, never keys. A key may need to be entered again before recovery after restart. A native request already received by ASR cannot be recalled; disposed callers ignore late results and keep recoverable audio.
 
 The packaged macOS app contains `NSMicrophoneUsageDescription` and the audio-input
