@@ -46,10 +46,12 @@ class GatewayTest(unittest.TestCase):
             self.get("/v1/model-control/catalog")
         catalog = self.get("/v1/model-control/catalog", key="test-key")
         self.assertEqual([m["id"] for m in catalog["models"]], ["qwen38-flash-next", "ornith15-122b"])
-        status = self.get("/v1/model-control/status", key="test-key")
+        with mock.patch.object(self.module, "service_active", return_value=True):
+            status = self.get("/v1/model-control/status", key="test-key")
         self.assertTrue(status["ready"])
         self.assertEqual(status["active_model"], "qwen38-flash-next")
-        selected = self.get("/v1/model-control/select", {"model": "qwen38-flash-next", "agent": "pi"}, key="test-key")
+        with mock.patch.object(self.module, "service_active", return_value=True):
+            selected = self.get("/v1/model-control/select", {"model": "qwen38-flash-next", "agent": "pi"}, key="test-key")
         self.assertTrue(selected["ready"])
         self.assertEqual(selected["active_model"], "qwen38-flash-next")
 
@@ -64,7 +66,8 @@ class GatewayTest(unittest.TestCase):
     def test_failed_state_recovers_only_when_active_model_is_healthy(self):
         self.module.STATE.phase = "failed"
         self.module.STATE.error = "previous failure"
-        with mock.patch.object(self.module, "qwen_ready", return_value=True):
+        with mock.patch.object(self.module, "qwen_ready", return_value=True), \
+                mock.patch.object(self.module, "service_active", return_value=True):
             selected = self.get("/v1/model-control/select", {"model": "qwen38-flash-next", "agent": "pi"}, key="test-key")
         self.assertTrue(selected["ready"])
         self.assertIsNone(selected["error"])
@@ -98,6 +101,59 @@ class GatewayTest(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0)):
             with self.assertRaises(RuntimeError):
                 self.module.wait_for(self.module.ORNITH, timeout=1)
+
+    def test_init_prefers_healthy_ornith_when_saved_qwen_is_stopped(self):
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as directory:
+            path = _Path(directory) / "active.json"
+            path.write_text('{"active": "qwen38-flash-next"}')
+            with mock.patch.object(self.module, "STATE_FILE", path), \
+                    mock.patch.object(self.module, "service_active", side_effect=lambda unit: unit == self.module.ORNITH_SERVICE), \
+                    mock.patch.object(self.module, "ornith_ready", return_value=True):
+                state = self.module.State()
+        self.assertEqual(state.active, self.module.ORNITH)
+        self.assertEqual(state.phase, "ready")
+        self.assertIsNone(state.restore_model)
+
+    def test_init_waits_for_warming_ornith_instead_of_claiming_ready(self):
+        import tempfile
+        from pathlib import Path as _Path
+        with tempfile.TemporaryDirectory() as directory:
+            path = _Path(directory) / "active.json"
+            path.write_text('{"active": "ornith15-122b"}')
+            with mock.patch.object(self.module, "STATE_FILE", path), \
+                    mock.patch.object(self.module, "service_active", return_value=True), \
+                    mock.patch.object(self.module, "ornith_ready", return_value=False):
+                state = self.module.State()
+        self.assertEqual(state.phase, "warming")
+        self.assertEqual(state.restore_model, self.module.ORNITH)
+        self.assertFalse(state.status()["ready"])
+
+    def test_ornith_health_timeout_is_not_a_process_crash(self):
+        with mock.patch.object(self.module, "request", side_effect=TimeoutError("slow start")):
+            self.assertFalse(self.module.ornith_ready())
+
+    def test_service_active_accepts_activating_during_readiness(self):
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="activating\n")):
+            self.assertTrue(self.module.service_active("strata-api"))
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="failed\n")):
+            self.assertFalse(self.module.service_active("strata-api"))
+
+    def test_status_does_not_claim_stopped_service_is_ready(self):
+        with mock.patch.object(self.module, "service_active", return_value=False):
+            status = self.get("/v1/model-control/status", key="test-key")
+        self.assertFalse(status["ready"])
+        self.assertEqual(status["phase"], "failed")
+        self.assertIn("not running", status["error"])
+
+    def test_wait_for_aborts_when_started_unit_stays_inactive(self):
+        with mock.patch.object(self.module, "service_restarts", return_value=0), \
+                mock.patch.object(self.module.time, "sleep"), \
+                mock.patch("subprocess.run", return_value=mock.Mock(returncode=1, stdout="inactive\n")):
+            with self.assertRaises(RuntimeError) as caught:
+                self.module.wait_for(self.module.ORNITH, timeout=30, baseline_restarts=0)
+        self.assertIn("not running after start", str(caught.exception))
 
     def test_unit_start_does_not_block_on_readiness(self):
         with mock.patch("subprocess.run") as run:

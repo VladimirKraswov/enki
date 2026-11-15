@@ -1,6 +1,6 @@
 [Unit]
 Description=Bounded RTX 5090 model-control and inference gateway
-After=network.target
+After=network-online.target ornith-infernix.service
 
 [Service]
 Type=simple

@@ -74,6 +74,26 @@ def request(base: str, path: str, body: dict | None = None, key: str | None = No
             conn.close()
 
 
+def service_active(unit: str) -> bool:
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "-p", "ActiveState", "--value", unit],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0 and result.stdout.strip() in ("active", "activating", "reloading")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def ornith_ready() -> bool:
+    try:
+        status, value = request(ORNITH_API, "/health", timeout=10)
+    except (OSError, RuntimeError, TimeoutError):
+        return False
+    return status == 200 and isinstance(value, dict) and value.get("status") in ("ok", "ready", True)
+
+
 class State:
     def __init__(self):
         self.lock = threading.Lock()
@@ -85,24 +105,68 @@ class State:
         self.error = None
         self.changed = time.monotonic()
         self.operation = 0
+        self.restore_model = None
+        saved_model = None
         if STATE_FILE.exists():
             try:
                 saved = json.loads(STATE_FILE.read_text())
                 if saved.get("active") in MODELS:
-                    candidate = saved["active"]
-                    if candidate == ORNITH:
-                        import subprocess
-                        running = subprocess.run(["systemctl", "is-active", "--quiet", ORNITH_SERVICE], capture_output=True, timeout=5)
-                        if running.returncode == 0:
-                            self.active = self.target = ORNITH
-                    else:
-                        self.active = self.target = candidate
-                        import subprocess
-                        ornith_running = subprocess.run(["systemctl", "is-active", "--quiet", ORNITH_SERVICE], capture_output=True, timeout=5)
-                        if ornith_running.returncode == 0:
-                            self.active = self.target = ORNITH
+                    saved_model = saved["active"]
             except (OSError, ValueError):
-                pass
+                saved_model = None
+        if saved_model == ORNITH:
+            if service_active(ORNITH_SERVICE) and ornith_ready():
+                self.active = self.target = ORNITH
+            elif service_active(ORNITH_SERVICE):
+                self.phase = "warming"
+                self.target = ORNITH
+                self.restore_model = ORNITH
+            else:
+                self.phase = "loading"
+                self.target = ORNITH
+                self.restore_model = ORNITH
+        elif saved_model == QWEN:
+            # Do not claim Qwen is ready just because it was selected before a
+            # reboot. Prefer an already healthy Infernix service; otherwise
+            # cold-start Qwen in the background.
+            if service_active("strata-api"):
+                self.active = self.target = QWEN
+            elif service_active(ORNITH_SERVICE) and ornith_ready():
+                self.active = self.target = ORNITH
+            else:
+                self.phase = "loading"
+                self.target = QWEN
+                self.restore_model = QWEN
+
+    def start_restore(self) -> None:
+        model = self.restore_model
+        if model is not None:
+            threading.Thread(target=self._restore_active, args=(model,), daemon=True).start()
+
+    def _restore_active(self, model: str) -> None:
+        """Reconcile a saved selection with the services after a host boot."""
+        try:
+            if model == QWEN:
+                if service_active(ORNITH_SERVICE):
+                    stop_ornith()
+                baseline = activate_qwen()
+                wait_for(QWEN, baseline_restarts=baseline)
+            else:
+                if service_active("strata-api"):
+                    stop_qwen_service()
+                baseline = start_unit(ORNITH_SERVICE)
+                wait_for(ORNITH, baseline_restarts=baseline)
+            with self.lock:
+                self.active = self.target = model
+                self.phase = "ready"
+                self.error = None
+                self.changed = time.monotonic()
+                self.save()
+        except Exception as exc:
+            with self.lock:
+                self.phase = "failed"
+                self.error = str(exc)[:1024]
+                self.changed = time.monotonic()
 
     def save(self):
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +177,12 @@ class State:
     def status(self):
         with self.lock:
             phase = self.phase
+            if phase == "ready":
+                unit = "strata-api" if self.active == QWEN else ORNITH_SERVICE
+                if not service_active(unit):
+                    phase = self.phase = "failed"
+                    self.error = f"{unit} is not running"
+                    self.changed = time.monotonic()
             ready = phase == "ready"
             loader = None
             if phase in ("unloading", "loading", "warming"):
@@ -176,11 +246,6 @@ def qwen_ready() -> bool:
     return qwen_model_state() == "loaded"
 
 
-def ornith_ready() -> bool:
-    status, value = request(ORNITH_API, "/health", timeout=10)
-    return status == 200 and isinstance(value, dict) and value.get("status") in ("ok", "ready", True)
-
-
 def qwen_action(action: str):
     status, value = request(QWEN_CONTROL, "/" + action, {}, key=strata_key(), timeout=120)
     if status != 200:
@@ -233,6 +298,7 @@ def wait_for(model: str, timeout: int = 240, baseline_restarts: int | None = Non
     import subprocess
     unit = ORNITH_SERVICE if model == ORNITH else "strata-api"
     deadline = time.monotonic() + timeout
+    inactive_checks = 0
     while time.monotonic() < deadline:
         current = service_restarts(unit)
         if baseline_restarts is not None and current is not None and current > baseline_restarts:
@@ -242,6 +308,13 @@ def wait_for(model: str, timeout: int = 240, baseline_restarts: int | None = Non
         failed = subprocess.run(["systemctl", "is-failed", "--quiet", unit], timeout=10)
         if failed.returncode == 0:
             raise RuntimeError(f"{unit} failed during startup")
+        state = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=10)
+        if state.stdout.strip() in ("inactive", "failed", "unknown"):
+            inactive_checks += 1
+            if inactive_checks >= 3:
+                raise RuntimeError(f"{unit} is not running after start")
+        else:
+            inactive_checks = 0
         try:
             if (qwen_ready() if model == QWEN else ornith_ready()):
                 return
@@ -432,4 +505,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    STATE.start_restore()
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("ORNITH_GATEWAY_PORT", "1921")),), Handler).serve_forever()

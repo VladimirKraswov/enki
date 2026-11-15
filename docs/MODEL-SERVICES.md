@@ -406,3 +406,25 @@ Qwen после ребута холодный (112 с). Это достигну�
 и MTP3; baseline auto6 был30.9 tok/s. PolyStrata/llama.cpp/Q4 GGUF удалены;
 на VM остались только Qwen/Strata и Ornith/Infernix. Подробности:
 [services/infernix](../services/infernix/README.md).
+
+## RTX5090: восстановление после power-loss — 2026-11-15
+
+После потери питания VM5200 запускается штатно: `onboot=1`,
+`startup order=21, up=180, down=180`, хост-служба `pve-guests` включена.
+Внутри VM `ornith-infernix` включена, а `strata-api` намеренно оставлена
+`disabled`: две модели не должны одновременно занимать RTX 5090.
+
+Gateway стартует после `ornith-infernix` (`After=`) и при старте сверяет
+сохранённый выбор с фактическим состоянием сервисов, а не только с
+`active.json`. Проверяются `ActiveState` (`active`, `activating`, `reloading`)
+и health выбранной модели; таймаут health означает «не готово», а не падение
+gateway. Если сохранён Qwen, а Qwen-сервис не запущен, gateway поднимает его в
+фоне (при необходимости останавливая Infernix); если сохранён Ornith и он
+греется, статус остаётся `warming` и не выдаёт ложный `ready`. Остановленный
+сервис даёт `failed`, а не `server_not_ready` после отправки запроса.
+
+Проверка 2026-11-15: два контролируемых reboot VM5200, после второго gateway
+`NRestarts=0`; Qwen автоматически загрузилась и ответила через gateway. Полный
+цикл Qwen→Ornith→Qwen завершился `ready`, обе модели ответили; при ручном
+рестарте gateway не запускает вторую модель. Отдельный Desktop-релиз для этого
+серверного изменения не требуется, публичные URL и model ID не менялись.
