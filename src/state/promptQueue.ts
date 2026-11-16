@@ -209,10 +209,32 @@ export class PromptQueueController {
   async removeQueued(id: string): Promise<void> {
     const context = this.context();
     if (!context || this.locked(context.sid)) return;
+    const { sid, directory, backend } = context;
+    const previous = this.state.queues[sid];
+    // Remove the row immediately. A DELETE that was already applied elsewhere
+    // can legitimately return null; without this optimistic state the stale row
+    // would stay visible forever because there is no new QueueStateDTO to apply.
+    this.locks.set(sid, context);
+    if (previous?.items.some(item => item.id === id))
+      this.host.mutate(s => ({
+        queues: { ...s.queues, [sid]: { ...previous, items: previous.items.filter(item => item.id !== id) } },
+      }));
     try {
-      const next = await context.backend.client.removeQueued(context.sid, context.directory, id);
-      if (next && this.currentScope(context)) this.apply(next);
-    } catch (error) { this.report(context.sid, error, context); }
+      const next = await backend.client.removeQueued(sid, directory, id);
+      if (!this.currentScope(context)) return;
+      if (next) this.apply(next);
+      // The runtime can answer null when the item was already removed (for
+      // example a duplicated click or a stale tab). Re-read the authoritative
+      // queue so a row that still exists elsewhere cannot remain hidden.
+      else await this.refresh(sid, directory, context);
+    } catch (error) {
+      if (!this.currentScope(context)) return;
+      if (previous) this.apply(previous);
+      this.report(sid, error, context);
+    } finally {
+      if (this.locks.get(sid) === context) this.locks.delete(sid);
+      if (this.currentScope(context)) this.host.mutate({});
+    }
   }
 
   async removeQueuedAttachment(id: string, fileID: string): Promise<void> {

@@ -30,6 +30,7 @@ async function composer(files:Array<[string,string,string]>=[]){
   queue={...queue,items:queue.items.map(i=>i.id!==c.params.item?i:{...i,...(p.text?{text:p.text}:{}),attachments:(i.attachments??[]).filter(f=>!(p.removeAttachments??[]).includes(f.id))})};return queue;});
  fx.on('POST','/sessions/:id/queue/reorder',c=>{const b=c.body as {id:string;before:string|null};const moving=queue.items.find(i=>i.id===b.id)!,rest=queue.items.filter(i=>i.id!==b.id);
   rest.splice(b.before===null?rest.length:rest.findIndex(i=>i.id===b.before),0,moving);queue={...queue,items:rest};return queue;});
+ fx.on('DELETE','/sessions/:id/queue/:item',c=>{queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item)};return null;});
  fx.on('POST','/sessions/:id/queue/:item/steer',c=>{const item=queue.items.find(i=>i.id===c.params.item)!;const id=`queue-${c.params.item}-1`;
   queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item),corrections:[...(queue.corrections??[]),{id,text:item.text,state:'running',createdAt:1}]};return {id,kind:'steer',sessionID:sid,state:'accepted',createdAt:1,updatedAt:1};});
  fixture.bindStore(store,fx);
@@ -56,6 +57,15 @@ it('keeps a corrected prompt visibly separate from queued work until the runtime
  await act(async()=>fx.emit({type:'queue.updated',properties:{queue:{sessionID:sid,items:[],corrections:[],armed:true,pausedReason:null}}} as never,directory));
  expect(document.querySelector('.pending-correction')).toBeNull();
  expect(steers(fx)).toHaveLength(1);expect(fx.made('POST','/sessions/:id/stop')).toEqual([]);expect(fx.made('POST','/commands')).toEqual([]);
+});
+
+it('removes the visible queue row when the runtime already removed the same item',async()=>{
+ const {store,mount}=await composer();
+ await store.enqueuePrompt('удалить это');
+ await mount();
+ await vi.waitFor(async()=>{await act(async()=>{});expect(document.querySelector('.queued-prompt')).not.toBeNull();});
+ await act(async()=>{(document.querySelector('[aria-label="Убрать из очереди"]') as HTMLButtonElement).click();await vi.waitFor(()=>expect(document.querySelector('.queued-prompt')).toBeNull());});
+ expect(store.getQueue()).toHaveLength(0);
 });
 
 it('queued file controls remove the file before Now and re-enable the send control',async()=>{
