@@ -226,6 +226,29 @@ describe("chatReducer stream normalization", () => {
     expect(root.sessions[SID].lastError).toBeNull();
   });
 
+  it("does not resurrect an abort while the session is already busy again", () => {
+    const root = emptyChatRoot();
+    reduceEvent(root, evt("session.status", "s0", { sessionID: SID, status: { type: "busy" } }));
+    reduceEvent(root, evt("message.updated", "a1", {
+      sessionID: SID,
+      info: { id: "a", sessionID: SID, role: "assistant", time: { created: 1 }, error: { name: "MessageAbortedError" } },
+    }));
+    expect(root.sessions[SID].lastError).toBeNull();
+  });
+
+  it("clears a terminal message error when a newer assistant step starts", () => {
+    const root = emptyChatRoot();
+    const a = { id: "a", sessionID: SID, role: "assistant", time: { created: 1 }, error: { name: "MessageAbortedError" } };
+    reduceEvent(root, evt("message.updated", "a1", { sessionID: SID, info: a }));
+    expect(root.sessions[SID].lastError).toBe("Ответ остановлен.");
+    const b = { id: "b", sessionID: SID, role: "assistant", time: { created: 2 } };
+    reduceEvent(root, evt("message.updated", "b1", { sessionID: SID, info: b }));
+    expect(root.sessions[SID].lastError).toBeNull();
+    // A delayed update of the older step must not resurrect the banner.
+    reduceEvent(root, evt("message.updated", "a2", { sessionID: SID, info: a }));
+    expect(root.sessions[SID].lastError).toBeNull();
+  });
+
   it("recognizes known message error shapes", () => {
     expect(describeMessageError({ name: "MessageAbortedError" })).toBe("Ответ остановлен.");
     expect(describeMessageError({ name: "ContextOverflowError" })).toMatch(

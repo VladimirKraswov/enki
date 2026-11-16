@@ -18,6 +18,11 @@ export function isModelConnectionError(error: unknown): boolean {
   return /^Connection error\.?$|Cannot connect to API|Unable to connect|\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT)\b|fetch failed|socket (?:closed|hang up)/i.test(rawError(error));
 }
 
+/** A user/runtime stop, not a transport or provider failure. */
+export function isAbortedError(error: unknown): boolean {
+  return record(error).name === "MessageAbortedError";
+}
+
 export function describeMessageError(error: unknown): string {
   if (!error) return "";
   const e = record(error);

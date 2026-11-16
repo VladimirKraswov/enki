@@ -43,7 +43,12 @@ function Conversation({ cacheKey }: { cacheKey: string }) {
   const {start, end} = conversationWindow(order, first.current, following.current);
   first.current = order[start]; tail.current = end === order.length;
   const messages = order.slice(start,end).map(id => slot!.messages[id]).filter(Boolean);
-  const bannerError = sessionBannerError(slot?.lastError, order.slice(-60).map(id => slot!.messages[id]).filter(Boolean));
+  // A live busy/retry status is newer than any terminal banner from an earlier
+  // step. Showing both "Ответ остановлен" and "Выполняется команда" is a
+  // contradiction; the active status wins until it settles or a new error arrives.
+  const bannerError = slot && (slot.status.type === "busy" || slot.status.type === "retry")
+    ? null
+    : sessionBannerError(slot?.lastError, order.slice(-60).map(id => slot!.messages[id]).filter(Boolean));
   const visibleRows = groupConversation(messages);
   const pending = sessionId ? store.pendingInteraction(sessionId) : { permissions: [], questions: [] };
   const permission = pending.permissions[0], question = pending.questions[0];

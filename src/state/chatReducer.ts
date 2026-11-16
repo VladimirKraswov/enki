@@ -13,7 +13,7 @@ import type {
 import { normalizeStatusType } from '../api/types';
 
 import { observeTask, type DispatchTiming, type TaskObservation } from '../diagnostics/tasks';
-import { describeMessageError } from '../chat/errors';
+import { describeMessageError, isAbortedError } from '../chat/errors';
 export { describeMessageError } from '../chat/errors';
 
 export interface SessionChatState {
@@ -151,11 +151,30 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       if (!info?.id || !info.sessionID) break;
       if (seen(root, event.id)) break;
       const slot = sessionSlot(root, info.sessionID);
-      if (!slot.messages[info.id]) slot.messageOrder.push(info.id);
+      const isNew = !slot.messages[info.id];
+      if (isNew) slot.messageOrder.push(info.id);
       const prev = slot.messages[info.id];
       slot.messages[info.id] = prev ? { ...prev, ...info } : info;
-      if (info.role === "assistant" && info.error) {
-        slot.lastError = describeMessageError(info.error);
+      // Stop/error banners belong to the run that produced them. A new user
+      // request or a newer assistant step supersedes an older terminal state;
+      // otherwise a stopped step stays on screen after the run has continued.
+      if (info.role === "user" && isNew) {
+        slot.lastError = null;
+        slot.lastOutcome = null;
+      }
+      if (info.role === "assistant") {
+        if (info.error) {
+          // A delayed update for an old step must not resurrect a banner after
+          // a newer assistant step has already started.
+          const newer = slot.messageOrder.some(id =>
+            id !== info.id && (slot.messages[id]?.time?.created ?? 0) > (info.time?.created ?? 0));
+          // An abort event can arrive after the same session has already
+          // started a continuation. It is history, not the current status.
+          if (!newer && !(isAbortedError(info.error) && slot.status.type === "busy"))
+            slot.lastError = describeMessageError(info.error);
+        } else if (isNew) {
+          slot.lastError = null;
+        }
       }
       slot.lastEventAt = Date.now();
       changed = true;
@@ -256,6 +275,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       const slot = sessionSlot(root, sessionID);
       const reason = typeof props.reason === "string" ? props.reason : null, error = typeof props.error === "string" ? props.error.slice(0, 2000) : null;
       slot.lastOutcome = { commandID: typeof props.commandID === "string" ? props.commandID : null, state, reason, error };
+      if (state === "completed") slot.lastError = null;
       // A run that ended without any answer has no other visible sign; an
       // output-limit stop already shows its OutputLimitNotice on the message.
       if (state === "failed" && (reason === "no_answer" || reason === "terminated") && error) slot.lastError = error;

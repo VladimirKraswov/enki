@@ -19,7 +19,7 @@ import { AttachmentThumbnail, AttachmentViewer } from "./AttachmentViewer";
 import { MessageEdit } from "./MessageEdit";
 import { actionCountLabel, answerText, finalAnswer, stepCountLabel, turnMetrics, visibleParts } from "../chat/turns";
 import { exactTime, messageTime } from "../chat/time";
-import { describeMessageError, isModelConnectionError } from "../chat/errors";
+import { describeMessageError, isAbortedError, isModelConnectionError } from "../chat/errors";
 import { ModelConnectionCheck } from "./ModelConnectionCheck";
 import { ToolActivity } from "./ToolActivity";
 export { Markdown } from "./Markdown";
@@ -209,10 +209,13 @@ export const AssistantMessageView = memo(function AssistantMessageView({
   sessionId,
   message,
   active = false,
+  historicalError = false,
 }: {
   sessionId: string;
   message: AssistantMessage;
   active?: boolean;
+  /** A later assistant step already continued this turn. */
+  historicalError?: boolean;
 }) {
   const ids = useMemo(() => [message.id], [message.id]);
   const stalled = useConnectionStalled();
@@ -224,7 +227,7 @@ export const AssistantMessageView = memo(function AssistantMessageView({
   // older history must not start spinning again when the next request begins.
   const evidence = executionEvidence(terminal || !active, status === "busy" || status === "retry", connected, snapshot.waitingForUser);
   const running = !message.time.completed && evidence === "active";
-  const errText = message.error ? describeMessageError(message.error) : null;
+  const errText = message.error && !historicalError ? describeMessageError(message.error) : null;
   const finishBad =
     message.finish &&
     !["stop", "end_turn", "stop_sequence", "tool-calls", "tool_calls"].includes(
@@ -308,10 +311,13 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
     </button>}
     <div id={regionId} className="turn-content">
       {repeatedConnectionFailures && <p className="msg-meta">Не удалось подключиться к модели. Попыток: {messages.length}.</p>}
-      {(repeatedConnectionFailures ? [last] : messages).map(m => {
+      {(repeatedConnectionFailures ? [last] : messages).map((m, messageIndex) => {
         const isFinal = hasFinal && m.id === last.id;
+        // An aborted/failed step is historical once a later assistant step
+        // exists: the run continued, so its old banner must not read as current.
+        const historicalError = isAbortedError(m.error) && messageIndex < messages.length - 1;
         // Message failures and output limits must remain visible even if the user folded progress.
-        const problem = !!m.error || (!!m.finish && !['stop','end_turn','stop_sequence','tool-calls','tool_calls'].includes(m.finish));
+        const problem = (!!m.error && !historicalError) || (!!m.finish && !['stop','end_turn','stop_sequence','tool-calls','tool_calls'].includes(m.finish));
         // A step where the assistant actually wrote an answer is content, not work
         // trace: folding it away hides substantive replies merely because the model
         // called one more tool afterwards.
@@ -320,7 +326,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
         if (visible) visited.current.add(m.id);
         return <div key={m.id} id={`${regionId}-${m.id}`} data-message-id={m.id} className={isFinal ? `turn-answer${progress.length ? ' after-progress' : ''}` : 'turn-step'}
           hidden={!visible}>
-          {(visible || visited.current.has(m.id)) && <AssistantMessageView sessionId={sessionId} message={m} active={active && !terminal} />}
+          {(visible || visited.current.has(m.id)) && <AssistantMessageView sessionId={sessionId} message={m} active={active && !terminal} historicalError={historicalError} />}
         </div>;
       })}
     </div>

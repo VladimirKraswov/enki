@@ -1,3 +1,16 @@
+# TASK — 2026-11-16: stop/error banner is scoped to the current run
+
+Баннер «Ответ остановлен» больше не считается текущим, когда сессия уже снова
+busy или когда более поздний assistant-шаг продолжил turn. Reducer очищает
+lastError при новом user/assistant-шаге и не воскрешает abort-событие старого
+шага; ChatView не рисует terminal banner рядом с живым статусом, а
+AssistantTurnView скрывает abort старого шага. Ошибки соединения с моделью
+по-прежнему видны отдельно.
+
+Регрессии: turn-render (продолжение после abort), chat-window (busy не
+показывает terminal banner), chatReducer (новый шаг и поздний abort).
+Версия 2.0.85.
+
 # TASK — 2026-11-15: удаление строки очереди после null/рассинхронизации
 
 Удаление из prompt queue теперь оптимистично убирает строку, блокирует повторное

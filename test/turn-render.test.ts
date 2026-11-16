@@ -61,6 +61,15 @@ it('keeps explicit collapse through updates while surfacing tool errors and abor
  mount([message('a'),{...message('b','stop'),error:{name:'MessageAbortedError'}}]);
  expect(document.querySelector('[role="alert"]')?.textContent).toBe('Ответ остановлен.');expect(document.querySelector('[role="alert"]')?.closest('[hidden]')).toBeNull();
 });
+it('does not keep an abort banner after a later assistant step continues the turn',()=>{
+ parts('a',[{text:'Начало ответа'}]);
+ parts('b',[{text:'Продолжение после остановки'}]);
+ mount([{...message('a'),error:{name:'MessageAbortedError'}},message('b','stop')]);
+ expect(document.querySelector('[role="alert"]')).toBeNull();
+ expect(document.body.textContent).not.toContain('Ответ остановлен');
+ expect(document.body.textContent).toContain('Продолжение после остановки');
+});
+
 it('does not show a final copy or phantom whitespace for an in-progress tool-only step',()=>{
  parts('a',[{type:'step-start'},{text:'\n\n'},{type:'tool',tool:'bash',state:{status:'running'}},{type:'step-finish'}]);mount([{...message('a'),time:{created:1000},finish:undefined}],true);
  expect(document.querySelectorAll('.msg-assistant > [data-scroll-anchor]')).toHaveLength(1);
