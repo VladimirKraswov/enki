@@ -73,6 +73,13 @@ pub(super) fn lease() -> Result<fs::File, String> {
     Ok(file)
 }
 pub fn root() -> Result<PathBuf, String> {
+    // On Windows the build tree must stay short: `node_modules` and Tauri's
+    // nested build scripts routinely exceed MAX_PATH under a profile path plus
+    // a full digest. `ub` is a stable short directory beside the profile data;
+    // the old `update-runtime` caches remain untouched for rollback/forensics.
+    #[cfg(windows)]
+    let p = crate::paths::app_data_dir()?.join("ub");
+    #[cfg(not(windows))]
     let p = crate::paths::app_data_dir()?.join("update-runtime");
     crate::updates::private(&p)?;
     Ok(p)

@@ -1,3 +1,21 @@
+# TASK — 2026-11-17: Windows short build root + Hub remote tool
+
+На Windows источник обновления теперь распаковывается в короткий
+`…\enki\ub\build-<16>` с коротким `attempt`, а Cargo target — в
+`%TEMP%\enki-t-<16>`; прежний глубокий `update-runtime\build-<64>\attempt-<32>`
+оставался причиной LNK1104/длинных путей, хотя Cargo target уже был коротким.
+Старые полные имена распознаются при очистке.
+
+Добавлен `hub_remote`: Mac-сессия через Hub читает устройства/сессии/очереди и
+может отправить только update.check/prepare/apply, providers.refresh,
+settings.update. Команда не даёт shell, произвольные файлы или обход updater;
+результат читается по ID. Это позволяет управлять Windows-native update даже
+без модели на Windows. Старый Windows 2.0.65 требует однократного ручного
+native/short-path перехода; после него — обычные Hub/source обновления.
+
+Проверки: npm test1323, build/architecture/bundle/docs, cargo clippy/fmt/check,
+targeted Rust path tests; версия 2.0.86.
+
 # TASK — 2026-11-16: stop/error banner is scoped to the current run
 
 Баннер «Ответ остановлен» больше не считается текущим, когда сессия уже снова

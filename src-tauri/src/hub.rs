@@ -439,9 +439,10 @@ fn workshop_path(path: &str, write: bool) -> bool {
 
 fn remote_path(path: &str, write: bool) -> bool {
     if write {
-        matches!(path, "remote/sync" | "remote/complete") && !path.contains('?')
+        matches!(path, "remote/sync" | "remote/complete" | "remote/command") && !path.contains('?')
     } else {
         matches!(path, "remote/overview" | "remote/session")
+            || path.strip_prefix("remote/command?id=").is_some_and(id_ok)
     }
 }
 
@@ -943,7 +944,9 @@ mod tests {
         assert!(remote_path("remote/complete", true));
         assert!(remote_path("remote/overview", false));
         assert!(remote_path("remote/session", false));
-        assert!(!remote_path("remote/command", true));
+        assert!(remote_path("remote/command", true));
+        assert!(remote_path("remote/command?id=abc-123", false));
+        assert!(!remote_path("remote/command?id=bad id", false));
         assert!(!remote_path("remote/sync?device=other", true));
         assert!(!remote_path("remote/../updates", true));
         assert!(!remote_path("remote/asr", true));

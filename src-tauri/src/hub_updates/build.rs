@@ -337,11 +337,9 @@ impl Build {
         }
         for entry in fs::read_dir(root()?).map_err(|e| e.to_string())? {
             let p = entry.map_err(|e| e.to_string())?.path();
-            if p.file_name().is_some_and(|n| {
-                n.to_string_lossy()
-                    .strip_prefix("build-")
-                    .is_some_and(packet::hash_ok)
-            }) && !p.is_symlink()
+            if p.file_name()
+                .is_some_and(|n| build_dir_name(&n.to_string_lossy()))
+                && !p.is_symlink()
             {
                 fs::remove_dir_all(p).map_err(|e| e.to_string())?;
             }
@@ -352,11 +350,9 @@ impl Build {
         if let Ok(entries) = fs::read_dir(std::env::temp_dir()) {
             for entry in entries.flatten() {
                 let p = entry.path();
-                if p.file_name().is_some_and(|n| {
-                    n.to_string_lossy()
-                        .strip_prefix("enki-native-target-")
-                        .is_some_and(packet::hash_ok)
-                }) && !p.is_symlink()
+                if p.file_name()
+                    .is_some_and(|n| target_dir_name(&n.to_string_lossy()))
+                    && !p.is_symlink()
                 {
                     let _ = fs::remove_dir_all(p);
                 }
@@ -455,43 +451,76 @@ fn failure_detail(log: &Path) -> String {
     };
     read().unwrap_or_default()
 }
+/// Windows extracts `node_modules` and the Tauri sources below the build root.
+/// Keep both the outer key and the attempt name short; a full SHA-256 name plus
+/// a deep profile root leaves less than 100 characters for package internals.
+/// Other platforms retain the full digest for diagnostics and cache identity.
+fn build_suffix(digest: &str, windows: bool) -> &str {
+    if windows {
+        &digest[..16]
+    } else {
+        digest
+    }
+}
+fn attempt_name(seed: [u8; 16], windows: bool) -> String {
+    let encoded = seed
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if windows {
+        format!("a-{}", &encoded[..16])
+    } else {
+        format!("attempt-{encoded}")
+    }
+}
+fn native_target_name(digest: &str, windows: bool) -> String {
+    if windows {
+        format!("enki-t-{}", build_suffix(digest, true))
+    } else {
+        format!("enki-native-target-{digest}")
+    }
+}
 /// An explicit retry gets a fresh verified source tree. Prior diagnostics remain
 /// available until the owner clears builds; partial node_modules are never reused.
-fn attempt_name() -> Result<String, String> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "attempt-{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
-}
-/// Cargo compilation cache location. On Windows the linker (LNK1104) cannot
-/// open files under the deep per-profile update-runtime path, so the cache
-/// lives in a short temp directory instead; cleanup removes it with the builds.
-fn native_target_dir(digest: &str, attempt: &Path) -> PathBuf {
-    #[cfg(windows)]
-    {
-        std::env::temp_dir().join(format!("enki-native-target-{digest}"))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = digest;
-        attempt.join("src-tauri/target")
-    }
-}
 fn fresh_attempt(root: &Path, digest: &str) -> Result<PathBuf, String> {
     if !packet::hash_ok(digest) {
         return Err("Некорректный идентификатор сборки".into());
     }
-    let parent = root.join(format!("build-{digest}"));
+    let key = build_suffix(digest, cfg!(windows));
+    let parent = root.join(format!("build-{key}"));
     if parent.is_symlink() || (parent.exists() && !parent.is_dir()) {
         return Err("Папка сборки занята посторонним файлом; он сохранён".into());
     }
     fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    Ok(parent.join(attempt_name()?))
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(parent.join(attempt_name(bytes, cfg!(windows))))
+}
+/// Cargo cache location. Windows must keep the linker's absolute paths short;
+/// the cache lives in TEMP and cleanup recognizes both the short and the legacy
+/// full-digest names.
+fn native_target_dir(digest: &str, attempt: &Path) -> PathBuf {
+    if cfg!(windows) {
+        std::env::temp_dir().join(native_target_name(digest, true))
+    } else {
+        attempt.join("src-tauri/target")
+    }
+}
+fn short_hash(value: &str) -> bool {
+    value.len() == 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+fn build_dir_name(name: &str) -> bool {
+    name.strip_prefix("build-")
+        .is_some_and(|key| packet::hash_ok(key) || short_hash(key))
+}
+#[cfg_attr(not(windows), allow(dead_code))]
+fn target_dir_name(name: &str) -> bool {
+    name.strip_prefix("enki-native-target-")
+        .is_some_and(packet::hash_ok)
+        || name.strip_prefix("enki-t-").is_some_and(short_hash)
 }
 fn validate_identity(v: &Verified) -> Result<(), String> {
     for name in [
@@ -714,7 +743,7 @@ mod tests {
     #[test]
     fn stopped_build_reports_timeout_log_limit_and_cancellation_separately() {
         let root =
-            std::env::temp_dir().join(format!("enki-build-stop-{}", attempt_name().unwrap()));
+            std::env::temp_dir().join(format!("enki-build-stop-{}", attempt_name([7; 16], false)));
         fs::create_dir(&root).unwrap();
         let command = || {
             let mut cmd = Command::new("/bin/sh");
@@ -756,7 +785,7 @@ mod tests {
     #[test]
     fn retry_preserves_diagnostics_and_extracts_into_a_fresh_attempt() {
         let root =
-            std::env::temp_dir().join(format!("enki-retry-test-{}", attempt_name().unwrap()));
+            std::env::temp_dir().join(format!("enki-retry-test-{}", attempt_name([7; 16], false)));
         fs::create_dir(&root).unwrap();
         let digest = "a".repeat(64);
         let previous = root.join(format!("build-{digest}"));
@@ -806,6 +835,21 @@ mod tests {
         assert_eq!(Build::default().status()["stage"], "idle");
     }
     #[test]
+    fn windows_build_names_leave_room_for_nested_node_modules() {
+        let digest = "ab".repeat(32);
+        assert_eq!(build_suffix(&digest, true), &digest[..16]);
+        assert_eq!(build_suffix(&digest, false), digest);
+        assert_eq!(attempt_name([0xab; 16], true).len(), 18);
+        assert!(attempt_name([0xab; 16], true).starts_with("a-"));
+        let target = native_target_name(&digest, true);
+        assert_eq!(target, "enki-t-".to_string() + &digest[..16]);
+        assert!(build_dir_name(&format!("build-{}", &digest[..16])));
+        assert!(build_dir_name(&format!("build-{digest}")));
+        assert!(target_dir_name(&target));
+        assert!(!build_dir_name("build-not-a-digest"));
+    }
+
+    #[test]
     fn cargo_target_stays_deep_off_windows_and_short_on_windows() {
         let attempt = Path::new("/owner/.enki/data/enki/update-runtime/build-aa/attempt-bb");
         let digest = "a".repeat(64);
@@ -817,7 +861,7 @@ mod tests {
             assert!(target.starts_with(std::env::temp_dir()));
             assert!(target
                 .to_string_lossy()
-                .contains(&format!("enki-native-target-{digest}")));
+                .contains(&format!("enki-t-{}", &digest[..16])));
             let extra = target.join("release\\build\\proc-macro2-a070229bbcccb0a0\\build_script_build-a070229bbcccb0a0.exe");
             assert!(extra.to_string_lossy().len() < 240, "{}", extra.display());
         }
