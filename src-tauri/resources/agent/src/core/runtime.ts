@@ -480,7 +480,9 @@ export class Runtime {
             this.journal.append(record.directory, record.id, { type: "mcp.status", properties: { sessionID: record.id, servers: snapshot.servers, ...(error ? { error } : {}) } });
           } }),
         hubExchangeExtension(this.config.broker, record.id),
-        hubRemoteExtension(this.config.broker),
+        // Cross-device control is a Workshop capability. Registering it in
+        // every normal chat would add its schema to every context budget.
+        ...(record.workshop ? [hubRemoteExtension(this.config.broker)] : []),
         ...(this.config.extraExtensions?.({ sessionID: record.id, directory: record.directory }) ?? []),
       ],
       // Owner-chosen files only; a path that no longer exists is skipped (and
