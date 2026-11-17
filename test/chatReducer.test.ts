@@ -226,6 +226,19 @@ describe("chatReducer stream normalization", () => {
     expect(root.sessions[SID].lastError).toBeNull();
   });
 
+  it("records the measured compaction result and clears the waiting status", () => {
+    const root = emptyChatRoot();
+    reduceEvent(root, evt("session.status", "s0", { sessionID: SID, status: { type: "waiting", message: "Сжатие контекста" } }));
+    reduceEvent(root, evt("session.compaction", "c1", { sessionID: SID, ok: true, tokensBefore: 178935, tokensAfter: 50000 }));
+    expect(root.sessions[SID]).toMatchObject({
+      status: { type: "idle" },
+      compaction: { tokensBefore: 178935, tokensAfter: 50000 },
+      lastError: null,
+    });
+    reduceEvent(root, evt("session.compaction", "c2", { sessionID: SID, ok: false, error: "нет модели" }));
+    expect(root.sessions[SID].lastError).toContain("нет модели");
+  });
+
   it("does not resurrect an abort while the session is already busy again", () => {
     const root = emptyChatRoot();
     reduceEvent(root, evt("session.status", "s0", { sessionID: SID, status: { type: "busy" } }));

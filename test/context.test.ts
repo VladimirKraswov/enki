@@ -94,3 +94,32 @@ it('does not display the old summarization input as the new compacted context',(
  chat.messages.summary={id:'summary',sessionID:'s',role:'assistant',summary:true,finish:'stop',modelID:'qwen',providerID:'local',time:{created:1,completed:2},tokens:{total:415589,input:414589,output:1000}};
  expect(contextUsage(chat,model)).toMatchObject({used:null,remaining:null,compacting:false});
 });
+
+it('uses the runtime post-compaction estimate instead of the old measured input', () => {
+  const chat = emptySessionChat();
+  chat.messageOrder = ["a"];
+  chat.messages.a = {
+    id: "a", sessionID: "s", role: "assistant", modelID: "qwen", providerID: "local",
+    time: { created: 1, completed: 1 }, tokens: { total: 178935 },
+  };
+  chat.compaction = { tokensBefore: 178935, tokensAfter: 50000, at: 2 };
+  expect(contextUsage(chat, model)).toMatchObject({ used: 50000, percent: 38 });
+  // A genuinely newer measured assistant reply wins over the baseline.
+  chat.messageOrder.push("b");
+  chat.messages.b = {
+    id: "b", sessionID: "s", role: "assistant", modelID: "qwen", providerID: "local",
+    time: { created: 3, completed: 3 }, tokens: { total: 60000 },
+  };
+  expect(contextUsage(chat, model).used).toBe(60000);
+});
+
+it('takes a waiting compaction status as in-flight and honours an unknown result', () => {
+  const chat = emptySessionChat();
+  chat.status = { type: "waiting", message: "Сжатие контекста" };
+  expect(contextUsage(chat, model).compacting).toBe(true);
+  chat.status = { type: "idle" };
+  chat.compaction = { tokensBefore: 1000, tokensAfter: null, at: 2 };
+  chat.messageOrder = ["a"];
+  chat.messages.a = { id: "a", sessionID: "s", role: "assistant", summary: true, time: { created: 3, completed: 3 } };
+  expect(contextUsage(chat, model).used).toBeNull();
+});

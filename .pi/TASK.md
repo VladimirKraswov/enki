@@ -1,3 +1,18 @@
+# TASK — 2026-11-17: compaction result is measured, not the old input
+
+Runtime event `session.compaction` carries `tokensAfter`, but the UI ignored it.
+The meter kept using the previous assistant message's `tokens` (178935), so a
+successful manual compaction looked unchanged. Now the reducer stores the
+post-compaction estimate and clears the waiting status; `contextUsage` uses it
+until a newer measured answer exists. A failed compaction surfaces its error;
+an unknown result shows an honest unknown instead of the old number. The
+compacted branch is reloaded when the runtime reports it.
+
+Regressions: context usage baseline/newer measurement, waiting status,
+compaction event success/error.
+
+Версия 2.0.87.
+
 # TASK — 2026-11-17: Windows short build root + Hub remote tool
 
 На Windows источник обновления теперь распаковывается в короткий

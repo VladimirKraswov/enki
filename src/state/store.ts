@@ -3084,7 +3084,7 @@ class Store {
       // (the runtime refuses a different one) and no UI Hub lease; the
       // dispatcher leases the model the SDK actually summarizes with.
       await backend.submit({ id: `compact-${crypto.randomUUID()}`, kind: "compact", sessionID: sessionId, directory, payload: {} });
-      this.patchUi({ toast: "Запрос на сжатие контекста отправлен." });
+      this.patchUi({ toast: "Запускаю сжатие контекста…" });
     } catch (e) {
       this.patchUi({ toast: `Не удалось сжать контекст: ${errText(e)}` });
     } finally {
@@ -3600,6 +3600,28 @@ class Store {
         if (sessionID === this.state.activeSessionId && directory) void this.loadHistory(sessionID, directory);
       }
       return;
+    }
+    // Compaction is a runtime mutation with a measured result. Do not leave a
+    // "sent" toast or an old token count behind: surface the actual outcome and
+    // re-read the compacted branch before the next status is drawn.
+    if (event.type === "session.compaction" || event.type === "session.compacted") {
+      const sid = event.properties?.sessionID;
+      if (typeof sid === "string" && sid === this.state.activeSessionId) {
+        const failed = event.properties?.ok === false;
+        const after = event.properties?.tokensAfter;
+        this.patchUi({ toast: failed
+          ? `Сжатие контекста не удалось: ${typeof event.properties?.error === "string" ? event.properties.error : "причина не сообщена"}`
+          : typeof after === "number" && Number.isFinite(after)
+            ? `Контекст сжат: ${after.toLocaleString("ru-RU")} токенов в рабочем контексте.`
+            : "Сжатие контекста завершено; точный размер пока не измерен." });
+        const directory = this.state.directory;
+        if (!failed && directory) void this.loadHistory(sid, directory).catch(() => {});
+      }
+    }
+    if (event.type === "session.history" && event.properties?.reason === "compaction") {
+      const sid = event.properties?.sessionID, directory = this.state.directory;
+      if (typeof sid === "string" && sid === this.state.activeSessionId && directory)
+        void this.loadHistory(sid, directory).catch(() => {});
     }
     // Queue, dialog, schedule, notice and broker events never reach the chat reducer.
     if (routeRuntimeEvent(event, this.runtimeSync, this.agentDialogs)) return;

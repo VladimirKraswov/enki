@@ -25,6 +25,9 @@ export interface SessionChatState {
   parts: Record<string, MessagePart>;
   status: SessionStatus;
   lastError: string | null;
+  /** Last successful/attempted context compaction. Its post-compaction size is
+   * the only valid measurement until a newer assistant response supplies usage. */
+  compaction?: { tokensBefore: number | null; tokensAfter: number | null; at: number } | null;
   lastEventAt: number;
   /** Supported outcome of the latest settled run (`session.outcome`); cleared when a new run starts. */
   lastOutcome?: RunOutcomeView | null;
@@ -57,6 +60,7 @@ export function emptySessionChat(): SessionChatState {
     parts: {},
     status: { type: "idle" },
     lastError: null,
+    compaction: null,
     lastEventAt: 0,
   };
 }
@@ -259,6 +263,23 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       }
       break;
     }
+    case "session.compaction":
+    case "session.compacted": {
+      if (!sessionID) break;
+      if (seen(root, event.id)) break;
+      const slot = sessionSlot(root, sessionID);
+      const before = typeof props.tokensBefore === "number" && Number.isFinite(props.tokensBefore) ? props.tokensBefore : null;
+      const after = typeof props.tokensAfter === "number" && Number.isFinite(props.tokensAfter) && props.tokensAfter >= 0 ? props.tokensAfter : null;
+      if (slot.status.type === "waiting") slot.status = { type: "idle" };
+      if (props.ok === false) {
+        slot.lastError = typeof props.error === "string" && props.error ? props.error.slice(0, 2000) : "Сжатие контекста не удалось.";
+      } else {
+        slot.compaction = { tokensBefore: before, tokensAfter: after, at: Date.now() };
+        slot.lastError = null;
+      }
+      changed = true;
+      break;
+    }
     case "session.status": {
       if (!sessionID) break;
       const slot = sessionSlot(root, sessionID);
@@ -386,6 +407,7 @@ export function applyHistory(
   slot.taskObservations = previous?.taskObservations;
   slot.status = previous?.status ?? { type: "idle" };
   slot.lastError = previous?.lastError ?? null;
+  slot.compaction = previous?.compaction ?? null;
   slot.lastOutcome = previous?.lastOutcome ?? null;
   // Monotonic across reloads, so a re-read with patch parts is never "unchanged".
   slot.patchRevision = previous?.patchRevision;

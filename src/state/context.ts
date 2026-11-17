@@ -36,21 +36,28 @@ export function contextUsage(
   // Summary usage describes the old INPUT, not the resulting working context.
   const summaryBoundary = latest?.summary && latest.time.completed && !latest.error;
   const t = measuredForSelected && !summaryBoundary ? latest?.tokens : undefined;
-  const used = t
+  // The SDK reports the post-compaction estimate in `session.compaction`; the
+  // latest measured assistant message still describes the OLD input. Use that
+  // estimate until a newer measured reply exists.
+  const compacted = chat?.compaction;
+  const compactedIsNewer = !!compacted && (!latest || latest.time.created <= compacted.at || !!latest.summary);
+  const measured = t
     ? t.total ||
       (t.input ?? 0) +
         (t.output ?? 0) +
         (t.cache?.read ?? 0) +
         (t.cache?.write ?? 0)
     : null;
+  const used = compactedIsNewer ? compacted!.tokensAfter : measured;
   const compacting =
     !!chat &&
-    chat.messageOrder.some((id) => {
-      const m = chat.messages[id];
-      return (
-        m?.role === "assistant" && m.summary && !m.time.completed && !m.error
-      );
-    });
+    ((chat.status.type === "waiting" && /сжатие/i.test(chat.status.message ?? "")) ||
+      chat.messageOrder.some((id) => {
+        const m = chat.messages[id];
+        return (
+          m?.role === "assistant" && m.summary && !m.time.completed && !m.error
+        );
+      }));
   return {
     limit,
     threshold,
