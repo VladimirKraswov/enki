@@ -51,6 +51,12 @@ export interface NewSchedule {
   mode: "once" | "repeat"; runAt?: number; requestKey?: string; model: ModelRef;
 }
 
+/** A partial edit of an existing timer. `runAt: null` removes the exact first time. */
+export interface SchedulePatch {
+  title?: string; prompt?: string; minutes?: number; mode?: "once" | "repeat";
+  runAt?: number | null; model?: ModelRef;
+}
+
 export interface ImportedSchedule extends NewSchedule {
   id: string;
   /** The source's enabled intent; false for paused, uncertain or blocked timers. */
@@ -170,6 +176,45 @@ export class Scheduler {
       changed++;
     }
     return changed;
+  }
+
+  /**
+   * Atomic edit of one timer by id: title, prompt, interval/mode, first time or
+   * model. The id, chat and enabled flag stay. A metadata-only edit keeps the
+   * occurrence state; changing when/how it runs clears a stale retry/error and
+   * starts a full interval from now (an explicit future `runAt` wins). Nothing
+   * is sent immediately. Callers must first prove the timer belongs to the
+   * requested chat.
+   */
+  update(id: string, patch: SchedulePatch, now = Date.now()): ScheduleDTO {
+    const task = this.load().find((t) => t.id === id);
+    if (!task) throw new Error("Таймер не найден.");
+    if (task.state === "dispatching") throw new Error("Таймер сейчас отправляет запрос; повторите через несколько секунд.");
+    if (!["title", "prompt", "minutes", "mode", "runAt", "model"].some((key) => (patch as Record<string, unknown>)[key] !== undefined))
+      throw new Error("Укажите, что изменить в таймере.");
+    if (patch.model !== undefined && !isModelRef(patch.model)) throw new Error("Укажите корректную модель.");
+
+    const title = patch.title === undefined ? task.title : patch.title.trim();
+    const prompt = patch.prompt === undefined ? task.prompt : patch.prompt;
+    const minutes = patch.minutes ?? task.minutes;
+    const mode = patch.mode ?? task.mode;
+    const runAt = patch.runAt === null ? undefined : patch.runAt ?? task.runAt;
+    const changed = patch.minutes !== undefined || patch.mode !== undefined || patch.runAt !== undefined;
+    const nextAt = changed
+      ? (runAt !== undefined && runAt > now ? runAt : now + minutes * MINUTE)
+      : task.nextAt;
+    const next: ScheduleDTO = {
+      ...task, title, prompt, minutes, mode, ...(runAt !== undefined ? { runAt } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}), nextAt,
+      // A metadata-only edit keeps the occurrence state; changing when/how it
+      // runs makes stale waiting/error/attempt information inapplicable.
+      state: changed ? "ready" : task.state, ...(changed ? { detail: undefined, attempt: undefined } : {}),
+    };
+    if (patch.runAt === null) delete next.runAt;
+    if (!validSchedule(next)) throw new Error("Проверьте название, текст, интервал и время задания.");
+    this.retryAt.delete(id);
+    this.save(next);
+    return next;
   }
 
   /** Pause/resume. Resuming starts a full interval from now; nothing is sent immediately. */

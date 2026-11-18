@@ -352,4 +352,23 @@ describe("durable storage and restart", () => {
     expect(scheduler.remove(task.id)).toBe(false);
     expect(scheduler.list().tasks.map(t => t.id)).toEqual([later.id]);
   });
+
+  it("updates one existing timer in place and clears a stale retry without sending", () => {
+    const task = scheduler.add(input({ requestKey: "ci-watch" }), 0);
+    const changed = scheduler.update(task.id, { title: "CI вторая смена", minutes: 30 }, 1_000);
+    expect(changed).toMatchObject({ id: task.id, title: "CI вторая смена", prompt: "Проверь CI", minutes: 30, nextAt: 1_000 + 30 * MINUTE, enabled: true, state: "ready" });
+    expect(scheduler.list().tasks).toHaveLength(1);
+    expect(scheduler.update(task.id, { runAt: 50 * MINUTE }, 1_000).nextAt).toBe(50 * MINUTE);
+    const cleared = scheduler.update(task.id, { runAt: null }, 2_000);
+    expect(cleared.runAt).toBeUndefined();
+    expect(cleared.nextAt).toBe(2_000 + 30 * MINUTE);
+    expect(submitted).toHaveLength(0);
+    // A failed/waiting occurrence becomes editable again, keeping its id and enabled flag.
+    const paused = scheduler.update(task.id, { minutes: 5 }, 3_000);
+    expect(paused).toMatchObject({ id: task.id, enabled: true, state: "ready", minutes: 5 });
+    expect(() => scheduler.update(task.id, {}, 3_000)).toThrow(/что изменить/);
+    expect(() => scheduler.update(task.id, { title: " ", }, 3_000)).toThrow();
+    db.run("UPDATE schedules SET body=json_set(body,'$.state','dispatching') WHERE id=?", task.id);
+    expect(() => scheduler.update(task.id, { minutes: 10 }, 4_000)).toThrow(/отправляет/);
+  });
 });

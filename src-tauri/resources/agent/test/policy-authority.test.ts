@@ -54,6 +54,8 @@ describe("steering, timers and wake-ups", () => {
   it("hides only the exact scheduling guidance and wake marker; altered or foreign text stays", () => {
     const reminder = scheduleReminder("s", '/a"b');
     expect(reminder).toContain("desktop_schedule");
+    expect(reminder).toContain("action=update");
+    expect(reminder).toContain("Не ищи таймеры через bash");
     expect(reminder).toContain("внешним cron");
     expect(reminder).toContain("остановись");
     expect(visiblePromptText(`watch\n\n${reminder}`, "s")).toBe("watch");

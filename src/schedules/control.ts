@@ -1,5 +1,5 @@
 import {store} from '../state/store';
-import {taskScheduler,MAX_MINUTES} from './tasks';
+import {taskScheduler,MAX_MINUTES,type ScheduledTask} from './tasks';
 import {RUNTIME_AGENT_ID} from '../agent/runtime/ids';
 /**
  * Agent-control `schedule` command. Explicit scope; it never selects a chat,
@@ -14,6 +14,23 @@ export async function scheduleCommand(p:Record<string,unknown>) {
  await scheduler.refresh();
  const scoped=()=>scheduler.snapshot().filter(t=>t.server===server&&t.directory===directory&&t.sessionID===sid);
  if(action==='list')return {tasks:scoped(),storage:scheduler.status().storage};
+ if(action==='update') {
+  const id=typeof p.id==='string'&&p.id.trim()?p.id.trim():scoped().find(t=>t.requestKey===p.request_key)?.id;
+  if(!id||!scoped().some(t=>t.id===id))throw Error('Таймер не найден в этом чате');
+  const patch:{title?:string;prompt?:string;minutes?:number;mode?:'once'|'repeat';runAt?:number|null;model?:ScheduledTask['model']}={};
+  if(p.title!==undefined)patch.title=required('title');
+  if(p.prompt!==undefined)patch.prompt=required('prompt');
+  if(p.minutes!==undefined){if(!Number.isInteger(p.minutes)||(p.minutes as number)<1||(p.minutes as number)>MAX_MINUTES)throw Error('Интервал: от 1 минуты до 7 дней');patch.minutes=p.minutes as number;}
+  if(p.mode!==undefined){if(p.mode!=='once'&&p.mode!=='repeat')throw Error('Режим: once или repeat');patch.mode=p.mode;}
+  if(p.run_at!==undefined){
+   if(p.run_at===null)patch.runAt=null;
+   else {if(typeof p.run_at!=='number'||!Number.isFinite(p.run_at)||p.run_at<Date.now()||p.run_at>Date.now()+MAX_MINUTES*60000)throw Error('Время запуска должно быть в пределах следующих 7 дней');patch.runAt=p.run_at;}
+  }
+  if(p.provider_id!==undefined||p.model_id!==undefined)patch.model={providerID:required('provider_id'),modelID:required('model_id')};
+  if(!Object.keys(patch).length)throw Error('Укажите, что изменить в таймере');
+  const task=await scheduler.update(id,patch);
+  return {task,tasks:scoped(),notice:'Таймер изменён без удаления и создания заново.'};
+ }
  if(['remove','pause','resume'].includes(action)) {
   const id=required('id'),task=scoped().find(t=>t.id===id);if(!task)throw Error('Таймер не найден в этом чате');
   if(action==='remove')await scheduler.remove(id);else if(task.enabled!==(action==='resume'))await scheduler.toggle(id);

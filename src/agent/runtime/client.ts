@@ -410,6 +410,9 @@ export class RuntimeClient {
     return this.request<ScheduleDTO>("POST", "/schedules", { body });
   }
   toggleSchedule(id: string, enabled: boolean) { return this.request<ScheduleDTO>("PATCH", `/schedules/${encodeURIComponent(id)}`, { body: { enabled } }); }
+  updateSchedule(id: string, patch: { title?: string; prompt?: string; minutes?: number; mode?: "once" | "repeat"; runAt?: number | null; model?: ModelRef }) {
+    return this.request<ScheduleDTO>("PATCH", `/schedules/${encodeURIComponent(id)}`, { body: patch });
+  }
   removeSchedule(id: string) { return this.request<void>("DELETE", `/schedules/${encodeURIComponent(id)}`, { empty: true }); }
 
   // ----------------------------------------------------------------- models

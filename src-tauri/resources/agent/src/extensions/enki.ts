@@ -21,7 +21,10 @@ import { prepareToolPaths } from "../interaction/access-paths.ts";
 import { QUESTION_LIMITS, type InteractionBroker } from "../interaction/broker.ts";
 import type { McpPool } from "../mcp/pool.ts";
 import { sessionPolicyBlocks } from "../policy/prompt.ts";
-import type { PermissionRule } from "../protocol.ts";
+import { isModelRef } from "../protocol.ts";
+import type { PermissionRule, ModelRef } from "../protocol.ts";
+import { MAX_MINUTES, type Scheduler, type SchedulePatch } from "../schedule/scheduler.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SdkExtension } from "../sdk/adapter.ts";
 import type { EventJournal } from "../store/events.ts";
 import { isLocalProvider } from "../context-budget.ts";
@@ -38,6 +41,8 @@ export interface ExtensionDeps {
   broker: InteractionBroker;
   journal: EventJournal;
   pool: McpPool;
+  /** Runtime-owned timers; present in a real session, absent in isolated tests. */
+  scheduler?: Scheduler;
   defaultPolicy(): DefaultPolicy;
   capabilities: CapabilitiesScope | null;
   /** Compact project block (root + sibling chat titles); null for projectless chats. */
@@ -57,6 +62,7 @@ export function browserAccess(rules: readonly PermissionRule[], fallback: Defaul
 }
 
 export const QUESTION_TOOL = "question";
+export const SCHEDULE_TOOL = "desktop_schedule";
 const QuestionParams = Type.Object({
   questions: Type.Array(Type.Object({
     question: Type.String({ minLength: 1, maxLength: QUESTION_LIMITS.question, description: "Complete question text" }),
@@ -90,6 +96,117 @@ export function questionTool(scope: Pick<SessionScope, "sessionID" | "directory"
   };
 }
 
+const ScheduleParams = Type.Object({
+  action: Type.String(),
+  id: Type.Optional(Type.String()),
+  request_key: Type.Optional(Type.String()),
+  title: Type.Optional(Type.String()),
+  prompt: Type.Optional(Type.String()),
+  minutes: Type.Optional(Type.Number()),
+  mode: Type.Optional(Type.String()),
+  run_at: Type.Optional(Type.Number()),
+});
+
+/**
+ * Native timer tool for the current chat. It is always registered with the
+ * session, so an agent never has to discover an MCP server (or a database file)
+ * just to change one interval. Every edit is still executed by the one runtime
+ * Scheduler, which owns delivery, retries and durable state.
+ */
+export function scheduleTool(
+  scope: Pick<SessionScope, "sessionID" | "directory">,
+  scheduler: Pick<Scheduler, "list" | "add" | "update" | "toggle" | "remove">,
+) {
+  const scoped = () => scheduler.list({ directory: scope.directory, sessionID: scope.sessionID }).tasks;
+  const own = (id: string) => scoped().find((task) => task.id === id);
+  const find = (params: Static<typeof ScheduleParams>) => {
+    const byId = params.id?.trim();
+    if (byId) return own(byId);
+    const key = params.request_key?.trim();
+    if (key) return scoped().find((task) => task.requestKey === key);
+    // Один таймер в этом чате не требует предварительного list только ради id.
+    const all = scoped();
+    return all.length === 1 ? all[0] : undefined;
+  };
+  const modelOf = (ctx: ExtensionContext): ModelRef | null => {
+    if (!ctx.model) return null;
+    const variant = ctx.thinkingLevel && ctx.thinkingLevel !== "off" ? ctx.thinkingLevel : undefined;
+    const model: ModelRef = { providerID: ctx.model.provider, modelID: ctx.model.id, ...(variant ? { variant } : {}) };
+    return isModelRef(model) ? model : null;
+  };
+  const validTime = (runAt: number | null | undefined) => runAt === undefined || runAt === null
+    || (Number.isFinite(runAt) && runAt >= Date.now() && runAt <= Date.now() + MAX_MINUTES * 60_000);
+
+  return {
+    name: SCHEDULE_TOOL,
+    label: "Таймер Enki",
+    description: "Timers of THIS chat: list/create/update/remove/pause/resume. create needs title,prompt,request_key; minutes default 15; mode once/repeat; run_at Unix ms (0 clears on update). update changes fields in ONE call by id/request_key or the only timer, never remove+create. No bash/files.",
+    parameters: ScheduleParams,
+    async execute(_callId: string, params: Static<typeof ScheduleParams>, _signal: AbortSignal | undefined, _update: unknown, ctx: ExtensionContext): Promise<{ content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }> {
+      if (!["list", "create", "update", "remove", "pause", "resume"].includes(params.action))
+        throw new Error("Действие таймера: list, create, update, remove, pause или resume.");
+      if (params.action === "list") {
+        const { tasks, skipped } = scheduler.list({ directory: scope.directory, sessionID: scope.sessionID });
+        return {
+          content: [{ type: "text" as const, text: tasks.length ? tasks.map((task) => `${task.id} · ${task.title} · ${task.enabled ? `${task.mode === "once" ? "один раз" : `каждые ${task.minutes} мин`}, следующий ${new Date(task.nextAt).toISOString()}` : "на паузе"}${task.requestKey ? ` · key=${task.requestKey}` : ""}`).join("\n") : "В этом чате таймеров нет." }],
+          details: { tasks, skipped },
+        };
+      }
+      if (params.action === "create") {
+        const title = params.title?.trim(), prompt = params.prompt?.trim(), requestKey = params.request_key?.trim();
+        if (!title) throw new Error("Укажите название таймера (title).");
+        if (!prompt) throw new Error("Укажите задание таймера (prompt).");
+        if (!requestKey) throw new Error("Укажите стабильный request_key, чтобы не создавать дубликаты.");
+        if (!validTime(params.run_at)) throw new Error("Время запуска должно быть в пределах следующих 7 дней.");
+        const minutes = params.minutes ?? 15;
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_MINUTES) throw new Error("Интервал: от 1 минуты до 7 дней.");
+        if (params.mode !== undefined && params.mode !== "once" && params.mode !== "repeat") throw new Error("Режим: once или repeat.");
+        const model = modelOf(ctx);
+        if (!model) throw new Error("Не удалось определить модель чата.");
+        const task = scheduler.add({
+          directory: scope.directory, sessionID: scope.sessionID, title, prompt, minutes, mode: (params.mode ?? "repeat") as "once" | "repeat",
+          ...(typeof params.run_at === "number" ? { runAt: params.run_at } : {}), requestKey, model,
+        });
+        return { content: [{ type: "text" as const, text: `Таймер сохранён: ${task.title}.` }], details: { task } };
+      }
+      if (params.id === undefined && params.request_key === undefined && scoped().length > 1)
+        throw new Error("В этом чате несколько таймеров: укажите id из action=list.");
+      const task = find(params);
+      if (!task) throw new Error("Таймер не найден в этом чате. Сначала вызовите action=list.");
+      if (params.action === "remove") {
+        scheduler.remove(task.id);
+        return { content: [{ type: "text" as const, text: `Таймер удалён: ${task.title}.` }], details: { id: task.id } };
+      }
+      if (params.action === "pause" || params.action === "resume") {
+        const wanted = params.action === "resume";
+        const changed = task.enabled === wanted ? task : scheduler.toggle(task.id, wanted);
+        return { content: [{ type: "text" as const, text: `Таймер ${wanted ? "возобновлён" : "приостановлен"}: ${changed.title}.` }], details: { task: changed } };
+      }
+      const patch: SchedulePatch = {};
+      if (params.title !== undefined) patch.title = params.title;
+      if (params.prompt !== undefined) patch.prompt = params.prompt;
+      if (params.minutes !== undefined) {
+        if (!Number.isInteger(params.minutes) || params.minutes < 1 || params.minutes > MAX_MINUTES) throw new Error("Интервал: от 1 минуты до 7 дней.");
+        patch.minutes = params.minutes;
+      }
+      if (params.mode !== undefined) {
+        if (params.mode !== "once" && params.mode !== "repeat") throw new Error("Режим: once или repeat.");
+        patch.mode = params.mode;
+      }
+      if (params.run_at !== undefined) {
+        if (params.run_at === 0) patch.runAt = null;
+        else {
+          if (!validTime(params.run_at)) throw new Error("Время запуска должно быть в пределах следующих 7 дней.");
+          patch.runAt = params.run_at;
+        }
+      }
+      if (!Object.keys(patch).length) throw new Error("Укажите, что изменить: title, prompt, minutes, mode или run_at.");
+      const changed = scheduler.update(task.id, patch);
+      return { content: [{ type: "text" as const, text: `Таймер изменён без пересоздания: ${changed.title}.` }], details: { task: changed } };
+    },
+  };
+}
+
 export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExtension[] {
   const gate: SdkExtension = {
     name: "enki-tool-gate",
@@ -100,6 +217,11 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
         // An explicit deny rule (for example "*" → deny) is still honoured.
         if (toolName === QUESTION_TOOL)
           return evaluate(scope.rules(), QUESTION_TOOL, "*") === "deny" ? { decision: "deny", reason: "Вопросы пользователю запрещены правилами чата." } : { decision: "allow" };
+        // A timer is an explicit, chat-scoped user action owned by this runtime,
+        // not an arbitrary external tool: asking for permission each time would
+        // only train blind approvals. An explicit deny rule is still honoured.
+        if (toolName === SCHEDULE_TOOL)
+          return evaluate(scope.rules(), SCHEDULE_TOOL, "*") === "deny" ? { decision: "deny", reason: "Таймеры запрещены правилами чата." } : { decision: "allow" };
         // Project-tool classification only for Enki's own effective registration.
         const verdict = decide({ rules: scope.rules(), grants: [...deps.broker.grants(scope.sessionID), ...temporary], fallback: deps.defaultPolicy(), cwd, tool: toolName, input,
           projectTool: isEnkiProjectTool(pi, toolName) });
@@ -133,6 +255,10 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
     },
   };
   const questions: SdkExtension = { name: "enki-questions", factory: (pi) => { pi.registerTool(questionTool(scope, deps.broker)); } };
+  const schedules: SdkExtension = {
+    name: "enki-schedules",
+    factory: (pi) => { if (deps.scheduler) pi.registerTool(scheduleTool(scope, deps.scheduler)); },
+  };
   const lessons: SdkExtension = {
     name: "enki-lessons",
     factory: (pi) => {
@@ -192,7 +318,7 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
       });
     },
   };
-  const out: SdkExtension[] = [gate, policy, questions, lessons, learnedSkills, toolOutput, projectToolsExtension()];
+  const out: SdkExtension[] = [gate, policy, questions, schedules, lessons, learnedSkills, toolOutput, projectToolsExtension()];
   const caps = deps.capabilities;
   const reportMcp = (servers: ServerStatus[], error?: string) => {
     if (deps.reportMcp) deps.reportMcp(servers, error);

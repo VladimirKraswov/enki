@@ -3,7 +3,7 @@
 // dispatching pauses instead of replaying; overdue repeats never burst.
 import { afterEach, expect, it } from "vitest";
 import path from "node:path";
-import { fauxAssistantMessage, scriptedRuntime } from "../../src/sdk/testing.ts";
+import { fauxAssistantMessage, fauxToolCall, scriptedRuntime } from "../../src/sdk/testing.ts";
 import { scheduleWakeReminder } from "../../src/policy/prompt.ts";
 import { MAX_ATTEMPTS, RETRY_MS } from "../../src/schedule/scheduler.ts";
 import { gate, harness, newSession, promptCommand, tempDir, type Harness } from "../helpers.ts";
@@ -98,6 +98,42 @@ it("the desktop schedule MCP command is scoped to an explicit chat and idempoten
   expect((await h.request("POST", "/schedules/command", { ...body, directory: other })).status).toBe(409);
   const listed = await h.request<{ tasks: unknown[] }>("POST", "/schedules/command", { action: "list", directory: dir, session_id: sid });
   expect(listed.body.tasks).toHaveLength(1);
+  const updated = await h.request<{ task: { id: string; minutes: number; title: string } }>("POST", "/schedules/command", {
+    action: "update", directory: dir, session_id: sid, request_key: "ci-watch", minutes: 30, title: "watch longer",
+  });
+  expect(updated.status).toBe(200);
+  expect(updated.body.task).toMatchObject({ id: first.body.task.id, minutes: 30, title: "watch longer" });
+  expect(h.runtime.scheduler.list({ directory: dir, sessionID: sid }).tasks).toHaveLength(1);
+  const foreign = await newSession(h, dir);
+  expect((await h.request("POST", "/schedules/command", { action: "update", directory: dir, session_id: foreign, id: first.body.task.id, minutes: 1 })).status).toBe(404);
+});
+
+it("edits an existing timer in one native tool call, without remove+create or a permission prompt", async () => {
+  h = await harness();
+  const dir = h.project("native-timer");
+  const sid = await newSession(h, dir);
+  const task = h.runtime.scheduler.add({ directory: dir, sessionID: sid, title: "watch", prompt: "watch CI", minutes: 15, mode: "repeat", runAt: Date.now() + 10 * 60_000, requestKey: "ci-watch", model: h.model() });
+  let offered: string[] = [], result = "";
+  h.scripted.setResponses([
+    async (context) => {
+      offered = (context.tools ?? []).map((tool) => tool.name);
+      return fauxAssistantMessage([fauxToolCall("desktop_schedule", { action: "update", minutes: 30, run_at: 0 }, { id: "timer-update" })], { stopReason: "toolUse" });
+    },
+    async (context) => {
+      const answer = (context.messages as Array<{ role: string; content?: Array<{ text?: string }> }>).find((message) => message.role === "toolResult");
+      result = (answer?.content ?? []).map((part) => part.text ?? "").join("");
+      return fauxAssistantMessage("готово");
+    },
+  ]);
+  await h.command(promptCommand(h, "native-timer-1", sid, dir, "поменяй интервал на 30 минут"));
+  await h.waitReceipt("native-timer-1", ["completed"]);
+  const updated = h.runtime.scheduler.list({ directory: dir, sessionID: sid }).tasks;
+  expect(offered).toContain("desktop_schedule");
+  expect(updated).toHaveLength(1);
+  expect(updated[0]).toMatchObject({ id: task.id, title: "watch", prompt: "watch CI", minutes: 30, enabled: true });
+  expect(updated[0].runAt).toBeUndefined();
+  expect(result).toContain("без пересоздания");
+  expect(h.runtime.interactions.pendingPermissions()).toEqual([]);
 });
 
 // Retirement-gap port (old schedule-preflight) through the ACTUAL runtime

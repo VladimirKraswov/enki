@@ -26,7 +26,7 @@ import {
   type CapabilitiesDTO, type EventEnvelope, type HealthDTO, type ModelRef, type PermissionRule, type PromptPart, type SessionDTO,
 } from "../protocol.ts";
 import { refreshCatalog, refreshCredentialSnapshot, trustStore } from "../sdk/adapter.ts";
-import { MAX_MINUTES } from "../schedule/scheduler.ts";
+import { MAX_MINUTES, type SchedulePatch } from "../schedule/scheduler.ts";
 import { sessionDTO, validRules, type SessionRecord } from "../sessions/catalog.ts";
 import { ForkRefused } from "../sessions/registry.ts";
 import { HttpError, int, openEventStream, Router, STREAMING, str, withStatus, type Request } from "./http.ts";
@@ -464,9 +464,42 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     });
   });
   r("PATCH", "/schedules/:id", (request) => {
-    const enabled = object(request.body).enabled;
-    if (typeof enabled !== "boolean") throw new HttpError(400, "Укажите enabled.");
-    return runtime.scheduler.toggle(request.params.id, enabled);
+    const body = object(request.body);
+    const editable = ["title", "prompt", "minutes", "mode", "runAt", "model"].filter((key) => body[key] !== undefined);
+    if (!editable.length) {
+      const enabled = body.enabled;
+      if (typeof enabled !== "boolean") throw new HttpError(400, "Укажите enabled.");
+      return runtime.scheduler.toggle(request.params.id, enabled);
+    }
+    const patch: SchedulePatch = {};
+    if (body.title !== undefined) patch.title = textParam(body.title, "title", 120);
+    if (body.prompt !== undefined) patch.prompt = textParam(body.prompt, "prompt", 20000);
+    if (body.minutes !== undefined) {
+      if (typeof body.minutes !== "number" || !Number.isInteger(body.minutes) || body.minutes < 1 || body.minutes > MAX_MINUTES)
+        throw new HttpError(400, "Интервал: от 1 минуты до 7 дней.");
+      patch.minutes = body.minutes;
+    }
+    if (body.mode !== undefined) {
+      if (body.mode !== "once" && body.mode !== "repeat") throw new HttpError(400, "Режим: once или repeat.");
+      patch.mode = body.mode;
+    }
+    if (body.runAt !== undefined) {
+      if (body.runAt === null) patch.runAt = null;
+      else {
+        if (typeof body.runAt !== "number" || !Number.isFinite(body.runAt) || body.runAt < Date.now() || body.runAt > Date.now() + MAX_MINUTES * 60_000)
+          throw new HttpError(400, "Время запуска должно быть в пределах следующих 7 дней.");
+        patch.runAt = body.runAt;
+      }
+    }
+    if (body.model !== undefined) {
+      if (!isModelRef(body.model)) throw new HttpError(400, "Укажите корректную модель.");
+      patch.model = body.model;
+    }
+    if (body.enabled !== undefined && typeof body.enabled !== "boolean") throw new HttpError(400, "Укажите enabled.");
+    let task;
+    try { task = runtime.scheduler.update(request.params.id, patch); }
+    catch (error) { throw new HttpError(/не найден/i.test(String(error)) ? 404 : 409, error instanceof Error ? error.message : String(error)); }
+    return typeof body.enabled === "boolean" && body.enabled !== task.enabled ? runtime.scheduler.toggle(task.id, body.enabled) : task;
   });
   r("DELETE", "/schedules/:id", (request) => { if (!runtime.scheduler.remove(request.params.id)) throw new HttpError(404, "Таймер не найден."); return undefined; });
   // Desktop schedule MCP semantics (explicit scope; never selects a chat or edits a draft).
@@ -483,6 +516,42 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
       if (!list().some((t) => t.id === id)) throw new HttpError(404, "Таймер не найден в этом чате.");
       if (action === "remove") runtime.scheduler.remove(id); else runtime.scheduler.toggle(id, action === "resume");
       return { tasks: list(), pending: null };
+    }
+    if (action === "update") {
+      if (current.archived || isReadOnlyOrigin(current.origin)) throw new HttpError(409, "Чат архивирован или доступен только для чтения.");
+      const byId = typeof p.id === "string" && p.id.trim() ? p.id.trim() : "";
+      const byKey = typeof p.request_key === "string" && p.request_key.trim() ? p.request_key.trim() : "";
+      const id = byId || list().find((t) => t.requestKey === byKey)?.id;
+      if (!id || !list().some((t) => t.id === id)) throw new HttpError(404, "Таймер не найден в этом чате.");
+      const patch: SchedulePatch = {};
+      if (p.title !== undefined) patch.title = textParam(p.title, "title", 120);
+      if (p.prompt !== undefined) patch.prompt = textParam(p.prompt, "prompt", 20000);
+      if (p.minutes !== undefined) {
+        if (typeof p.minutes !== "number" || !Number.isInteger(p.minutes) || p.minutes < 1 || p.minutes > MAX_MINUTES)
+          throw new HttpError(400, "Интервал: от 1 минуты до 7 дней.");
+        patch.minutes = p.minutes;
+      }
+      if (p.mode !== undefined) {
+        if (p.mode !== "once" && p.mode !== "repeat") throw new HttpError(400, "Режим: once или repeat.");
+        patch.mode = p.mode;
+      }
+      if (p.run_at !== undefined) {
+        if (p.run_at === null) patch.runAt = null;
+        else {
+          if (typeof p.run_at !== "number" || !Number.isFinite(p.run_at) || p.run_at < Date.now() || p.run_at > Date.now() + MAX_MINUTES * 60_000)
+            throw new HttpError(400, "Время запуска должно быть в пределах следующих 7 дней.");
+          patch.runAt = p.run_at;
+        }
+      }
+      if (p.provider_id !== undefined || p.model_id !== undefined) {
+        if (!isModelRef({ providerID: p.provider_id, modelID: p.model_id })) throw new HttpError(400, "Укажите provider_id и model_id.");
+        patch.model = { providerID: required("provider_id"), modelID: required("model_id") };
+      }
+      if (!Object.keys(patch).length) throw new HttpError(400, "Укажите, что изменить в таймере.");
+      let task;
+      try { task = runtime.scheduler.update(id, patch); }
+      catch (error) { throw new HttpError(409, error instanceof Error ? error.message : String(error)); }
+      return { task, tasks: list(), notice: "Таймер изменён без удаления и создания заново." };
     }
     if (action !== "create") throw new HttpError(400, "Неизвестное действие расписания.");
     if (current.archived || isReadOnlyOrigin(current.origin)) throw new HttpError(409, "Чат архивирован или доступен только для чтения.");

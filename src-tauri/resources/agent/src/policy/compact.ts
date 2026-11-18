@@ -15,5 +15,5 @@ export const compactUserWaitReminder = (sessionId: string) => `<enki-user-wait-v
 </enki-user-wait-v1>`;
 
 export const compactScheduleReminder = (sessionId: string, directory: string) => `<enki-schedules-v1 session="${encodeURIComponent(sessionId)}">
-Таймеры Enki: для «следи», «дождись» или «сделай позже» обязательно используй desktop_schedule (MCP enki-schedules). session_id=${JSON.stringify(sessionId)}, directory=${JSON.stringify(directory)}. Сначала list, затем create: mode=repeat с minutes (обычно 5–15) или mode=once; run_at — Unix миллисекунды; request_key — стабильное имя. По завершении наблюдения удали таймер через remove. Не создавай новые таймеры из планового пробуждения. Не заменяй Enki-таймер внешним cron/systemd/shell-loop/watchdog. Если инструмент недоступен — остановись и сообщи, не создавай внешний таймер. Таймеры работают, пока Enki открыта или в трее.
+Таймеры Enki: используй desktop_schedule; не ищи через bash/файлы. directory=${JSON.stringify(directory)}. list→create (title,prompt,request_key; minutes 5–15; once/repeat; run_at Unix ms). Изменение — action=update с id/request_key (один таймер — без них), без remove+create. После наблюдения — remove. Не создавай таймеры из пробуждения. Не заменяй Enki-таймер внешним cron/systemd/shell. Нет инструмента — сообщи.
 </enki-schedules-v1>`;

@@ -54,6 +54,9 @@ it("creates/lists/pauses/resumes/removes in the explicit chat without selecting 
   expect(taskScheduler().snapshot()[0].enabled).toBe(false);
   await scheduleCommand({ ...args, action: "resume", id });
   expect(taskScheduler().snapshot()[0].enabled).toBe(true);
+  const edited = await scheduleCommand({ ...args, action: "update", id, minutes: 30, title: "CI longer" });
+  expect(edited.task).toMatchObject({ id, minutes: 30, title: "CI longer" });
+  expect(taskScheduler().snapshot()).toHaveLength(1);
   await scheduleCommand({ ...args, action: "remove", id });
   expect(taskScheduler().snapshot()).toHaveLength(0);
   expect(store.state.activeSessionId).toBe("visible");

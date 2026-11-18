@@ -1,3 +1,16 @@
+# TASK — 2026-11-18: таймер меняется одним вызовом / 2.0.92
+
+Жалоба: смена одного времени таймера стоила десятков вызовов и bash-поиска.
+Причина: у инструмента не было update, а native tool не был гарантирован в сессии.
+Сделано: Scheduler.update по id/request_key (title, prompt, minutes, mode, run_at;
+run_at=null в MCP и run_at=0 во встроенном инструменте убирают точное время); PATCH /schedules/:id и /schedules/command update;
+клиентский update; встроенный desktop_schedule в каждой сессии (gate разрешает,
+явный deny соблюдается; единственный таймер можно менять без id); MCP-схема update;
+policy прямо запрещает искать таймеры через bash и требует update вместо remove+create.
+Проверки: runtime 506 vitest + 172 node, UI 1327, cargo 301, clippy -D warnings, fmt,
+build/architecture/bundle/docs, releases 30, Hub 138 (2 skip); бюджет контекста малой модели сохранён.
+Следующее: commit 2.0.92 → release:local stable → квитанция/пакеты → desktop_updates apply.
+
 # TASK — 2026-11-18: stream reconnect warnings are single and calmer
 
 Частые предупреждения о потере event-stream имели две причины в UI: порог

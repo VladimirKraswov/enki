@@ -64,7 +64,7 @@ export class TaskScheduler {
   attach(backend: RuntimeBackend | null, server: string): void {
     this.backend = backend;
     this.server = server;
-    if (!backend) { this.tasks = []; this.update({ storage: "unavailable" }); return; }
+    if (!backend) { this.tasks = []; this.setInfo({ storage: "unavailable" }); return; }
     void this.refresh();
   }
 
@@ -75,9 +75,9 @@ export class TaskScheduler {
       const { tasks } = await backend.schedules();
       if (backend !== this.backend) return;
       this.tasks = tasks.map(t => taskOf(t, this.server));
-      this.update({ storage: "ok" });
+      this.setInfo({ storage: "ok" });
     } catch {
-      if (backend === this.backend) this.update({ storage: "unavailable" });
+      if (backend === this.backend) this.setInfo({ storage: "unavailable" });
     }
   }
 
@@ -115,21 +115,34 @@ export class TaskScheduler {
     return task;
   }
 
+  /**
+   * Edit one timer in place. The runtime keeps its id and enabled flag; an
+   * interval/time/model change clears a stale retry/error and reschedules from
+   * now. Nothing is sent by the edit itself.
+   */
+  async update(id: string, patch: { title?: string; prompt?: string; minutes?: number; mode?: "once" | "repeat"; runAt?: number | null; model?: ScheduledTask["model"] }): Promise<ScheduledTask> {
+    const task = this.tasks.find(t => t.id === id);
+    if (!task) throw new Error("Таймер не найден в этом чате.");
+    const updated = await this.connected().client.updateSchedule(id, patch);
+    this.observe({ type: "schedule.updated", properties: { task: updated } });
+    return taskOf(updated, this.server);
+  }
+
   /** Pause or resume. Resuming starts a full interval from now; nothing is sent immediately. */
   async toggle(id: string): Promise<void> {
     const task = this.tasks.find(t => t.id === id);
     if (!task) return;
-    this.update({ pending: { ...this.info.pending, [id]: "pause" } });
+    this.setInfo({ pending: { ...this.info.pending, [id]: "pause" } });
     try { this.observe({ type: "schedule.updated", properties: { task: await this.connected().client.toggleSchedule(id, !task.enabled) } }); }
-    finally { const pending = { ...this.info.pending }; delete pending[id]; this.update({ pending }); }
+    finally { const pending = { ...this.info.pending }; delete pending[id]; this.setInfo({ pending }); }
   }
 
   async remove(id: string): Promise<void> {
-    this.update({ pending: { ...this.info.pending, [id]: "remove" } });
+    this.setInfo({ pending: { ...this.info.pending, [id]: "remove" } });
     try {
       await this.connected().client.removeSchedule(id);
       this.observe({ type: "schedule.removed", properties: { id } });
-    } finally { const pending = { ...this.info.pending }; delete pending[id]; this.update({ pending }); }
+    } finally { const pending = { ...this.info.pending }; delete pending[id]; this.setInfo({ pending }); }
   }
 
   /**
@@ -176,7 +189,7 @@ export class TaskScheduler {
     return { accepted: done.size, quarantined, pending: receipts.length - done.size - quarantined.length, invalid, ...(backupRetained ? { backupRetained } : {}) };
   }
 
-  private update(patch: Partial<SchedulerStatus>) { this.info = { ...this.info, ...patch }; this.notify(); }
+  private setInfo(patch: Partial<SchedulerStatus>) { this.info = { ...this.info, ...patch }; this.notify(); }
   private notify() { this.listeners.forEach(listener => listener()); }
 }
 

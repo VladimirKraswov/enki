@@ -470,7 +470,7 @@ export class Runtime {
           sessionID: record.id, directory: record.directory,
           rules: () => this.catalog.get(record.id)?.permission ?? [],
           workshop: () => this.catalog.get(record.id)?.workshop ?? false,
-        }, { broker: this.interactions, journal: this.journal, pool: this.pool, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
+        }, { broker: this.interactions, journal: this.journal, pool: this.pool, scheduler: this.scheduler, defaultPolicy: () => this.settings().defaultPolicy, capabilities: caps,
           projectContext: directory => this.projectContext(directory),
           lessons: this.lessons,
           learnedSkills: path.join(this.paths.data, "skills", "learned"),
