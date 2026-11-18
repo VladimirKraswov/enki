@@ -3,7 +3,7 @@
 // stream resumes and the journal replays the gap. Only a reconnect that lasts
 // longer than the grace period is worth the owner's attention.
 
-export const STREAM_GRACE_MS = 5000;
+export const STREAM_GRACE_MS = 15000;
 
 /** True only for a reconnect that has already lasted the grace period. */
 export function streamStalled(streamState: string | undefined, downSince: number | null | undefined, now: number, grace = STREAM_GRACE_MS): boolean {

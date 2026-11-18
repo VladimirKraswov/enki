@@ -1,3 +1,11 @@
+# TASK — 2026-11-18: stream reconnect warnings are single and calmer
+
+Частые предупреждения о потере event-stream имели две причины в UI: порог
+тревоги был5с, а ChatView и Composer одновременно рисовали отдельные баннеры
+для одного и того же `streamState=reconnecting`. Порог увеличен до15с, дубль в
+Composer убран; ChatView остаётся единственным местом с честным статусом и
+кнопкой проверки. Короткие переподключения теперь не показываются. Версия2.0.91.
+
 # TASK — 2026-11-18: project/session MCP and skill scopes
 
 Добавлен третий слой capability registry: global → project → session. Ключ

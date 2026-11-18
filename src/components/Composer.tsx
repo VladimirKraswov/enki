@@ -7,7 +7,6 @@ import { ModelSwitchStatus } from "./ModelSwitchStatus";
 import { ModelSelectionDialog } from "./ModelSelectionDialog";
 import { HostPicker } from "./WorkspacePicker";
 import { ContextMeter } from "./ContextMeter";
-import { useStreamStalled } from "./useStreamStalled";
 import { PendingCorrections } from "./PendingCorrections";
 import { VoiceInput } from "./VoiceInput";
 import { accessOptions, type AccessMode } from "../state/access";
@@ -90,8 +89,6 @@ export function Composer() {
   const running = status?.type === "busy" || status?.type === "retry" || status?.type === "waiting";
   // The engine that will run the prompt decides readiness, not OpenCode alone.
   const connected = store.engineReady();
-  // Short reconnects stay silent; only a stalled stream shows the banner.
-  const streamStalled = useStreamStalled(store.state.connection.streamState, store.state.connection.streamDownSince);
 
   useEffect(() => {
     let cancelled = false;
@@ -257,15 +254,6 @@ export function Composer() {
           <button onClick={() => void store.retryConnection()}>
             Проверить снова
           </button>
-        </div>
-      )}
-      {connected && streamStalled && (
-        <div
-          className="offline-banner"
-          style={{ borderColor: "var(--warn)", color: "var(--warn)" }}
-          role="status"
-        >
-          Связь с чатом временно прервалась. Восстанавливаем автоматически — повторять запрос не нужно.
         </div>
       )}
       {archive && session && <div className="archive-composer-notice" role="note">
