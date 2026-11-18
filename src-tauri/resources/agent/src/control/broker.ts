@@ -30,6 +30,8 @@ export type ConfigMethod =
 export interface CapabilitiesScope {
   key: string;
   root: string;
+  /** Registry layers in low-to-high precedence: global, project, session. */
+  registryKeys?: string[];
   skillPaths: string[];
   /** Shared MCP runtime installed and at least one server enabled. */
   mcp: boolean;

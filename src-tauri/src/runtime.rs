@@ -587,7 +587,8 @@ fn broker_core(method: &str, params: &Value) -> Result<Value, String> {
         }
         "capabilities.prepare" => {
             let directory = params["directory"].as_str().ok_or("Не указан каталог")?;
-            crate::capabilities::runtime_scope(Path::new(directory))
+            let session = params["sessionID"].as_str();
+            crate::capabilities::runtime_scope(Path::new(directory), session)
         }
         _ => Err("Неизвестный запрос среды выполнения".into()),
     }

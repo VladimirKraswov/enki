@@ -1,3 +1,20 @@
+# TASK — 2026-11-18: project/session MCP and skill scopes
+
+Добавлен третий слой capability registry: global → project → session. Ключ
+сессии — стабильный хэш canonical project path + runtime sessionID; session
+overrides наследуют project, а project — global. `capabilities.prepare` получает
+sessionID, runtime кэширует scope по паре directory+session, MCP pool/proxy
+читает все три слоя, skills фильтруются по effective enabled sources. В UI
+появились «Инструменты и навыки…» у проекта и сессии, наследование и
+переопределение MCP/skill sources; отключённые схемы не попадают в контекст.
+
+Применены наборы: Compute Mesh — compute-mesh, schedules, web-search-plus;
+Workshop — schedules, web-search-plus, без compute-mesh/freecad/creality;
+FreeCAD — freecad/freecad-inspect/schedules. Старые capabilities сохранены в
+`.local/capabilities-backup-*`.
+
+Проверки: npm test1327, cargo301, typecheck/build; версия2.0.90.
+
 # TASK — 2026-11-18: completion unread dot independent of missed busy status
 
 Unread completion marks depended on observing a busy status before session.idle.

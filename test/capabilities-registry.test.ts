@@ -42,6 +42,9 @@ it("registry reads are bounded and reject traversal/symlinks; project merges pre
     await writeFile(path.join(root, "project-0123456789abcdef.json"), JSON.stringify({ ...emptyRegistry(), sources: [{ id: "extra", path: "/extra", enabled: true }] }));
     expect((await readRegistry(root, "project-0123456789abcdef")).servers).toHaveLength(1);
     await expect(readRegistry(root, "../other")).rejects.toThrow();
+    await writeFile(path.join(root, "session-0123456789abcdef.json"), JSON.stringify({ ...emptyRegistry(), servers: [{ ...server, id: "project-search", enabled: false }] }));
+    const session = await readRegistry(root, "session-0123456789abcdef", ["global", "project-0123456789abcdef", "session-0123456789abcdef"]);
+    expect(session.servers.find((item: { id: string }) => item.id === "project-search")?.enabled).toBe(false);
     await writeFile(path.join(root, "global.json"), "x".repeat(262145));
     await expect(readRegistry(root, "global")).rejects.toThrow();
   } finally {

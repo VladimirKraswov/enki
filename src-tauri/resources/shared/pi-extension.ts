@@ -24,7 +24,7 @@ export interface SharedConnection {
 }
 
 /** Registry scope ("global" or "project-<fnv>") and the native proxy executable. */
-export interface SharedScope { registryKey: string; command: string }
+export interface SharedScope { registryKey: string; command: string; registryKeys?: string[] }
 
 export interface SharedPool {
   /** Ref-counted; `release` closes the connection when the last user leaves. */

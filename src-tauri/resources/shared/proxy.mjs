@@ -9,8 +9,11 @@ import {
 import { connectServer } from "./client.mjs";
 import { readRegistry, validId } from "./registry.mjs";
 const [root, key, id, mode] = process.argv.slice(2);
+const registryKeys = (process.env.ENKI_MCP_REGISTRY_KEYS || "")
+  .split(",")
+  .filter(Boolean);
 const current = async () =>
-  (await readRegistry(root, key)).servers.find((s) => s.id === id && s.enabled);
+  (await readRegistry(root, key, registryKeys)).servers.find((s) => s.id === id && s.enabled);
 let connection;
 try {
   if (!validId(id)) throw new Error("Invalid service");

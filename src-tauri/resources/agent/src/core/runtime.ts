@@ -123,7 +123,7 @@ export interface RuntimeConfig {
   /** Tests inject a model runtime with a scripted provider. */
   modelRuntime?: SdkModelRuntime;
   /** Tests inject shared-capability scope; production asks the broker. */
-  capabilities?: (directory: string) => Promise<CapabilitiesScope | null>;
+  capabilities?: (directory: string, sessionID?: string) => Promise<CapabilitiesScope | null>;
   /** Tests add plugin extensions (tools, UI calls) exactly as a Pi package would. */
   extraExtensions?: (session: { sessionID: string; directory: string }) => SdkExtension[];
   settingsInMemory?: boolean;
@@ -409,15 +409,16 @@ export class Runtime {
 
   sessionDir(directory: string): string { return sessionDirFor(this.paths, directory); }
 
-  private async capabilities(directory: string): Promise<CapabilitiesScope | null> {
-    if (this.config.capabilities) return this.config.capabilities(directory);
+  private async capabilities(directory: string, sessionID?: string): Promise<CapabilitiesScope | null> {
+    if (this.config.capabilities) return this.config.capabilities(directory, sessionID);
     if (this.config.host !== "local" || !this.config.broker.available()) return null;
-    const cached = this.capabilityScopes.get(directory);
+    const cacheKey = `${directory}\0${sessionID ?? ""}`;
+    const cached = this.capabilityScopes.get(cacheKey);
     if (cached && Date.now() - cached.at < 30_000) return cached.scope;
     const epoch = this.capabilityEpoch;
-    const scope = await this.config.broker.call<CapabilitiesScope>("capabilities.prepare", { directory }, undefined, 20_000).catch(() => null);
+    const scope = await this.config.broker.call<CapabilitiesScope>("capabilities.prepare", { directory, ...(sessionID ? { sessionID } : {}) }, undefined, 20_000).catch(() => null);
     // A reply that raced a refresh may describe the old registry: use it once, never cache it.
-    if (epoch === this.capabilityEpoch) this.capabilityScopes.set(directory, { at: Date.now(), scope });
+    if (epoch === this.capabilityEpoch) this.capabilityScopes.set(cacheKey, { at: Date.now(), scope });
     return scope;
   }
 
@@ -429,7 +430,8 @@ export class Runtime {
    */
   async refreshCapabilities(directory: string | null): Promise<{ reopened: number; pending: number }> {
     this.capabilityEpoch++;
-    if (directory === null) this.capabilityScopes.clear(); else this.capabilityScopes.delete(directory);
+    if (directory === null) this.capabilityScopes.clear();
+    else for (const key of [...this.capabilityScopes.keys()]) if (key === directory || key.startsWith(directory + "\0")) this.capabilityScopes.delete(key);
     const result = await this.registry.refreshResources(directory);
     this.journal.append(directory, null, { type: "runtime.resources", properties: { directory, ...result } });
     return result;
@@ -448,7 +450,7 @@ export class Runtime {
     this.mcpReports.delete(record.id); this.mcpReports.set(record.id, { epoch, servers: [] });
     while (this.mcpReports.size > 256) this.mcpReports.delete(this.mcpReports.keys().next().value!);
     const settings = this.settings();
-    const scope = await this.capabilities(record.directory);
+    const scope = await this.capabilities(record.directory, record.id);
     // Persisted switches gate the actual resources (applied when a worker opens).
     const caps = scope ? { ...scope, browser: scope.browser && settings.browserEnabled, lspConfig: settings.lspEnabled ? scope.lspConfig : null } : null;
     const reported = (scope as (CapabilitiesScope & { computerSkillPath?: unknown }) | null)?.computerSkillPath;

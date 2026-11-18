@@ -3,9 +3,9 @@ import path from "node:path";
 export const validId = (id) =>
   typeof id === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(id);
 export const validKey = (key) =>
-  key === "global" || /^project-[0-9a-f]{16}$/.test(key);
-export async function readRegistry(root, key) {
-  if (!path.isAbsolute(root) || !validKey(key))
+  key === "global" || /^(?:project|session)-[0-9a-f]{16}$/.test(key);
+export async function readRegistry(root, key, parents = []) {
+  if (!path.isAbsolute(root) || !validKey(key) || !Array.isArray(parents) || parents.some((parent) => !validKey(parent)))
     throw new Error("Invalid shared registry");
   async function read(name) {
     const file = path.join(root, `${name}.json`);
@@ -27,19 +27,27 @@ export async function readRegistry(root, key) {
       throw error;
     }
   }
-  const global = await read("global"),
-    project = key === "global" ? global : await read(key);
+  const global = await read("global");
+  let base = global;
+  for (const parent of parents) {
+    if (parent === "global" || parent === key) continue;
+    const layer = await read(parent);
+    base = {
+      ...base,
+      sources: [...new Map([...base.sources, ...layer.sources].map((v) => [v.id, v])).values()],
+      servers: [...new Map([...base.servers, ...layer.servers].map((v) => [v.id, v])).values()],
+    };
+  }
+  const local = key === "global" ? global : await read(key);
   const merge = (field) => [
     ...new Map(
-      [...global[field], ...(key === "global" ? [] : project[field])].map(
-        (v) => [v.id, v],
-      ),
+      [...base[field], ...(key === "global" ? [] : local[field])].map((v) => [v.id, v]),
     ).values(),
   ];
   return {
     sources: merge("sources"),
     servers: merge("servers"),
-    directory: project.directory,
+    directory: local.directory,
   };
 }
 export function remoteUrl(raw) {

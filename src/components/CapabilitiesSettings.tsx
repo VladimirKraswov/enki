@@ -52,12 +52,18 @@ export function registryNotice(refreshed: { reopened: number; pending: number } 
 export function CapabilitiesSettings({
   onDirtyChange,
   onNavigate,
+  initialScope = "global",
+  directoryOverride,
+  sessionOverride,
 }: {
   onDirtyChange?: (dirty: boolean) => void;
   onNavigate?: (section: "browser" | "pi") => void;
+  initialScope?: Scope;
+  directoryOverride?: string | null;
+  sessionOverride?: string | null;
 }) {
   const app = useAppState(),
-    [scope, setScope] = useState<Scope>("global"),
+    [scope, setScope] = useState<Scope>(initialScope),
     [catalog, setCatalog] = useState<Catalog | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -73,7 +79,8 @@ export function CapabilitiesSettings({
     [probes, setProbes] = useState<Record<string, string[]>>({});
   const generation = useRef(0),
     local = isLocalComputer(app.prefs.endpoint, !!store.currentHost()),
-    directory = scope === "project" ? app.directory : null;
+    directory = scope === "global" ? null : directoryOverride ?? app.directory,
+    session = scope === "session" ? sessionOverride ?? app.activeSessionId : null;
   const running =
     Object.values({ ...app.statuses, ...app.activityStatuses }).some(
       (s) => s.type === "busy" || s.type === "retry",
@@ -93,6 +100,7 @@ export function CapabilitiesSettings({
       const value = await capabilityNative<Catalog>("shared_catalog", {
         scope,
         directory,
+        ...(session ? { session } : {}),
       });
       if (serial !== generation.current) return;
       setCatalog(value);
@@ -137,6 +145,9 @@ export function CapabilitiesSettings({
     app.activeSessionId,
     app.prefs.endpoint,
     local,
+    initialScope,
+    directoryOverride,
+    sessionOverride,
   ]);
   const save = async (registry: Registry) => {
     if (!catalog || running || busy) return;
@@ -148,6 +159,7 @@ export function CapabilitiesSettings({
       const saved = await capabilityNative<Catalog>("shared_save", {
         scope,
         directory,
+        ...(session ? { session } : {}),
         expected: catalog.content,
         registry,
       });
@@ -177,19 +189,44 @@ export function CapabilitiesSettings({
       if (serial === generation.current) setBusy(false);
     }
   };
+  // A local override has the same id as its inherited parent; show one row,
+  // with the effective/local state, not two contradictory rows.
+  const localServerIds = new Set(catalog?.registry.servers.map((s) => s.id) ?? []);
+  const localSourceIds = new Set(catalog?.registry.sources.map((s) => s.id) ?? []);
+  const parentServerIds = new Set(catalog?.inherited.servers.map((s) => s.id) ?? []);
+  const parentSourceIds = new Set(catalog?.inherited.sources.map((s) => s.id) ?? []);
+  const inheritServer = (id: string) => {
+    if (!catalog) return;
+    void save({ ...catalog.registry, servers: catalog.registry.servers.filter((item) => item.id !== id) });
+  };
+  const inheritSource = (id: string) => {
+    if (!catalog) return;
+    void save({ ...catalog.registry, sources: catalog.registry.sources.filter((item) => item.id !== id) });
+  };
   const servers = catalog
     ? [
-        ...catalog.inherited.servers.map((s) => ({ ...s, inherited: true })),
         ...catalog.registry.servers.map((s) => ({ ...s, inherited: false })),
+        ...catalog.inherited.servers.filter((s) => !localServerIds.has(s.id)).map((s) => ({ ...s, inherited: true })),
       ]
     : [];
   const sources = catalog
     ? [
-        ...catalog.inherited.sources.map((s) => ({ ...s, inherited: true })),
         ...catalog.registry.sources.map((s) => ({ ...s, inherited: false })),
+        ...catalog.inherited.sources.filter((s) => !localSourceIds.has(s.id)).map((s) => ({ ...s, inherited: true })),
       ]
     : [];
   const skills = catalog?.skills ?? [];
+  const overrideServer = (s: SharedServer, enabled: boolean) => {
+    if (!catalog) return;
+    const local = catalog.registry.servers.filter((item) => item.id !== s.id);
+    const { inherited: _inherited, ...copy } = s as SharedServer & { inherited?: boolean };
+    void save({ ...catalog.registry, servers: [...local, { ...copy, enabled }] });
+  };
+  const overrideSource = (s: { id: string; path: string; enabled: boolean }, enabled: boolean) => {
+    if (!catalog) return;
+    const local = catalog.registry.sources.filter((item) => item.id !== s.id);
+    void save({ ...catalog.registry, sources: [...local, { id: s.id, path: s.path, enabled }] });
+  };
   const sourceFolder = async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
@@ -237,8 +274,11 @@ export function CapabilitiesSettings({
             onChange={(e) => setScope(e.target.value as Scope)}
           >
             <option value="global">Весь компьютер</option>
-            <option value="project" disabled={!app.directory}>
+            <option value="project" disabled={!directory}>
               Этот проект
+            </option>
+            <option value="session" disabled={!directory || !session}>
+              Эта сессия
             </option>
           </select></SettingField>
         <button
@@ -312,6 +352,10 @@ export function CapabilitiesSettings({
                         : "Каталог на диске"}
                     </small>
                   </div>
+                  {s.inherited && <button className="btn small" disabled={!editable} onClick={() => overrideSource(s, !s.enabled)}>
+                    {s.enabled ? "Отключить в этой области" : "Включить в этой области"}
+                  </button>}
+                  {!s.inherited && parentSourceIds.has(s.id) && <button className="btn small" disabled={!editable} onClick={() => inheritSource(s.id)}>Вернуть наследование</button>}
                   <SettingField label="Включён"><input
                       type="checkbox"
                       aria-label={`Источник ${s.id}`}
@@ -448,8 +492,16 @@ export function CapabilitiesSettings({
                   </div>
                   <code>{s.kind === "http" ? s.url : s.command}</code>
                   <div className="capability-statuses">
-                    <span>Агент: {runtimeServerState(s, store.mcpServerStatuses(app.activeSessionId), piRunning)}</span>
+                    <span>Агент: {runtimeServerState(s, store.mcpServerStatuses(session ?? app.activeSessionId), piRunning)}</span>
                   </div>
+                  {s.inherited && <div className="settings-actions">
+                    <button className="btn small" disabled={!editable} onClick={() => overrideServer(s, !s.enabled)}>
+                      {s.enabled ? "Отключить в этой области" : "Включить в этой области"}
+                    </button>
+                  </div>}
+                  {!s.inherited && parentServerIds.has(s.id) && <div className="settings-actions">
+                    <button className="btn small" disabled={!editable} onClick={() => inheritServer(s.id)}>Вернуть наследование</button>
+                  </div>}
                   <div className="settings-actions">
                     <button
                       className="btn"
@@ -462,7 +514,8 @@ export function CapabilitiesSettings({
                             tools: { name: string }[];
                           }>("shared_probe", {
                             scope,
-                            directory: app.directory,
+                            directory,
+                            ...(session ? { session } : {}),
                             id: s.id,
                             nodeProgram: app.prefs.pi?.nodeProgram ?? null,
                           });

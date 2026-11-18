@@ -205,8 +205,8 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
     out.push({
       name: "enki-shared-mcp",
       factory: (pi) => attachShared(pi, {
-        registry: () => readRegistry(caps.root, caps.key),
-        scope: { registryKey: caps.key, command: caps.executable },
+        registry: () => readRegistry(caps.root, caps.key, caps.registryKeys ?? []),
+        scope: { registryKey: caps.key, command: caps.executable, registryKeys: caps.registryKeys },
         pool: deps.pool,
         report: (servers) => reportMcp(servers),
         reserved: () => pi.getAllTools().map((tool) => tool.name),

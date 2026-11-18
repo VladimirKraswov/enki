@@ -18,7 +18,7 @@ export interface SharedRegistry {
 }
 export function validId(id: unknown): id is string;
 export function validKey(key: unknown): key is string;
-export function readRegistry(root: string, key: string): Promise<SharedRegistry>;
+export function readRegistry(root: string, key: string, parents?: string[]): Promise<SharedRegistry>;
 export function remoteUrl(raw: string): URL;
 export function toolName(server: string, tool: string): string;
 export const PROFILE_ENV: "ENKI_PROFILE_DIR";

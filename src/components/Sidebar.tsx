@@ -3,6 +3,7 @@ import {taskScheduler} from "../schedules/tasks";
 import {activeTimers, directoryTimers, timerAriaLabel} from "../schedules/indicators";
 import {TimerBadge} from "./TimerBadge";
 import {ScheduleDialog} from "./ScheduleDialog";
+import { CapabilityScopeDialog } from "./CapabilityScopeDialog";
 import { UpdateBadge } from "../updates/runtime";
 import { InformationDialog } from "./InformationDialog";
 import enkiMark from "../assets/enki-icon.png";
@@ -83,6 +84,7 @@ export function Sidebar() {
   const suppressOpen = useRef(false);
   const [creating, setCreating] = useState(false), [newName, setNewName] = useState("");
   const [moveDialog, setMoveDialog] = useState<Session | null>(null);
+  const [capabilitiesSession, setCapabilitiesSession] = useState<Session | null>(null);
   const submitCreate = async () => {
     const name = newName.trim(); if (!name) return;
     setMoveError(null);
@@ -138,6 +140,11 @@ export function Sidebar() {
             setMenu(null);
             if (!isArchived) void store.openChat(sess);
           }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenuAnchor(event.currentTarget);
+            setMenu(rowKey);
+          }}
           title={sess.title}
         >
           <Icon name="chat" size={15} />
@@ -167,6 +174,7 @@ export function Sidebar() {
             </button>
             <button onClick={() => {setMenu(null);setInformation(sess);}}>Сведения</button>
             <button onClick={() => { setMenu(null); setMoveDialog(sess); }}>Перенести в проект…</button>
+            <button onClick={() => { setMenu(null); setCapabilitiesSession(sess); }}>Инструменты и навыки…</button>
             <button onClick={() => { setMenu(null); store.setUi({ handoffSource: sess }); }}>Передать задание…</button>
             <button
               onClick={() => {
@@ -353,6 +361,7 @@ export function Sidebar() {
           </div>
         </div>
       )}
+      {capabilitiesSession && <CapabilityScopeDialog title={`Инструменты и навыки · ${capabilitiesSession.title}`} scope="session" directory={capabilitiesSession.directory} session={capabilitiesSession.id} onClose={() => setCapabilitiesSession(null)} />}
       {rename && (
         <div
           className="modal-overlay"

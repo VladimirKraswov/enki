@@ -3557,3 +3557,8 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
   .permission-row { grid-template-columns: 1fr; gap: 10px; }
   .permission-actions { justify-content: flex-start; }
 }
+
+.capability-scope-modal { width:min(920px,94vw); max-height:90vh; overflow:auto; }
+.capability-scope-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
+.capability-scope-head h2 { margin:0 0 5px; font-size:1.2rem; }
+.capability-scope-head p { margin:0; max-width:70ch; color:var(--text-dim); line-height:1.45; }

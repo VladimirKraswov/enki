@@ -1,5 +1,6 @@
 import { InformationDialog } from "./InformationDialog";
 import { useState } from "react";
+import { CapabilityScopeDialog } from "./CapabilityScopeDialog";
 import { store, useAppState } from "../state/store";
 import { FloatingPopover } from "./FloatingPopover";
 import { Icon } from "./Icon";
@@ -8,6 +9,7 @@ import { pathBasename } from "../util/paths";
 export function ProjectActions({ directory }: { directory: string }) {
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [information, setInformation] = useState(false);
+  const [capabilities, setCapabilities] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const name = pathBasename(directory);
   return <>
@@ -15,9 +17,11 @@ export function ProjectActions({ directory }: { directory: string }) {
     {anchor && <FloatingPopover anchor={anchor} className="task-popover" role="menu" label="Действия проекта" width={235} placement="bottom" align="end" onClose={() => setAnchor(null)}>
       <button onClick={() => { setAnchor(null); void store.setDirectory(directory); }}>Новый чат</button>
       <button onClick={() => { setAnchor(null); setInformation(true); }}>Сведения</button>
+      <button onClick={() => { setAnchor(null); setCapabilities(true); }}>Инструменты и навыки…</button>
       <button onClick={() => { setAnchor(null); setConfirm(true); }}>Убрать проект из списка…</button>
     </FloatingPopover>}
     {information && <InformationDialog directory={directory} onClose={() => setInformation(false)} />}
+    {capabilities && <CapabilityScopeDialog title={`Инструменты и навыки · ${name}`} scope="project" directory={directory} onClose={() => setCapabilities(false)} />}
     {confirm && <div className="modal-overlay" onKeyDown={(e) => { if (e.key === "Escape") setConfirm(false); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-label="Убрать проект из списка">
         <h3>Убрать «{name}» из списка?</h3>

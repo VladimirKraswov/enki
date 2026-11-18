@@ -170,7 +170,7 @@ fn id(value: &str) -> bool {
 fn valid_key(value: &str) -> bool {
     value == "global"
         || (value.len() == 24
-            && value.starts_with("project-")
+            && (value.starts_with("project-") || value.starts_with("session-"))
             && value[8..]
                 .bytes()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()))
@@ -204,10 +204,22 @@ pub(crate) fn key_for(
     scope: &str,
     directory: Option<&str>,
 ) -> Result<(String, Option<String>), String> {
+    key_for_session(scope, directory, None)
+}
+
+/// Resolve a capability registry scope. A session key is derived from the
+/// canonical project directory and the exact runtime session id, never from a
+/// model- or caller-supplied display string. Existing project/global callers
+/// keep their original API and files.
+pub(crate) fn key_for_session(
+    scope: &str,
+    directory: Option<&str>,
+    session: Option<&str>,
+) -> Result<(String, Option<String>), String> {
     if scope == "global" {
         return Ok(("global".into(), None));
     }
-    if scope != "project" {
+    if scope != "project" && scope != "session" {
         return Err("Неизвестная область".into());
     }
     let p = PathBuf::from(directory.ok_or("Выберите локальный проект")?);
@@ -223,7 +235,25 @@ pub(crate) fn key_for(
         h ^= b as u64;
         h = h.wrapping_mul(0x100000001b3);
     }
-    Ok((format!("project-{h:016x}"), Some(p)))
+    if scope == "project" {
+        return Ok((format!("project-{h:016x}"), Some(p)));
+    }
+    let session = session.ok_or("Не указана сессия")?;
+    if session.is_empty()
+        || session.len() > 160
+        || !session
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+    {
+        return Err("Некорректная сессия".into());
+    }
+    // The project path participates in the key so a project-local session
+    // override cannot collide with a same-named session in another project.
+    for b in b"\0session\0".iter().copied().chain(session.bytes()) {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    Ok((format!("session-{h:016x}"), Some(p)))
 }
 fn read_at(root: &Path, key: &str) -> Result<(Registry, String), String> {
     if !valid_key(key) {
@@ -327,36 +357,52 @@ fn validate(r: &Registry) -> Result<(), String> {
     }
     Ok(())
 }
+fn merge_registry(base: &mut Registry, overlay: Registry) {
+    let mut sources: BTreeMap<String, Source> =
+        base.sources.drain(..).map(|s| (s.id.clone(), s)).collect();
+    for source in overlay.sources {
+        sources.insert(source.id.clone(), source);
+    }
+    let mut servers: BTreeMap<String, Server> =
+        base.servers.drain(..).map(|s| (s.id.clone(), s)).collect();
+    for server in overlay.servers {
+        servers.insert(server.id.clone(), server);
+    }
+    base.sources = sources.into_values().collect();
+    base.servers = servers.into_values().collect();
+    base.applied_paths = overlay.applied_paths;
+    base.directory = overlay.directory;
+}
+
+/// Effective layers: global -> project -> session. A session file records its
+/// project directory, so it inherits the project's current set without storing
+/// a raw path in the registry key.
 fn effective(root: &Path, key: &str) -> Result<Registry, String> {
+    effective_with_directory(root, key, None)
+}
+
+fn effective_with_directory(
+    root: &Path,
+    key: &str,
+    session_directory: Option<&str>,
+) -> Result<Registry, String> {
     let (global, _) = read_at(root, "global")?;
     if key == "global" {
         return Ok(global);
     }
-    let (project, _) = read_at(root, key)?;
-    let mut sources: BTreeMap<String, Source> = global
-        .sources
-        .into_iter()
-        .map(|s| (s.id.clone(), s))
-        .collect();
-    for s in project.sources {
-        sources.insert(s.id.clone(), s);
+    let (local, _) = read_at(root, key)?;
+    let mut merged = global;
+    if key.starts_with("session-") {
+        if let Some(directory) = local.directory.as_deref().or(session_directory) {
+            let (project_key, _) = key_for("project", Some(directory))?;
+            let (project, _) = read_at(root, &project_key)?;
+            merge_registry(&mut merged, project);
+        }
     }
-    let mut servers: BTreeMap<String, Server> = global
-        .servers
-        .into_iter()
-        .map(|s| (s.id.clone(), s))
-        .collect();
-    for s in project.servers {
-        servers.insert(s.id.clone(), s);
-    }
-    Ok(Registry {
-        version: 1,
-        directory: project.directory,
-        sources: sources.into_values().collect(),
-        servers: servers.into_values().collect(),
-        applied_paths: project.applied_paths,
-    })
+    merge_registry(&mut merged, local);
+    Ok(merged)
 }
+
 fn scripts_ready(runtime: &Path) -> bool {
     FILES
         .iter()
@@ -373,20 +419,43 @@ fn runtime_ready_at(runtime: &Path) -> bool {
 pub fn runtime_ready() -> bool {
     root().is_ok_and(|p| runtime_ready_at(&p.join("runtime")))
 }
-fn document(scope: &str, directory: Option<&str>) -> Result<Document, String> {
-    let (key, scope_directory) = key_for(scope, directory)?;
+fn document(
+    scope: &str,
+    directory: Option<&str>,
+    session: Option<&str>,
+) -> Result<Document, String> {
+    let (key, scope_directory) = key_for_session(scope, directory, session)?;
     let root = root()?;
     let (mut registry, content) = read_at(&root, &key)?;
     if registry.directory.is_some() && registry.directory != scope_directory {
-        return Err("Область проекта не совпадает с реестром".into());
+        // A session can be moved to another project; keep the explicit file but
+        // make its current parent explicit on the next save.
+        if scope == "session" {
+            registry.directory = scope_directory.clone();
+        } else {
+            return Err("Область проекта не совпадает с реестром".into());
+        }
     }
     registry.directory = scope_directory.clone();
     let inherited = if key == "global" {
         Registry::default()
+    } else if key.starts_with("session-") {
+        // UI must show the project layer as inherited, not only global.
+        scope_directory
+            .as_deref()
+            .and_then(|dir| key_for("project", Some(dir)).ok())
+            .map(|(project_key, _)| {
+                let mut inherited = read_at(&root, "global").map(|v| v.0).unwrap_or_default();
+                if let Ok((project, _)) = read_at(&root, &project_key) {
+                    merge_registry(&mut inherited, project);
+                }
+                inherited
+            })
+            .unwrap_or_else(|| read_at(&root, "global").map(|v| v.0).unwrap_or_default())
     } else {
         read_at(&root, "global")?.0
     };
-    let effective = effective(&root, &key)?;
+    let effective = effective_with_directory(&root, &key, scope_directory.as_deref())?;
     let mut skills = vec![];
     let mut budget = 3000;
     for source in &effective.sources {
@@ -476,6 +545,7 @@ pub async fn shared_catalog(
     window: tauri::WebviewWindow,
     scope: String,
     directory: Option<String>,
+    session: Option<String>,
 ) -> Result<Document, String> {
     main_window(&window)?;
     let runtime = state.inner().clone();
@@ -497,7 +567,7 @@ pub async fn shared_catalog(
         web_search::ensure(&root()?)?;
         schedules::ensure(&root()?)?;
         image_generation::ensure(&root()?)?;
-        document(&scope, directory.as_deref())
+        document(&scope, directory.as_deref(), session.as_deref())
     })
     .await
     .map_err(|_| "Проверка каталога прервана")?
@@ -514,12 +584,13 @@ pub async fn shared_save(
     window: tauri::WebviewWindow,
     scope: String,
     directory: Option<String>,
+    session: Option<String>,
     expected: String,
     registry: Registry,
 ) -> Result<Document, String> {
     main_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let (key, dir) = key_for(&scope, directory.as_deref())?;
+        let (key, dir) = key_for_session(&scope, directory.as_deref(), session.as_deref())?;
         validate(&registry)?;
         if registry.directory != dir {
             return Err("Область реестра изменилась".into());
@@ -535,16 +606,12 @@ pub async fn shared_save(
             .map_err(|_| "Не удалось открыть блокировку")?;
         lock.try_lock_exclusive()
             .map_err(|_| "Реестр занят другой операцией")?;
-        if key!="global" {
-            let global=read_at(&root,"global")?.0;
-            if registry.sources.iter().any(|s|global.sources.iter().any(|g|g.id==s.id))||registry.servers.iter().any(|s|global.servers.iter().any(|g|g.id==s.id)) {return Err("Идентификатор уже используется в общей области; измените общую запись или задайте другой".into());}
-        }
         crate::config::write_at(
             &root.join(format!("{key}.json")),
             &expected,
             &serde_json::to_string_pretty(&registry).map_err(|_| "Некорректный реестр")?,
         )?;
-        document(&scope, directory.as_deref())
+        document(&scope, directory.as_deref(), session.as_deref())
     })
     .await
     .map_err(|_| "Сохранение прервано")?
@@ -701,14 +768,24 @@ fn run_install(command: &mut Command, cancel: &AtomicBool) -> Result<(), String>
 /// Enki executable that serves `--shared-mcp`/`--browser-mcp`, the managed
 /// browser and the LSP server list. Shape: `CapabilitiesScope` in
 /// resources/agent/src/control/broker.ts. Nothing here starts a process.
-pub fn runtime_scope(directory: &Path) -> Result<Value, String> {
-    let (key, _) = key_for("project", directory.to_str())?;
+pub fn runtime_scope(directory: &Path, session: Option<&str>) -> Result<Value, String> {
+    let (key, _) = key_for_session(
+        if session.is_some() {
+            "session"
+        } else {
+            "project"
+        },
+        directory.to_str(),
+        session,
+    )?;
+    let project_key = key_for("project", directory.to_str())?.0;
     let root = root()?;
     authoring::ensure(&root)?;
     web_search::ensure(&root)?;
     schedules::ensure(&root)?;
     image_generation::ensure(&root)?;
-    let registry = effective(&root, &key)?;
+    let registry =
+        effective_with_directory(&root, &key, Some(directory.to_string_lossy().as_ref()))?;
     let skills: Vec<String> = registry
         .sources
         .iter()
@@ -723,6 +800,13 @@ pub fn runtime_scope(directory: &Path) -> Result<Value, String> {
         "key": key,
         "root": root,
         "skillPaths": skills,
+        "registryKeys": if key == "global" {
+            vec!["global"]
+        } else if key.starts_with("session-") {
+            vec!["global", project_key.as_str(), key.as_str()]
+        } else {
+            vec!["global", key.as_str()]
+        },
         "mcp": servers && ready,
         "mcpUnavailable": (servers && !ready)
             .then_some("Включены MCP-подключения, но общие MCP-инструменты не установлены. Установите их в настройках Enki."),
@@ -787,6 +871,17 @@ fn proxy_command(
         return Err("Общие инструменты не установлены".into());
     }
     let registry = effective(&root, key)?;
+    // The JS stdio proxy must see the same global→project→session layers as
+    // the native registry check. Pass only validated keys, never paths/secrets.
+    let mut registry_keys = vec!["global".to_string()];
+    if key.starts_with("session-") {
+        if let Some(directory) = read_at(&root, key)?.0.directory {
+            if let Ok((project_key, _)) = key_for("project", Some(&directory)) {
+                registry_keys.push(project_key);
+            }
+        }
+    }
+    registry_keys.push(key.to_string());
     let server = registry
         .servers
         .iter()
@@ -799,7 +894,8 @@ fn proxy_command(
         .arg(root.join("runtime/proxy.mjs"))
         .arg(&root)
         .arg(key)
-        .arg(id);
+        .arg(id)
+        .env("ENKI_MCP_REGISTRY_KEYS", registry_keys.join(","));
     if inspect {
         command.arg("inspect");
     }
@@ -832,13 +928,26 @@ pub async fn shared_probe(
     window: tauri::WebviewWindow,
     scope: String,
     directory: Option<String>,
+    session: Option<String>,
     id: String,
     node_program: Option<String>,
 ) -> Result<Value, String> {
     main_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let (key, _) = key_for(&scope, directory.as_deref())?;
+        let (key, _) = key_for_session(&scope, directory.as_deref(), session.as_deref())?;
         let mut command = proxy_command(&key, &id, node_program.as_deref(), true)?;
+        if scope == "session" {
+            let project_key = directory
+                .as_deref()
+                .and_then(|dir| key_for("project", Some(dir)).ok())
+                .map(|value| value.0);
+            if let Some(project_key) = project_key {
+                command.env(
+                    "ENKI_MCP_REGISTRY_KEYS",
+                    format!("global,{project_key},{key}"),
+                );
+            }
+        }
         command.current_dir(
             directory
                 .map(PathBuf::from)
@@ -856,10 +965,13 @@ pub async fn shared_probe(
 }
 pub fn mcp_main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 4 {
+    if args.len() < 4 {
         return Err("Некорректный запуск MCP".into());
     }
     let mut command = proxy_command(&args[2], &args[3], None, false)?;
+    if args.len() > 4 {
+        command.env("ENKI_MCP_REGISTRY_KEYS", args[4..].join(","));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -908,7 +1020,20 @@ mod tests {
     fn validates_scope_and_no_shell_or_secret_url() {
         assert!(valid_key("global"));
         assert!(valid_key("project-0123456789abcdef"));
+        assert!(valid_key("session-0123456789abcdef"));
         assert!(!valid_key("../keys"));
+        let dir = std::env::temp_dir().join(format!("enki-scope-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (project_key, _) = key_for("project", Some(dir.to_str().unwrap())).unwrap();
+        let (session_key, _) =
+            key_for_session("session", Some(dir.to_str().unwrap()), Some("chat-a")).unwrap();
+        assert!(project_key.starts_with("project-"));
+        assert!(session_key.starts_with("session-"));
+        assert_ne!(project_key, session_key);
+        let (other, _) =
+            key_for_session("session", Some(dir.to_str().unwrap()), Some("chat-b")).unwrap();
+        assert_ne!(session_key, other);
+        fs::remove_dir_all(dir).unwrap();
         assert!(!id("name/../../"));
         let mut r = Registry::default();
         r.servers.push(Server {

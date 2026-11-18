@@ -1,6 +1,6 @@
 import { remoteMcpUrl } from "./mcpUrl";
 import { isAbsoluteLocalPath } from "../util/paths";
-export type Scope = "global" | "project";
+export type Scope = "global" | "project" | "session";
 export interface SkillSource {
   id: string;
   path: string;

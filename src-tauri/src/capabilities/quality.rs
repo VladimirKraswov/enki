@@ -106,7 +106,7 @@ fn snapshot(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 fn source(scope: &str, directory: Option<&str>, path: &str) -> Result<Skill, String> {
-    let skill = document(scope, directory)?
+    let skill = document(scope, directory, None)?
         .skills
         .into_iter()
         .find(|s| s.path == path && s.engines.iter().any(|e| e == "pi"))

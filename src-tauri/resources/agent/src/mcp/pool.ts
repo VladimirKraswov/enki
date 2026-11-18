@@ -107,12 +107,12 @@ export class McpPool implements SharedPool {
   constructor(private readonly factory: McpClientFactory = officialClient, private readonly idleMs = 30_000,
     private readonly discoveryMs = 30_000) {}
 
-  private async open(self: PooledConnection, command: string, registryKey: string, spec: SharedServerSpec, cwd: string): Promise<Ready> {
+  private async open(self: PooledConnection, command: string, scope: SharedScope, spec: SharedServerSpec, cwd: string): Promise<Ready> {
     let client: McpClientLike | undefined;
     const signal = self.abort.signal;
     const deadline = setTimeout(() => self.abort.abort(), Math.max(1, Math.min(this.discoveryMs, 30_000)));
     try {
-      const opening = this.factory(command, ["--shared-mcp", registryKey, spec.id], cwd);
+      const opening = this.factory(command, ["--shared-mcp", scope.registryKey, spec.id, ...(scope.registryKeys ?? [])], cwd);
       // A factory resolving after cancellation still relinquishes its own proxy.
       void opening.then(value => { if (signal.aborted) void this.closeOpeningProxy(value); }, () => {});
       client = await waitFor(opening, signal);
@@ -151,7 +151,7 @@ export class McpPool implements SharedPool {
   private entry(key: string, command: string, scope: SharedScope, spec: SharedServerSpec, cwd: string): PooledConnection {
     let entry = this.entries.get(key);
     if (!entry || entry.dead) {
-      entry = new PooledConnection(key, spec.id, self => this.open(self, command, scope.registryKey, spec, cwd));
+      entry = new PooledConnection(key, spec.id, self => this.open(self, command, scope, spec, cwd));
       this.entries.set(key, entry); this.live.add(entry);
       // A caller aborts independently of shared discovery; avoid an unhandled
       // ready rejection if the last lease leaves before opening completes.
@@ -174,7 +174,7 @@ export class McpPool implements SharedPool {
     const { command, registryKey } = scope;
     if (!this.admission || this.closed || signal.aborted) throw cancelled();
     if (!command || !path.isAbsolute(command)) throw new Error("Общие инструменты MCP недоступны: нет пути к Enki.");
-    if (registryKey !== "global" && !/^project-[0-9a-f]{16}$/.test(registryKey)) throw new Error("Некорректная область общих инструментов.");
+    if (registryKey !== "global" && !/^(?:project|session)-[0-9a-f]{16}$/.test(registryKey)) throw new Error("Некорректная область общих инструментов.");
     const key = canonicalJson([command, registryKey, spec.id, signature(spec)]);
     let current = this.entry(key, command, scope, spec, cwd), released = false;
     this.retain(current);
