@@ -44,7 +44,12 @@ export function hubExchangeTool(broker: Broker, session: string) {
       const request = (route: string, body?: Record<string, unknown>) =>
         broker.call<unknown>("hub.request", { path: "workshop/"+route, body: body ?? null, scope }, signal, 30_000);
       const sender = { agent: "enki", session };
-      await request("presence", sender);
+      // Presence is discovery, not an authorization prerequisite for status or
+      // delivery. A stale/older Hub may reject this optional heartbeat; it must
+      // not turn every hub_exchange call into an HTTP 400.
+      let presenceWarning: string | undefined;
+      try { await request("presence", sender); }
+      catch (error) { presenceWarning = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300); }
       let route: string, body: Record<string, unknown> | undefined;
       const query = new URLSearchParams({ limit: "50", ...(input.after === undefined ? {} : { after: String(input.after) }) });
       switch (input.action) {
@@ -70,7 +75,8 @@ export function hubExchangeTool(broker: Broker, session: string) {
             operation: input.operation, level: input.level, detail: input.detail ?? "" }; break;
         default: throw new Error("Неизвестная операция Hub.");
       }
-      const {result,text} = boundedHubToolResult(input.action,await request(route, body));
+      const {result,text: rawText} = boundedHubToolResult(input.action,await request(route, body));
+      const text = presenceWarning ? `Presence warning (delivery still attempted): ${presenceWarning}\n${rawText}` : rawText;
       return { content: [{ type: "text" as const, text }], details: { action: input.action, session, result } };
     },
   };

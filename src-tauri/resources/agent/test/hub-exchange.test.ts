@@ -41,6 +41,20 @@ it("binds the sender and preserves an explicit request ID for lost-ACK retries",
   expect(sends[0].body).toMatchObject({ session: "actual-session", agent: "enki", requestId: "same-operation", recipientAgent: "enki" });
 });
 
+it("keeps status and delivery available when the optional presence heartbeat fails", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "hub.identity") return { scope: "pinned-profile" };
+    if (params.path === "workshop/presence") throw new Error("Hub HTTP 400");
+    requests.push(params);
+    return { accepted: true, items: [] };
+  });
+  const tool = hubExchangeTool({ kind: "supervisor", available: () => true, call } as unknown as Broker, "actual-session");
+  const result = await tool.execute("status-1", { action: "status" });
+  expect(requests.map(p => p.path)).toEqual(["workshop/status"]);
+  expect(result.content[0].text).toContain("Presence warning");
+});
+
 it("fails closed on disabled Hub and cancelled requests without a direct-network fallback", async () => {
   const f = fixture(); f.call.mockResolvedValueOnce({ scope: null } as never);
   await expect(f.tool.execute("s", { action: "status" })).rejects.toThrow("Hub не подключён");

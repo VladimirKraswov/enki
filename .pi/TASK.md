@@ -1,3 +1,14 @@
+# TASK — 2026-11-18: hub_exchange optional presence + task delivery
+
+Hub logs showed that `workshop/presence` can return 400 while the actual
+Workshop task was valid. `hub_exchange` called presence as a mandatory first
+step, so even `action=status` failed. Presence is now best-effort with a bounded
+warning; status/send/ack still run, and the exact Hub response is not replaced
+by a generic success. The pending task was delivered directly through the
+pinned Hub endpoint, read from the f096 inbox and acknowledged (seq 1528).
+
+Regression: hub-exchange presence failure still returns status. Версия 2.0.88.
+
 # TASK — 2026-11-17: compaction result is measured, not the old input
 
 Runtime event `session.compaction` carries `tokensAfter`, but the UI ignored it.
