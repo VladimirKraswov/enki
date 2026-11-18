@@ -66,6 +66,14 @@ it("shows work in progress, then unread completion only after leaving and clears
   expect(store.state.prefs.unreadSessions?.ses_a).toBeUndefined();
 });
 
+it("marks completion from session.idle even when the busy status was missed", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  await vi.waitFor(() => expect(store.isUnread("ses_a")).toBe(true));
+  expect(store.hasUnreadInDirectory("/work/a")).toBe(true);
+});
+
 it("clears unread when a project row restores an already visible completed session", async () => {
   await store.setDirectory("/work/a");
   await store.selectSession("ses_a");

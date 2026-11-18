@@ -1,3 +1,12 @@
+# TASK — 2026-11-18: completion unread dot independent of missed busy status
+
+Unread completion marks depended on observing a busy status before session.idle.
+After reconnect, MCP recovery or an update, a background chat could settle from
+idle straight to idle and never get the yellow dot. `session.idle` is now
+completion evidence on its own, including the global-stream path; a completion
+watched in the foreground is still not marked unread. Regression: activity test
+with session.idle and no preceding busy event. Версия 2.0.89.
+
 # TASK — 2026-11-18: hub_exchange optional presence + task delivery
 
 Hub logs showed that `workshop/presence` can return 400 while the actual

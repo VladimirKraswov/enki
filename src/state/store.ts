@@ -3634,6 +3634,7 @@ class Store {
           ? ((event.properties.status as SessionStatus) ?? { type: "idle" })
           : { type: "idle" },
         this.state.directory ?? undefined,
+        event.type === "session.idle",
       );
     }
     if (
@@ -3782,7 +3783,7 @@ class Store {
     void completionChime().catch(() => {});
   }
 
-  private observeSessionStatus(id: string, status: SessionStatus, directory?: string): void {
+  private observeSessionStatus(id: string, status: SessionStatus, directory?: string, completed = false): void {
     // A listing/stream directory is only a hint. Once the session itself has been
     // seen (`rememberActivitySession`), its own directory stays authoritative.
     if (directory && !this.activityDirectories.has(id))
@@ -3790,10 +3791,12 @@ class Store {
     const previous = this.activityStatus(id);
     const wasRunning = previous?.type === "busy" || previous?.type === "retry";
     const running = status.type === "busy" || status.type === "retry";
-    const finished = wasRunning && status.type === "idle";
+    // `session.idle` is emitted by the runtime on settlement. It is completion
+    // evidence even if a busy status was missed during reconnect or MCP recovery.
+    const finished = status.type === "idle" && (wasRunning || completed);
     const changed = !previous || previous.type !== status.type;
     if (changed && (running || finished || status.type === "waiting")) this.statusObservedAt.set(id, Date.now());
-    if (previous?.type === status.type && !running) return;
+    if (previous?.type === status.type && !running && !(completed && status.type === "idle")) return;
     if (running) this.clearUnread(id);
     if (running || status.type === "waiting") this.ensureActivitySweep();
     this.mutate(s => ({ activityStatuses: { ...s.activityStatuses, [id]: status } }));
@@ -3851,7 +3854,8 @@ class Store {
             payload.type === "session.status"
               ? ((payload.properties.status as SessionStatus) ?? { type: "idle" })
               : { type: "idle" },
-            directory);
+            directory,
+            payload.type === "session.idle");
         }
       },
       onState: (state) => {
