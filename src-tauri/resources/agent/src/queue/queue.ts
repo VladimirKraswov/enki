@@ -90,6 +90,8 @@ export class PromptQueue {
   private readonly unsubscribe: () => void;
   private closed = false;
   private correctionUpdates = new Map<string, string>();
+  /** Per-item editor reservations. They never pause earlier items. */
+  private readonly held = new Set<string>();
 
   constructor(private readonly db: Database, private readonly journal: EventJournal, private readonly attachments: AttachmentStore) {
     // recordEntry is a separate durable ledger update, after the SDK appended
@@ -146,7 +148,31 @@ export class PromptQueue {
 
   state(sessionID: string): QueueStateDTO {
     const armed = this.armedState(sessionID);
-    return { sessionID, armed: armed.armed, pausedReason: armed.pausedReason, items: this.items(sessionID).map(dto), corrections: this.corrections(sessionID) };
+    return {
+      sessionID, armed: armed.armed, pausedReason: armed.pausedReason,
+      items: this.items(sessionID).map((item) => ({ ...dto(item), ...(this.held.has(item.id) ? { held: true } : {}) })),
+      corrections: this.corrections(sessionID),
+    };
+  }
+
+  /** Reserve one ready item for its editor. Earlier items keep draining. */
+  hold(id: string): QueueStateDTO {
+    const item = this.item(id);
+    if (!item) throw new Error("Запрос не найден в очереди.");
+    if (item.state !== "ready") throw new Error("Этот запрос уже отправляется.");
+    this.held.add(id);
+    this.publish(item.sessionID, item.directory);
+    return this.state(item.sessionID);
+  }
+
+  /** Release an editor reservation. Draining resumes at this item's position. */
+  release(id: string, drain = true): QueueStateDTO | null {
+    const item = this.item(id);
+    if (!item) return null;
+    this.held.delete(id);
+    this.publish(item.sessionID, item.directory);
+    if (drain) this.drain(item.sessionID);
+    return this.state(item.sessionID);
   }
 
   /** Sessions with queued items, for snapshots and attention markers. */
@@ -281,8 +307,10 @@ export class PromptQueue {
     if (!item) return null;
     if (item.state === "sending") throw new Error("Этот запрос уже отправляется.");
     this.db.run("DELETE FROM queue WHERE id=?", id);
+    this.held.delete(id);
     this.attachments.release(`queue:${id}`);
     this.publish(item.sessionID, item.directory);
+    this.drain(item.sessionID);
     return this.state(item.sessionID);
   }
 
@@ -295,6 +323,7 @@ export class PromptQueue {
     const items = this.items(sessionID);
     if (items.some((item) => item.state === "sending")) throw new Error("Запрос этого чата ещё отправляется.");
     this.db.transaction(() => {
+      for (const item of items) this.held.delete(item.id);
       this.db.run("DELETE FROM queue WHERE session_id=?", sessionID);
       this.db.run("DELETE FROM queue_state WHERE session_id=?", sessionID);
       if (items[0]) this.publish(sessionID, items[0].directory);
@@ -361,6 +390,7 @@ export class PromptQueue {
     const item = this.item(id);
     if (!item) throw new Error("Запрос не найден в очереди.");
     if (item.state !== "ready") throw new Error("Этот запрос уже отправляется.");
+    this.held.delete(id);
     if (!this.host) throw new Error("Очередь не подключена к среде выполнения.");
     const streaming = this.host.streaming(item.sessionID);
     if (!streaming && !this.host.ready(item.sessionID)) throw new Error("В этом чате идёт другая операция. Запрос сохранён в очереди.");
@@ -375,7 +405,10 @@ export class PromptQueue {
     const items = this.items(sessionID);
     if (items.some((i) => i.state !== "ready")) return;
     const first = items[0];
-    if (!first) return;
+    // A held item blocks itself and the tail, never items before it: with an
+    // earlier first item, IT is dispatched now; the held item becomes the
+    // stopping point only when it reaches the head.
+    if (!first || this.held.has(first.id)) return;
     this.dispatch(first, "prompt");
   }
 
@@ -401,6 +434,7 @@ export class PromptQueue {
     const row = this.db.get("SELECT * FROM queue WHERE command_id=?", receipt.id);
     if (!row) return;
     const item = itemOf(row);
+    this.held.delete(item.id);
     switch (receipt.state) {
       case "running":
       case "completed":
@@ -436,6 +470,7 @@ export class PromptQueue {
     if (!item || item.state !== "uncertain") return item ? this.state(item.sessionID) : null;
     if (action === "drop") {
       this.db.run("DELETE FROM queue WHERE id=?", id);
+      this.held.delete(id);
       this.attachments.release(`queue:${id}`);
     } else this.db.run("UPDATE queue SET state='ready', error=NULL WHERE id=?", id);
     this.publish(item.sessionID, item.directory);
@@ -444,6 +479,8 @@ export class PromptQueue {
 
   /** After a restart: reconcile "sending" items with their durable receipts. */
   recover(receipt: (commandId: string) => CommandReceipt | null): void {
+    // Reservations are UI-session state, never durable claims from a dead window.
+    this.held.clear();
     for (const row of this.db.all("SELECT * FROM queue WHERE state='sending'")) {
       const item = itemOf(row);
       const found = item.commandId ? receipt(item.commandId) : null;

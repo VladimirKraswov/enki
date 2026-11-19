@@ -30,8 +30,10 @@ async function composer(files:Array<[string,string,string]>=[]){
   queue={...queue,items:queue.items.map(i=>i.id!==c.params.item?i:{...i,...(p.text?{text:p.text}:{}),attachments:(i.attachments??[]).filter(f=>!(p.removeAttachments??[]).includes(f.id))})};return queue;});
  fx.on('POST','/sessions/:id/queue/reorder',c=>{const b=c.body as {id:string;before:string|null};const moving=queue.items.find(i=>i.id===b.id)!,rest=queue.items.filter(i=>i.id!==b.id);
   rest.splice(b.before===null?rest.length:rest.findIndex(i=>i.id===b.before),0,moving);queue={...queue,items:rest};return queue;});
- fx.on('POST','/sessions/:id/queue/pause',c=>{queue={...queue,armed:false,pausedReason:(c.body as {editing?:boolean}).editing?'editing':null};return queue;});
+ fx.on('POST','/sessions/:id/queue/pause',()=>{queue={...queue,armed:false,pausedReason:null};return queue;});
  fx.on('POST','/sessions/:id/queue/resume',()=>{queue={...queue,armed:true,pausedReason:null};return queue;});
+ fx.on('POST','/sessions/:id/queue/:item/hold',c=>{queue={...queue,items:queue.items.map(i=>i.id===c.params.item?{...i,held:true}:i)};return queue;});
+ fx.on('POST','/sessions/:id/queue/:item/release',c=>{queue={...queue,items:queue.items.map(i=>i.id===c.params.item?{...i,held:false}:i)};return queue;});
  fx.on('DELETE','/sessions/:id/queue/:item',c=>{queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item)};return queue;});
  fx.on('POST','/sessions/:id/queue/:item/steer',c=>{const item=queue.items.find(i=>i.id===c.params.item)!;const id=`queue-${c.params.item}-1`;
   queue={...queue,items:queue.items.filter(i=>i.id!==c.params.item),corrections:[...(queue.corrections??[]),{id,text:item.text,state:'running',createdAt:1}]};return {id,kind:'steer',sessionID:sid,state:'accepted',createdAt:1,updatedAt:1};});
@@ -133,19 +135,32 @@ it('five queued prompts stay as single-line summaries and edit/apply uses the co
  expect(fx.made('PATCH','/sessions/:id/queue/:item').map((c:any)=>c.params.item)).toEqual([original[0]]);
 });
 
-it('an edit pauses dispatch and the row can still be deleted before the agent starts it',async()=>{
+it('an edit reserves only its item and the row can still be deleted before the agent starts it',async()=>{
  const {store,fx,mount}=await composer();
  await store.enqueuePrompt('first');await store.enqueuePrompt('second');await mount();
  await act(async()=>{button('Изменить').click();await vi.waitFor(()=>expect(store.getQueueEdit()).toBeDefined());});
- expect(store.isQueueArmed()).toBe(false);
- expect(fx.made('POST','/sessions/:id/queue/pause').at(-1)?.body).toEqual({editing:true});
+ expect(store.isQueueArmed()).toBe(true);
+ expect(fx.made('POST','/sessions/:id/queue/:item/hold').map(c=>(c as any).params.item)).toEqual([store.getQueueEdit()!.id]);
+ expect(fx.made('POST','/sessions/:id/queue/pause')).toEqual([]);
  const remove=document.querySelector('[aria-label="Убрать из очереди"]') as HTMLButtonElement;
  expect(remove.disabled).toBe(false);
  await act(async()=>{remove.click();await vi.waitFor(()=>expect(store.getQueue()).toHaveLength(1));});
  expect(store.getQueueEdit()).toBeUndefined();
  expect(store.getQueue()[0].text).toBe('second');
  expect(fx.made('DELETE','/sessions/:id/queue/:item')).toHaveLength(1);
- expect(fx.made('POST','/sessions/:id/queue/resume')).toHaveLength(1);
+ expect(fx.made('POST','/sessions/:id/queue/:item/release')).toEqual([]);
+});
+
+it('offers to release a reservation left after a reload without a local editor',async()=>{
+ const {store,fx,mount,sid,directory}=await composer();
+ await store.enqueuePrompt('held after reload');
+ const queue={...store.state.queues[sid],items:store.state.queues[sid].items.map(i=>({...i,held:true}))};
+ await act(async()=>fx.emit({type:'queue.updated',properties:{sessionID:sid,queue}} as never,directory));
+ await mount();
+ const release=button('Снять удержание');
+ expect(release).toBeDefined();
+ await act(async()=>{release.click();await vi.waitFor(()=>expect(fx.made('POST','/sessions/:id/queue/:item/release')).toHaveLength(1));});
+ expect(store.getQueue()[0].held).toBeFalsy();
 });
 
 it('queue handles move saved entries with the keyboard and keep row actions usable',async()=>{

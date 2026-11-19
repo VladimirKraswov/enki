@@ -365,10 +365,9 @@ export interface QueueItemDTO {
   queuedAt: number;
   attachments?: QueueAttachmentRef[];
   commandId?: string | null;
+  /** Kept for its owner's editor: earlier items still run, this one and the tail wait. */
+  held?: boolean;
 }
-
-/** The queue is paused while its owner edits one saved item; no turn may take it. */
-export const QUEUE_EDITING_PAUSE_REASON = "Идёт редактирование запроса в очереди.";
 
 export interface QueueStateDTO {
   sessionID: string;

@@ -8,6 +8,8 @@ export interface QueuedPrompt {
   state: "ready" | "sending" | "uncertain";
   error?: string;
   queuedAt?: number;
+  /** Reserved by the open queue editor; earlier items may still be dispatched. */
+  held?: boolean;
   /** Private IndexedDB copies, never blobs/base64 in preferences. */
   attachments?: {
     scope: string;

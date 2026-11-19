@@ -125,12 +125,14 @@ is refused (409) and the window re-reads that chat's queue. Deleting a chat also
 removes its queued prompts and remembered permission answers; its timers stay
 listed, paused with "chat deleted".
 
-Opening **Изменить** pauses the durable queue before the editor appears, so a
-turn that finishes meanwhile cannot take the item being edited. Save, Cancel or
-deleting that item re-arms the queue only if it was armed before editing. Every
-item in `ready` can be removed with **×**, including while the editor is open;
-only an item already handed to the runtime (`sending`) cannot be deleted. If the
-window reloads during an edit, the queue stays visibly paused and can be resumed.
+Opening **Изменить** reserves only that item in the runtime before the editor
+appears. Items before it keep draining in order; the reserved item and the tail
+wait when it reaches the head. Save, Cancel or deleting it releases the
+reservation and dispatch continues from that position. Every item in `ready`
+can be removed with **×**, including while the editor is open; only an item
+already handed to the runtime (`sending`) cannot be deleted. If the window
+reloads during an edit, the row is shown as reserved and offers **Снять
+удержание**, so a lost editor cannot block the queue permanently.
 
 **Скорректировать сейчас** delivers that item as a steering message to the
 running turn. The SDK shows it to the agent at the **next model/tool boundary**;

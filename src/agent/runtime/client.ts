@@ -334,8 +334,14 @@ export class RuntimeClient {
   resumeQueue(id: string, directory: string, model?: ModelRef) {
     return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/resume`, { query: { directory }, body: model ? { model } : {} });
   }
-  pauseQueue(id: string, directory: string, editing = false) {
-    return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/pause`, { query: { directory }, body: { editing } });
+  pauseQueue(id: string, directory: string) {
+    return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/pause`, { query: { directory }, body: {} });
+  }
+  holdQueueItem(id: string, directory: string, item: string) {
+    return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(item)}/hold`, { query: { directory }, body: {} });
+  }
+  releaseQueueItem(id: string, directory: string, item: string, drain = true) {
+    return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(item)}/release`, { query: { directory }, body: { drain } });
   }
   steerQueued(id: string, directory: string, item: string) {
     return this.request<CommandReceipt>("POST", `/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(item)}/steer`, { query: { directory }, body: {} });

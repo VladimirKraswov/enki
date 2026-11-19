@@ -39,10 +39,13 @@ beforeEach(async () => {
       attachments: (i.attachments ?? []).filter(f => !(patch.removeAttachments ?? []).includes(f.id)) }) };
     return queue;
   });
-  fx.on('POST', '/sessions/:id/queue/pause', c => {
-    queue = { ...queue, armed: false, pausedReason: (c.body as { editing?: boolean }).editing ? 'editing' : null }; return queue;
+  fx.on('POST', '/sessions/:id/queue/pause', () => { queue = { ...queue, armed: false, pausedReason: null }; return queue; });
+  fx.on('POST', '/sessions/:id/queue/:item/hold', c => {
+    queue = { ...queue, items: queue.items.map(i => i.id === c.params.item ? { ...i, held: true } : i) }; return queue;
   });
-  fx.on('POST', '/sessions/:id/queue/resume', () => { queue = { ...queue, armed: true, pausedReason: null }; return queue; });
+  fx.on('POST', '/sessions/:id/queue/:item/release', c => {
+    queue = { ...queue, items: queue.items.map(i => i.id === c.params.item ? { ...i, held: false } : i) }; return queue;
+  });
   fx.on('DELETE', '/sessions/:id/queue/:item', c => {
     queue = { ...queue, items: queue.items.filter(i => i.id !== c.params.item) }; return queue;
   });
@@ -134,8 +137,8 @@ it('editing restores the text, holds the original entry and position, and Apply 
   expect(store.getQueue().map((q: { id: string }) => q.id)).toEqual([first.id, second.id]);
   expect(store.getQueue()[0].model.modelID).toBe('m');
   expect(store.getQueueEdit()).toBeUndefined();
-  expect(fx.made('POST', '/sessions/:id/queue/pause')).toHaveLength(1);
-  expect(fx.made('POST', '/sessions/:id/queue/resume')).toHaveLength(1);
+  expect(fx.made('POST', '/sessions/:id/queue/:item/hold').map(c => c.params.item)).toEqual([first.id]);
+  expect(fx.made('POST', '/sessions/:id/queue/:item/release').map(c => c.params.item)).toEqual([first.id]);
 });
 
 it('an edited item can still be deleted before the agent takes it; its draft and pause are cleared', async () => {
@@ -148,7 +151,7 @@ it('an edited item can still be deleted before the agent takes it; its draft and
   expect(store.getQueueEdit()).toBeUndefined();
   expect(store.getDraft()).toBe('');
   expect(store.getQueue().map((q: { id: string }) => q.id)).toEqual([second.id]);
-  expect(fx.made('POST', '/sessions/:id/queue/resume')).toHaveLength(1);
+  expect(fx.made('POST', '/sessions/:id/queue/:item/release')).toEqual([]);
 });
 
 it('does not start editing over an existing attachment-only draft, and Cancel leaves the original entry untouched', async () => {
@@ -186,12 +189,13 @@ it('steering an edited entry applies the edit first, then steers that item once'
   expect(patches()).toEqual([[queued.id, { text: 'new text' }]]);
   expect(fx.made('POST', '/sessions/:id/queue/:item/steer').map(c => c.params.item)).toEqual([queued.id]);
   expect(fx.calls.findIndex(c => c.method === 'PATCH')).toBeLessThan(fx.calls.findIndex(c => c.path.endsWith('/steer')));
-  const pause = fx.calls.findIndex(c => c.path.endsWith('/queue/pause'));
-  const resume = fx.calls.findIndex(c => c.path.endsWith('/queue/resume'));
+  const hold = fx.calls.findIndex(c => c.path.endsWith('/hold'));
+  const release = fx.calls.findIndex(c => c.path.endsWith('/release'));
   const steer = fx.calls.findIndex(c => c.path.endsWith('/steer'));
-  expect(pause).toBeGreaterThanOrEqual(0);
-  expect(pause).toBeLessThan(steer);
-  expect(resume).toBeGreaterThan(steer);
+  expect(hold).toBeGreaterThanOrEqual(0);
+  expect(hold).toBeLessThan(steer);
+  expect(release).toBeGreaterThanOrEqual(0);
+  expect(release).toBeLessThan(steer);
   expect(store.getQueueEdit()).toBeUndefined();
   expect(fx.made('POST', '/sessions/:id/stop')).toEqual([]);
 });

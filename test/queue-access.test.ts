@@ -40,6 +40,12 @@ beforeEach(async () => {
   fx.on("POST", "/sessions/:id/queue/resume", c => { const q = state(c.params.id); q.armed = true; q.pausedReason = null;
     const next = (c.body as { model?: QueueItemDTO["model"] }).model; if (next) q.items = q.items.map(i => ({ ...i, model: next })); return q; });
   fx.on("POST", "/sessions/:id/queue/pause", c => { const q = state(c.params.id); q.armed = false; return q; });
+  fx.on("POST", "/sessions/:id/queue/:item/hold", c => {
+    const q = state(c.params.id); q.items = q.items.map(i => i.id === c.params.item ? { ...i, held: true } : i); return q;
+  });
+  fx.on("POST", "/sessions/:id/queue/:item/release", c => {
+    const q = state(c.params.id); q.items = q.items.map(i => i.id === c.params.item ? { ...i, held: false } : i); return q;
+  });
   fx.on("POST", "/sessions/:id/queue/:item/steer", c => ({ id: `queue-${c.params.item}-1`, kind: "steer", sessionID: c.params.id, state: "accepted", createdAt: 1, updatedAt: 1 }));
   fx.on("PATCH", "/sessions/:id/queue/:item", c => {
     const q = state(c.params.id), body = c.body as { text?: string };
@@ -126,37 +132,35 @@ it("Now steers the running turn through the runtime, never stops it, and a doubl
   expect(store.state.ui.toast).toBe("Уточнение сохранено.");
 });
 
-it("editing pauses the armed queue, and the edited item can still be deleted before it is sent", async () => {
+it("editing reserves only that item, and it can still be deleted before it is sent", async () => {
   await store.enqueuePrompt("first");
   await store.enqueuePrompt("second");
   const [first, second] = store.getQueue();
   expect(await store.editQueued(first.id)).toBe(true);
-  expect(fx.made("POST", "/sessions/:id/queue/pause").at(-1)?.body).toEqual({ editing: true });
-  expect(store.isQueueArmed()).toBe(false);
-  expect(store.getQueueEdit()).toMatchObject({ id: first.id, paused: true });
+  expect(fx.made("POST", "/sessions/:id/queue/:item/hold").map(c => c.params.item)).toEqual([first.id]);
+  expect(store.isQueueArmed()).toBe(true);
+  expect(store.getQueueEdit()).toMatchObject({ id: first.id });
+  expect(store.getQueue()[0].held).toBe(true);
   await store.removeQueued(first.id);
   expect(fx.made("DELETE", "/sessions/:id/queue/:item").map(c => c.params.item)).toEqual([first.id]);
   expect(store.getQueueEdit()).toBeUndefined();
   expect(store.getDraft()).toBe("");
   expect(store.getQueue().map((q: { id: string }) => q.id)).toEqual([second.id]);
-  expect(fx.made("POST", "/sessions/:id/queue/resume")).toHaveLength(1);
-  expect(store.isQueueArmed()).toBe(true);
+  expect(fx.made("POST", "/sessions/:id/queue/resume")).toEqual([]);
 });
 
-it("cancelling or applying an edit re-arms the queue that the edit paused", async () => {
+it("cancelling or applying an edit releases only that reservation", async () => {
   await store.enqueuePrompt("first");
   const first = store.getQueue()[0];
   expect(await store.editQueued(first.id)).toBe(true);
-  expect(store.isQueueArmed()).toBe(false);
   await store.cancelQueueEdit();
-  expect(store.isQueueArmed()).toBe(true);
+  expect(fx.made("POST", "/sessions/:id/queue/:item/release").map(c => c.params.item)).toEqual([first.id]);
 
   expect(await store.editQueued(first.id)).toBe(true);
   store.setDraft("changed");
   expect(await store.applyQueueEdit("changed", [])).toBe(true);
-  expect(store.isQueueArmed()).toBe(true);
-  expect(fx.made("POST", "/sessions/:id/queue/pause")).toHaveLength(2);
-  expect(fx.made("POST", "/sessions/:id/queue/resume")).toHaveLength(2);
+  expect(fx.made("POST", "/sessions/:id/queue/:item/release").map(c => c.params.item)).toEqual([first.id, first.id]);
+  expect(fx.made("POST", "/sessions/:id/queue/pause")).toEqual([]);
 });
 
 it("a scoped 409 on an item route shows the runtime's reason and re-reads this chat's queue once, without retrying", async () => {

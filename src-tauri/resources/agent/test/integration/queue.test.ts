@@ -4,7 +4,6 @@
 import { afterEach, expect, it } from "vitest";
 import { fauxAssistantMessage } from "../../src/sdk/testing.ts";
 import { gate, harness, newSession, promptCommand, type Harness } from "../helpers.ts";
-import { QUEUE_EDITING_PAUSE_REASON } from "../../src/protocol.ts";
 import { scriptedRuntime } from "../../src/sdk/testing.ts";
 import path from "node:path";
 
@@ -132,26 +131,37 @@ it("a fatal provider error pauses the queue; a recoverable one does not", async 
   expect(state.body.items.map((i) => i.id)).toEqual(["e4"]);
 });
 
-it("a queue paused for editing keeps its item when the turn settles and sends it only after resume", async () => {
+it("a held editor blocks only its own position: earlier items run, the tail waits, release continues", async () => {
   h = await harness();
-  const dir = h.project("editing-pause");
+  const dir = h.project("editing-hold");
   const sid = await newSession(h, dir);
-  const hold = gate();
-  h.scripted.setResponses([async () => { await hold.wait; return fauxAssistantMessage("first done"); }, fauxAssistantMessage("edited done")]);
-  await h.command(promptCommand(h, "cmd-edit-base", sid, dir, "base"));
-  await h.waitReceipt("cmd-edit-base", ["running"]);
-  await h.request("POST", `/sessions/${sid}/queue`, { id: "being-edited", text: "edited prompt", model: h.model() });
-  const paused = await h.request<{ armed: boolean; pausedReason: string | null }>("POST", `/sessions/${sid}/queue/pause`, { editing: true });
-  expect(paused.body).toMatchObject({ armed: false, pausedReason: QUEUE_EDITING_PAUSE_REASON });
-  hold.open();
-  await h.waitReceipt("cmd-edit-base", ["completed"]);
-  await new Promise((r) => setTimeout(r, 80));
-  const waiting = await h.request<{ armed: boolean; items: Array<{ id: string; state: string }> }>("GET", `/sessions/${sid}/queue`);
-  expect(waiting.body).toMatchObject({ armed: false, items: [{ id: "being-edited", state: "ready" }] });
-  expect(await userTexts(h, sid)).not.toContain("edited prompt");
-  await h.request("POST", `/sessions/${sid}/queue/resume`, {});
+  const base = gate(), second = gate();
+  h.scripted.setResponses([
+    async () => { await base.wait; return fauxAssistantMessage("base done"); },
+    fauxAssistantMessage("a done"),
+    async () => { await second.wait; return fauxAssistantMessage("b done"); },
+  ]);
+  await h.command(promptCommand(h, "cmd-hold-base", sid, dir, "base"));
+  await h.waitReceipt("cmd-hold-base", ["running"]);
+  for (const [id, text] of [["held-a", "a prompt"], ["held-b", "b prompt"], ["held-c", "c prompt"]] as const)
+    await h.request("POST", `/sessions/${sid}/queue`, { id, text, model: h.model() });
+  const held = await h.request<{ items: Array<{ id: string; held?: boolean }> }>("POST", `/sessions/${sid}/queue/held-b/hold`, {});
+  expect(held.body.items).toEqual([
+    expect.objectContaining({ id: "held-a" }), expect.objectContaining({ id: "held-b", held: true }), expect.objectContaining({ id: "held-c" }),
+  ]);
+  base.open();
+  await h.waitReceipt("cmd-hold-base", ["completed"]);
+  for (let i = 0; i < 200 && !(await userTexts(h, sid)).includes("a prompt"); i++) await new Promise((r) => setTimeout(r, 25));
+  expect(await userTexts(h, sid)).toContain("a prompt");
+  expect(await userTexts(h, sid)).not.toContain("b prompt");
+  const waiting = await h.request<{ items: Array<{ id: string; held?: boolean }> }>("GET", `/sessions/${sid}/queue`);
+  expect(waiting.body.items).toEqual([expect.objectContaining({ id: "held-b", held: true }), expect.objectContaining({ id: "held-c" })]);
+  await h.request("POST", `/sessions/${sid}/queue/held-b/release`, { drain: true });
+  for (let i = 0; i < 200 && !(await userTexts(h, sid)).includes("b prompt"); i++) await new Promise((r) => setTimeout(r, 25));
+  expect(await userTexts(h, sid)).toContain("b prompt");
+  expect(await userTexts(h, sid)).not.toContain("c prompt");
+  second.open();
   for (let i = 0; i < 200 && (await h.request<{ items: unknown[] }>("GET", `/sessions/${sid}/queue`)).body.items.length; i++) await new Promise((r) => setTimeout(r, 25));
-  expect(await userTexts(h, sid)).toContain("edited prompt");
 });
 
 it("queued items and their prepared attachments survive a runtime restart", async () => {

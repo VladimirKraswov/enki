@@ -59,6 +59,27 @@ describe("delivery", () => {
     expect(() => add("over")).toThrow(String(QUEUE_LIMIT));
   });
 
+  it("a held editor blocks itself and the tail, while items before it still drain", () => {
+    add("a"); add("b"); add("c");
+    queue.hold("b");
+    ready = true;
+    queue.drain("s1");
+    expect(submitted.map(s => s.itemId)).toEqual(["a"]);
+    expect(queue.state("s1").items).toEqual([
+      expect.objectContaining({ id: "a", state: "sending" }),
+      expect.objectContaining({ id: "b", state: "ready", held: true }),
+      expect.objectContaining({ id: "c", state: "ready" }),
+    ]);
+    queue.onReceipt(receipt("queue-a-1", "running"));
+    queue.onSettled("s1", null);
+    expect(submitted.map(s => s.itemId)).toEqual(["a"]);
+    queue.release("b");
+    expect(submitted.map(s => s.itemId)).toEqual(["a", "b"]);
+    queue.onReceipt(receipt("queue-b-1", "running"));
+    queue.onSettled("s1", null);
+    expect(submitted.map(s => s.itemId)).toEqual(["a", "b", "c"]);
+  });
+
   it("drains in the user's order, one item per settled turn", () => {
     add("a"); add("b"); add("c");
     queue.reorder("s1", "c", "a");
