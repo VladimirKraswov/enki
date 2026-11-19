@@ -22,7 +22,7 @@ import { importLegacyCredentials } from "../models/import-credentials.ts";
 import { fileContent, listFiles } from "../platform/files.ts";
 import { validDirectory } from "../platform/paths.ts";
 import {
-  API_PREFIX, CONTRACT_VERSION, EVENT_FRAME_CHARACTERS, SCHEMA_VERSION, SDK_VERSION, isId, isModelRef, isPromptPart, isReadOnlyOrigin, validateCommand,
+  API_PREFIX, CONTRACT_VERSION, EVENT_FRAME_CHARACTERS, QUEUE_EDITING_PAUSE_REASON, SCHEMA_VERSION, SDK_VERSION, isId, isModelRef, isPromptPart, isReadOnlyOrigin, validateCommand,
   type CapabilitiesDTO, type EventEnvelope, type HealthDTO, type ModelRef, type PermissionRule, type PromptPart, type SessionDTO,
 } from "../protocol.ts";
 import { refreshCatalog, refreshCredentialSnapshot, trustStore } from "../sdk/adapter.ts";
@@ -330,7 +330,12 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     const body = object(request.body);
     return runtime.queue.resume(current.id, isModelRef(body.model) ? body.model : undefined);
   });
-  r("POST", "/sessions/:id/queue/pause", (request) => { const current = scoped(request); runtime.queue.pause(current.id, null); return runtime.queue.state(current.id); });
+  r("POST", "/sessions/:id/queue/pause", (request) => {
+    const current = scoped(request);
+    const editing = object(request.body).editing === true;
+    runtime.queue.pause(current.id, editing ? QUEUE_EDITING_PAUSE_REASON : null);
+    return runtime.queue.state(current.id);
+  });
   r("POST", "/sessions/:id/queue/:item/steer", (request) => withStatus(202, runtime.queue.steer(ownedItem(request))));
   r("POST", "/sessions/:id/queue/:item/acknowledge", (request) => {
     const item = ownedItem(request);

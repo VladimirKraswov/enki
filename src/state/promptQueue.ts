@@ -7,7 +7,7 @@
 // steer, pause and resume. Nothing here dispatches a prompt, so a reload, a
 // hidden window or a closed chat never stops or duplicates queued work.
 import type { ModelRef, PromptPart, QueueItemDTO, QueueStateDTO } from "../../src-tauri/resources/agent/src/protocol";
-import { isQueuePausingError } from "../../src-tauri/resources/agent/src/protocol";
+import { QUEUE_EDITING_PAUSE_REASON, isQueuePausingError } from "../../src-tauri/resources/agent/src/protocol";
 import { acceptedReceipt, type RuntimeBackend } from "../agent/runtime/backend";
 import { ApiError, ConnectionError } from "../api/http";
 import { attachmentDrafts, attachmentScope, type DraftAttachment } from "../attachments/drafts";
@@ -42,7 +42,7 @@ export interface PromptQueueHost {
   finishSending(operation: Submission): boolean;
 }
 
-interface QueueEdit { id: string; scope: string; directory: string; removed: Set<string> }
+interface QueueEdit { id: string; scope: string; directory: string; removed: Set<string>; paused: boolean }
 interface QueueScope { backend: RuntimeBackend; generation: number }
 
 function queued(item: QueueItemDTO): QueuedPrompt {
@@ -72,10 +72,13 @@ export class PromptQueueController {
     if (edit && edit.scope === attachmentScope(workspace, edit.directory, queue.sessionID)
       && !queue.items.some(item => item.id === edit.id && item.state === "ready")) {
       // The edited item was delivered or removed elsewhere: end the edit, keep the draft.
+      const paused = edit.paused;
       this.edits.delete(queue.sessionID);
       this.locks.delete(queue.sessionID);
       if (queue.sessionID === this.state.activeSessionId)
         this.host.patchUi({ toast: "Запрос уже отправлен или удалён из очереди. Текст остался в поле ввода." });
+      const backend = this.host.backend();
+      if (paused && backend) void this.armQueue({ sid: queue.sessionID, directory: edit.directory, backend, generation: this.host.generation() });
     }
   }
 
@@ -99,6 +102,15 @@ export class PromptQueueController {
     const queue = await backend.queue(sessionID, directory);
     // A newer stream event (e.g. durable delivery) wins over an older HTTP snapshot.
     if (this.currentScope(scope) && this.revisions.get(sessionID) === revision) this.apply(queue);
+  }
+
+  /** Arm the queue after an edit without the manual-resume preconditions:
+   * the edited item itself may now be sending or gone, while later items wait. */
+  private async armQueue(context: QueueScope & { sid: string; directory: string }): Promise<void> {
+    try {
+      const next = await context.backend.client.resumeQueue(context.sid, context.directory);
+      if (this.currentScope(context)) this.apply(next);
+    } catch (error) { this.report(context.sid, error, context); }
   }
 
   getQueue(id = this.state.activeSessionId): QueuedPrompt[] {
@@ -207,10 +219,13 @@ export class PromptQueueController {
   }
 
   async removeQueued(id: string): Promise<void> {
-    const context = this.context();
-    if (!context || this.locked(context.sid)) return;
+    const context = this.context(), edit = this.getQueueEdit();
+    // Editing owns a pause, not the delete control: every ready item remains
+    // removable until the runtime has actually handed it to the agent.
+    if (!context || (this.locked(context.sid) && !edit)) return;
     const { sid, directory, backend } = context;
     const previous = this.state.queues[sid];
+    const editing = edit?.id === id;
     // Remove the row immediately. A DELETE that was already applied elsewhere
     // can legitimately return null; without this optimistic state the stale row
     // would stay visible forever because there is no new QueueStateDTO to apply.
@@ -222,11 +237,21 @@ export class PromptQueueController {
     try {
       const next = await backend.client.removeQueued(sid, directory, id);
       if (!this.currentScope(context)) return;
+      // End the edit before applying the authoritative queue: otherwise the
+      // generic “edited item disappeared” cleanup would re-arm it a second time.
+      if (editing) {
+        const files = attachmentDrafts.snapshot(edit!.scope);
+        this.edits.delete(sid);
+        this.locks.delete(sid);
+        this.host.setDraft("");
+        await attachmentDrafts.remove(edit!.scope, files.map(file => file.id)).catch(() => {});
+      }
       if (next) this.apply(next);
       // The runtime can answer null when the item was already removed (for
       // example a duplicated click or a stale tab). Re-read the authoritative
       // queue so a row that still exists elsewhere cannot remain hidden.
       else await this.refresh(sid, directory, context);
+      if (editing && edit!.paused) await this.armQueue(context);
     } catch (error) {
       if (!this.currentScope(context)) return;
       if (previous) this.apply(previous);
@@ -281,29 +306,53 @@ export class PromptQueueController {
     const context = this.context();
     const item = this.getQueue().find(x => x.id === id);
     if (!context || !item || item.state !== "ready" || this.host.getDraft().trim() || this.state.ui.sending || this.locked(item.sessionID)) return false;
-    const scope = attachmentScope(this.state.prefs.workspaceKey ?? this.state.prefs.endpoint, item.directory, item.sessionID);
-    await attachmentDrafts.ensure(scope);
-    if (!this.currentScope(context) || attachmentDrafts.snapshot(scope).length || this.host.getDraft().trim()) return false;
-    // The runtime keeps the original entry and its position until Apply succeeds.
-    this.edits.set(item.sessionID, { id, scope, directory: item.directory, removed: new Set() });
+    // The same fence as every other item mutation: a double click cannot open
+    // two editors and send two pause requests.
     this.locks.set(item.sessionID, context);
-    this.host.setDraft(item.text);
-    return true;
+    let kept = false;
+    try {
+      const scope = attachmentScope(this.state.prefs.workspaceKey ?? this.state.prefs.endpoint, item.directory, item.sessionID);
+      await attachmentDrafts.ensure(scope);
+      if (!this.currentScope(context) || attachmentDrafts.snapshot(scope).length || this.host.getDraft().trim()) return false;
+      const wasArmed = this.isQueueArmed(item.sessionID);
+      if (wasArmed) {
+        const paused = await context.backend.client.pauseQueue(item.sessionID, item.directory, true);
+        if (!this.currentScope(context)) return false;
+        this.apply(paused);
+        const live = this.getQueue(item.sessionID).find(entry => entry.id === id);
+        if (!live || live.state !== "ready") {
+          if (this.currentScope(context)) this.host.patchUi({ toast: "Запрос уже взят в работу; редактирование не начато." });
+          await this.armQueue(context);
+          return false;
+        }
+      }
+      // The runtime keeps the original entry and its position until Apply succeeds.
+      this.edits.set(item.sessionID, { id, scope, directory: item.directory, removed: new Set(), paused: wasArmed });
+      this.host.setDraft(item.text);
+      kept = true;
+      return true;
+    } catch (error) {
+      if (this.currentScope(context)) this.report(item.sessionID, error, context);
+      return false;
+    } finally {
+      if (!kept && this.locks.get(item.sessionID) === context) this.locks.delete(item.sessionID);
+    }
   }
 
   async cancelQueueEdit(): Promise<void> {
     const context = this.context();
     const edit = this.getQueueEdit(), sid = this.state.activeSessionId;
     if (!context || !edit || !sid || this.state.ui.sending) return;
-    const files = attachmentDrafts.snapshot(edit.scope);
+    const files = attachmentDrafts.snapshot(edit.scope), paused = edit.paused;
     this.edits.delete(sid);
     this.locks.delete(sid);
     this.host.setDraft("");
     await attachmentDrafts.remove(edit.scope, files.map(file => file.id)).catch(() => {});
     if (this.currentScope(context)) this.host.mutate({});
+    if (paused && this.currentScope(context)) await this.armQueue(context);
   }
 
-  async applyQueueEdit(text: string, files: DraftAttachment[]): Promise<boolean> {
+  async applyQueueEdit(text: string, files: DraftAttachment[], resumeAfter = true): Promise<boolean> {
     const edit = this.getQueueEdit(), context = this.context();
     if (!edit || !context || this.state.ui.sending) return false;
     const item = this.getQueue(context.sid).find(q => q.id === edit.id);
@@ -329,6 +378,7 @@ export class PromptQueueController {
       this.locks.delete(context.sid);
       if (this.host.getDraft() === text) this.host.setDraft("");
       if (selected.length) await attachmentDrafts.remove(edit.scope, selected.map(file => file.id)).catch(() => {});
+      if (resumeAfter && edit.paused && this.currentScope(context)) await this.armQueue(context);
       return true;
     } catch (error) {
       if (current()) this.report(context.sid, error, context);
@@ -368,6 +418,7 @@ export class PromptQueueController {
     const sid = this.state.activeSessionId;
     const error = this.pausedReason() || (sid ? this.state.chat.sessions[sid]?.lastError : null) || this.getQueue()[0]?.error;
     if (!error) return null;
+    if (this.pausedReason() === QUEUE_EDITING_PAUSE_REASON) return "Редактирование запроса. Очередь продолжится после сохранения или отмены.";
     if (/insufficient.?balance|insufficient.?credits|payment required/i.test(error))
       return "Недостаточно средств у провайдера. Пополните баланс или выберите другую модель и продолжите очередь. Задания сохранены.";
     return "Очередь остановлена после ошибки. Устраните причину и продолжите; задания сохранены.";
@@ -385,23 +436,34 @@ export class PromptQueueController {
     // One correction per chat in flight: a repeated click is not a second POST.
     if (!context || this.state.ui.sending || this.steering.get(context.sid)?.backend === context.backend) return;
     const { sid, directory, backend } = context;
+    const edit = this.getQueueEdit(), wasPaused = !!edit?.paused;
     this.steering.set(sid, context);
     try {
-      const edit = this.getQueueEdit();
       if (edit) {
         if (edit.id !== id) { this.host.patchUi({ toast: "Завершите редактирование текущего запроса." }); return; }
-        if (!await this.applyQueueEdit(this.host.getDraft(), attachmentDrafts.snapshot(edit.scope))) return;
+        // Apply the text first, but do not let the queue's own drain race the
+        // explicit correction below. It is re-armed after this steer.
+        if (!await this.applyQueueEdit(this.host.getDraft(), attachmentDrafts.snapshot(edit.scope), false)) return;
       }
       // The captured chat, even if the user switched away meanwhile.
       const item = this.getQueue(sid).find(x => x.id === id);
-      if (!item || item.state !== "ready" || !this.currentScope(context)) return;
+      if (!item || item.state !== "ready" || !this.currentScope(context)) {
+        if (wasPaused && this.currentScope(context)) await this.armQueue(context);
+        return;
+      }
       acceptedReceipt(await backend.client.steerQueued(sid, directory, id));
+      if (wasPaused && this.currentScope(context)) await this.armQueue(context);
       let refreshed = true;
       if (this.currentScope(context)) await this.refresh(sid, directory, context).catch(() => { refreshed = false; });
       if (this.currentScope(context) && sid === this.state.activeSessionId) this.host.patchUi({ toast: refreshed
         ? "Уточнение сохранено."
         : "Уточнение сохранено. Статус доставки временно недоступен." });
-    } catch (error) { this.report(sid, error, context); }
+    } catch (error) {
+      this.report(sid, error, context);
+      // The edit was already applied; a failed steer must not leave the queue
+      // paused with an edit reason no edit can clear.
+      if (wasPaused && this.currentScope(context)) await this.armQueue(context);
+    }
     finally { if (this.steering.get(sid) === context) this.steering.delete(sid); }
   }
 

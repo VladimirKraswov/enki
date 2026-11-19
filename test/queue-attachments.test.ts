@@ -39,6 +39,13 @@ beforeEach(async () => {
       attachments: (i.attachments ?? []).filter(f => !(patch.removeAttachments ?? []).includes(f.id)) }) };
     return queue;
   });
+  fx.on('POST', '/sessions/:id/queue/pause', c => {
+    queue = { ...queue, armed: false, pausedReason: (c.body as { editing?: boolean }).editing ? 'editing' : null }; return queue;
+  });
+  fx.on('POST', '/sessions/:id/queue/resume', () => { queue = { ...queue, armed: true, pausedReason: null }; return queue; });
+  fx.on('DELETE', '/sessions/:id/queue/:item', c => {
+    queue = { ...queue, items: queue.items.filter(i => i.id !== c.params.item) }; return queue;
+  });
   fx.on('POST', '/sessions/:id/queue/:item/steer', c => ({ id: `queue-${c.params.item}-1`, kind: 'steer', sessionID: 'ses_a', state: 'accepted', createdAt: 1, updatedAt: 1 }));
   fx.on('POST', '/sessions/:id/stop', () => ({ stopped: true }));
   fixture.bindStore(store, fx);
@@ -119,8 +126,6 @@ it('editing restores the text, holds the original entry and position, and Apply 
   expect(store.getDraft()).toBe('first');
   expect(store.editKeptFiles().map((f: { name: string }) => f.name)).toEqual(['fixture.txt']);
   expect(store.reorderQueued(second.id, first.id)).toBe(false);
-  await store.removeQueued(first.id);
-  expect(fx.made('DELETE', '/sessions/:id/queue/:item')).toEqual([]);
   store.setModelChoice('p', 'other');
   await store.removeQueuedAttachment(first.id, store.editKeptFiles()[0].id);
   expect(patches()).toEqual([]);
@@ -129,6 +134,21 @@ it('editing restores the text, holds the original entry and position, and Apply 
   expect(store.getQueue().map((q: { id: string }) => q.id)).toEqual([first.id, second.id]);
   expect(store.getQueue()[0].model.modelID).toBe('m');
   expect(store.getQueueEdit()).toBeUndefined();
+  expect(fx.made('POST', '/sessions/:id/queue/pause')).toHaveLength(1);
+  expect(fx.made('POST', '/sessions/:id/queue/resume')).toHaveLength(1);
+});
+
+it('an edited item can still be deleted before the agent takes it; its draft and pause are cleared', async () => {
+  await store.enqueueWithAttachments('first', drafts.snapshot(scope));
+  await store.enqueuePrompt('second');
+  const [first, second] = store.getQueue();
+  expect(await store.editQueued(first.id)).toBe(true);
+  await store.removeQueued(first.id);
+  expect(fx.made('DELETE', '/sessions/:id/queue/:item').map(c => c.params.item)).toEqual([first.id]);
+  expect(store.getQueueEdit()).toBeUndefined();
+  expect(store.getDraft()).toBe('');
+  expect(store.getQueue().map((q: { id: string }) => q.id)).toEqual([second.id]);
+  expect(fx.made('POST', '/sessions/:id/queue/resume')).toHaveLength(1);
 });
 
 it('does not start editing over an existing attachment-only draft, and Cancel leaves the original entry untouched', async () => {
@@ -166,6 +186,12 @@ it('steering an edited entry applies the edit first, then steers that item once'
   expect(patches()).toEqual([[queued.id, { text: 'new text' }]]);
   expect(fx.made('POST', '/sessions/:id/queue/:item/steer').map(c => c.params.item)).toEqual([queued.id]);
   expect(fx.calls.findIndex(c => c.method === 'PATCH')).toBeLessThan(fx.calls.findIndex(c => c.path.endsWith('/steer')));
+  const pause = fx.calls.findIndex(c => c.path.endsWith('/queue/pause'));
+  const resume = fx.calls.findIndex(c => c.path.endsWith('/queue/resume'));
+  const steer = fx.calls.findIndex(c => c.path.endsWith('/steer'));
+  expect(pause).toBeGreaterThanOrEqual(0);
+  expect(pause).toBeLessThan(steer);
+  expect(resume).toBeGreaterThan(steer);
   expect(store.getQueueEdit()).toBeUndefined();
   expect(fx.made('POST', '/sessions/:id/stop')).toEqual([]);
 });

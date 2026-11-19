@@ -4,6 +4,7 @@
 import { afterEach, expect, it } from "vitest";
 import { fauxAssistantMessage } from "../../src/sdk/testing.ts";
 import { gate, harness, newSession, promptCommand, type Harness } from "../helpers.ts";
+import { QUEUE_EDITING_PAUSE_REASON } from "../../src/protocol.ts";
 import { scriptedRuntime } from "../../src/sdk/testing.ts";
 import path from "node:path";
 
@@ -129,6 +130,28 @@ it("a fatal provider error pauses the queue; a recoverable one does not", async 
   expect(state.body.armed).toBe(false);
   expect(state.body.pausedReason).toMatch(/Insufficient balance/);
   expect(state.body.items.map((i) => i.id)).toEqual(["e4"]);
+});
+
+it("a queue paused for editing keeps its item when the turn settles and sends it only after resume", async () => {
+  h = await harness();
+  const dir = h.project("editing-pause");
+  const sid = await newSession(h, dir);
+  const hold = gate();
+  h.scripted.setResponses([async () => { await hold.wait; return fauxAssistantMessage("first done"); }, fauxAssistantMessage("edited done")]);
+  await h.command(promptCommand(h, "cmd-edit-base", sid, dir, "base"));
+  await h.waitReceipt("cmd-edit-base", ["running"]);
+  await h.request("POST", `/sessions/${sid}/queue`, { id: "being-edited", text: "edited prompt", model: h.model() });
+  const paused = await h.request<{ armed: boolean; pausedReason: string | null }>("POST", `/sessions/${sid}/queue/pause`, { editing: true });
+  expect(paused.body).toMatchObject({ armed: false, pausedReason: QUEUE_EDITING_PAUSE_REASON });
+  hold.open();
+  await h.waitReceipt("cmd-edit-base", ["completed"]);
+  await new Promise((r) => setTimeout(r, 80));
+  const waiting = await h.request<{ armed: boolean; items: Array<{ id: string; state: string }> }>("GET", `/sessions/${sid}/queue`);
+  expect(waiting.body).toMatchObject({ armed: false, items: [{ id: "being-edited", state: "ready" }] });
+  expect(await userTexts(h, sid)).not.toContain("edited prompt");
+  await h.request("POST", `/sessions/${sid}/queue/resume`, {});
+  for (let i = 0; i < 200 && (await h.request<{ items: unknown[] }>("GET", `/sessions/${sid}/queue`)).body.items.length; i++) await new Promise((r) => setTimeout(r, 25));
+  expect(await userTexts(h, sid)).toContain("edited prompt");
 });
 
 it("queued items and their prepared attachments survive a runtime restart", async () => {

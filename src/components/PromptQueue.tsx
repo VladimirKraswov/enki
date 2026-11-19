@@ -87,7 +87,7 @@ export function PromptQueue({attachments, removeFile, focusEditor, switching}: {
               </button>
             )}
           </div>
-          {!store.isQueueArmed() && store.queueRecoveryReason() && <p className="queue-recovery" role="status">{store.queueRecoveryReason()}</p>}
+          {!store.isQueueArmed() && !queueEdit && store.queueRecoveryReason() && <p className="queue-recovery" role="status">{store.queueRecoveryReason()}</p>}
           {!store.isQueueArmed() && store.queueHasDifferentModel() && <button className="queue-model-recovery" disabled={!!queueEdit || s.ui.sending || !connected || store.getQueue()[0]?.state !== "ready"} onClick={() => void store.resumeQueue(true)}>Продолжить на выбранной модели</button>}
           <div className="queued-prompts" ref={list}>
           <span className="queue-announcement" role="status" aria-live="polite">{announcement}</span>
@@ -152,7 +152,8 @@ export function PromptQueue({attachments, removeFile, focusEditor, switching}: {
                   </>
                 )}
                 <button
-                  disabled={!!queueEdit || store.isQueueLocked() || item.state === "sending"}
+                  disabled={item.state === "sending" || !connected || (store.isQueueLocked() && !queueEdit)}
+                  title="Убрать из очереди, пока агент не взял запрос в работу"
                   aria-label="Убрать из очереди"
                   onClick={() => void store.removeQueued(item.id)}
                 >

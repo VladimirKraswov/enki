@@ -367,6 +367,9 @@ export interface QueueItemDTO {
   commandId?: string | null;
 }
 
+/** The queue is paused while its owner edits one saved item; no turn may take it. */
+export const QUEUE_EDITING_PAUSE_REASON = "Идёт редактирование запроса в очереди.";
+
 export interface QueueStateDTO {
   sessionID: string;
   armed: boolean;

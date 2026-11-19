@@ -125,6 +125,13 @@ is refused (409) and the window re-reads that chat's queue. Deleting a chat also
 removes its queued prompts and remembered permission answers; its timers stay
 listed, paused with "chat deleted".
 
+Opening **Изменить** pauses the durable queue before the editor appears, so a
+turn that finishes meanwhile cannot take the item being edited. Save, Cancel or
+deleting that item re-arms the queue only if it was armed before editing. Every
+item in `ready` can be removed with **×**, including while the editor is open;
+only an item already handed to the runtime (`sending`) cannot be deleted. If the
+window reloads during an edit, the queue stays visibly paused and can be resumed.
+
 **Скорректировать сейчас** delivers that item as a steering message to the
 running turn. The SDK shows it to the agent at the **next model/tool boundary**;
 it cannot retroactively change generated tokens and does not kill an executing
