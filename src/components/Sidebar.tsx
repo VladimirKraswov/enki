@@ -1,7 +1,7 @@
 import {SessionSpinner} from "./SessionSpinner";
 import {taskScheduler} from "../schedules/tasks";
 import {activeTimers, directoryTimers, timerAriaLabel} from "../schedules/indicators";
-import {TimerBadge} from "./TimerBadge";
+import {TimerAlertBadge, TimerBadge} from "./TimerBadge";
 import {ScheduleDialog} from "./ScheduleDialog";
 import { CapabilityScopeDialog } from "./CapabilityScopeDialog";
 import { UpdateBadge } from "../updates/runtime";
@@ -38,9 +38,12 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   if (mark === "waiting") return withTimer(<span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>);
   if (mark === "unconfirmed") return withTimer(<span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>);
   if (mark === "working") return withTimer(<SessionSpinner/>);
-  if (store.state.chat.sessions[id]?.lastError || tasks.some(t=>t.sessionID===id&&t.state==="error"))
-    return withTimer(<span className="pending-dot" aria-label="Требуется внимание" title="Проверьте ответ, ошибку или расписание чата">!</span>);
-  return <>{store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />}{timer}</>;
+  const unread = store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />;
+  if (store.sessionHasAttention(id))
+    return withTimer(<>{unread}<span className="pending-dot" aria-label="В чате есть ошибка" title="Откройте чат: последний запуск завершился ошибкой">!</span></>);
+  const failedTimers = tasks.filter(t => t.sessionID === id && t.state === "error");
+  if (failedTimers.length) return <>{unread}{timer}<TimerAlertBadge tasks={failedTimers}/></>;
+  return <>{unread}{timer}</>;
 }
 
 /** Collapsed projects still advertise a timer so it is not hidden behind the disclosure. */
@@ -283,7 +286,7 @@ export function Sidebar() {
             </div>
             {expanded && <div className="project-sessions" aria-label={`Сессии ${name}`}>
               {sessions.filter((sess, index) => index < shown || store.isUnread(sess.id) || store.isRunning(sess.id)).map((sess) => row(sess, dir))}
-              {list?.loading && <div className="empty-hint" role="status">Загрузка…</div>}
+              {list?.loading && !list.sessions.length && <div className="empty-hint" role="status">Загрузка…</div>}
               {list?.error && <div className="empty-hint" role="alert">Не удалось загрузить сессии. <button title={list.error} onClick={() => void store.loadProjectSessions(dir, { force: true })}>Повторить</button></div>}
               {list?.loaded && !list.loading && !list.error && sessions.length === 0 && <button className="project-empty" onClick={() => void store.setDirectory(dir)}>Начать первый чат</button>}
               {(sessions.length > shown || list?.hasMore) && <button className="show-more" disabled={list?.loading} onClick={() => {
@@ -311,7 +314,7 @@ export function Sidebar() {
             <button className={`icon-btn${archived ? " on" : ""}`} title={archived ? "Показать недавние" : "Архив всех проектов"} aria-label={archived ? "Показать недавние" : "Показать архив"} onClick={() => { setArchived(!archived); setRecentCount(8); }}><Icon name="archive" size={15} /></button>
           </div>
           {recent.archived === archived && visibleRecent.slice(0, recentCount).map((sess) => row(sess, "recent", true))}
-          {recent.loading && <div className="empty-hint" role="status">Загрузка…</div>}
+          {recent.loading && !recent.sessions.length && <div className="empty-hint" role="status">Загрузка…</div>}
           {recent.error && <div className="empty-hint" role="alert">Не удалось загрузить сессии. <button title={recent.error} onClick={() => void store.loadRecentSessions(archived)}>Повторить</button></div>}
           {recent.loaded && !recent.loading && !recent.error && visibleRecent.length === 0 && <div className="empty-hint">{archived ? "Архив пуст" : "Здесь появятся ваши недавние чаты"}</div>}
           {(visibleRecent.length > recentCount || recent.hasMore) && <button className="show-more" disabled={recent.loading} onClick={() => {

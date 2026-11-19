@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { activeTimers, directoryTimers, timerAriaLabel } from "../src/schedules/indicators";
-import { TimerBadge } from "../src/components/TimerBadge";
+import { TimerAlertBadge, TimerBadge } from "../src/components/TimerBadge";
 import type { ScheduledTask } from "../src/schedules/tasks";
 
 const task = (over: Partial<ScheduledTask> = {}): ScheduledTask => ({
@@ -54,5 +54,17 @@ it("renders a clock badge with the next-run tooltip and nothing without timers",
   expect(badge.getAttribute("title")).toContain("Проверка");
   expect(badge.getAttribute("title")).toContain("каждые 15 мин");
   expect(badge.getAttribute("title")).toContain("следующий запуск");
+  act(() => root.unmount());
+});
+
+it("renders a paused timer as a clock with its own explanation, not a generic error", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  act(() => root.render(createElement(TimerAlertBadge, { tasks: [task({ enabled: false, state: "error", detail: "пробуждение не отправлено" })] })));
+  const badge = node.querySelector(".session-timer.timer-error")!;
+  expect(badge.getAttribute("aria-label")).toBe("Таймер приостановлен");
+  expect(badge.getAttribute("title")).toContain("пробуждение не отправлено");
   act(() => root.unmount());
 });

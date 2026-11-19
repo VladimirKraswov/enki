@@ -66,6 +66,21 @@ it("shows work in progress, then unread completion only after leaving and clears
   expect(store.state.prefs.unreadSessions?.ses_a).toBeUndefined();
 });
 
+it("opening a finished chat replaces a stale busy slot with the authoritative idle status", async () => {
+  await store.setDirectory("/work/a");
+  await store.selectSession("ses_a");
+  status("ses_a", "/work/a", "busy");
+  status("ses_a", "/work/a", "idle");
+  store.state.chat.sessions.ses_a.status = { type: "busy" };
+  await store.loadHistory("ses_a", "/work/a");
+  expect(store.state.chat.sessions.ses_a.status.type).toBe("idle");
+  store.state.chat.sessions.ses_a.lastError = "старая ошибка";
+  store.state.chat.sessions.ses_a.lastOutcome = { commandID: "c", state: "completed", reason: "answered", error: null };
+  expect(store.sessionHasAttention("ses_a")).toBe(false);
+  store.state.chat.sessions.ses_a.lastOutcome = { commandID: "c", state: "failed", reason: "error", error: "старая ошибка" };
+  expect(store.sessionHasAttention("ses_a")).toBe(true);
+});
+
 it("marks completion from session.idle even when the busy status was missed", async () => {
   await store.setDirectory("/work/a");
   await store.setDirectory("/work/b");
@@ -133,6 +148,16 @@ it("removes attention when a session is deleted elsewhere", async () => {
   local.emitGlobal({ type: "session.deleted", properties: { sessionID: "ses_a" } } as never, "/work/a");
   expect(store.hasUnreadInDirectory("/work/a")).toBe(false);
   expect(store.activityStatus("ses_a")).toBeUndefined();
+});
+
+it("does not chime for a background session whose project is hidden from the sidebar", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  store.removeProject("/work/a");
+  status("ses_a", "/work/a", "busy");
+  status("ses_a", "/work/a", "idle");
+  expect(chime).not.toHaveBeenCalled();
+  expect(store.isUnread("ses_a")).toBe(false);
 });
 
 it("does not show project attention or chime for a hidden subagent", async () => {

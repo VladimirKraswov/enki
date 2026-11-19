@@ -29,6 +29,8 @@ export interface SessionChatState {
    * the only valid measurement until a newer assistant response supplies usage. */
   compaction?: { tokensBefore: number | null; tokensAfter: number | null; at: number } | null;
   lastEventAt: number;
+  /** Stable sidebar order timestamp: new user turn and settle, never token deltas. */
+  orderAt: number;
   /** Supported outcome of the latest settled run (`session.outcome`); cleared when a new run starts. */
   lastOutcome?: RunOutcomeView | null;
   /** Bumped whenever a `patch` part is added, changed or removed: an O(1)
@@ -62,6 +64,7 @@ export function emptySessionChat(): SessionChatState {
     lastError: null,
     compaction: null,
     lastEventAt: 0,
+    orderAt: 0,
   };
 }
 
@@ -165,6 +168,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       if (info.role === "user" && isNew) {
         slot.lastError = null;
         slot.lastOutcome = null;
+        slot.orderAt = Date.now();
       }
       if (info.role === "assistant") {
         if (info.error) {
@@ -283,8 +287,12 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
     case "session.status": {
       if (!sessionID) break;
       const slot = sessionSlot(root, sessionID);
+      const previous = slot.status;
       slot.status = normalizeStatusType(props.status);
-      if (slot.status.type === "busy") { slot.lastError = null; slot.lastOutcome = null; }
+      if (slot.status.type === "busy") {
+        slot.lastError = null; slot.lastOutcome = null;
+        if (previous.type !== "busy" && previous.type !== "retry" && previous.type !== "waiting") slot.orderAt = Date.now();
+      }
       changed = true;
       break;
     }
@@ -296,6 +304,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
       const slot = sessionSlot(root, sessionID);
       const reason = typeof props.reason === "string" ? props.reason : null, error = typeof props.error === "string" ? props.error.slice(0, 2000) : null;
       slot.lastOutcome = { commandID: typeof props.commandID === "string" ? props.commandID : null, state, reason, error };
+      slot.orderAt = Date.now();
       if (state === "completed") slot.lastError = null;
       // A run that ended without any answer has no other visible sign; an
       // output-limit stop already shows its OutputLimitNotice on the message.
@@ -306,6 +315,7 @@ export function reduceEvent(root: ChatRootState, event: ServerEvent): boolean {
     case "session.idle": {
       if (!sessionID) break;
       const slot = sessionSlot(root, sessionID);
+      if (slot.status.type !== "idle") slot.orderAt = Date.now();
       slot.status = { type: "idle" };
       changed = true;
       break;
@@ -409,6 +419,7 @@ export function applyHistory(
   slot.lastError = previous?.lastError ?? null;
   slot.compaction = previous?.compaction ?? null;
   slot.lastOutcome = previous?.lastOutcome ?? null;
+  slot.orderAt = previous?.orderAt ?? 0;
   // Monotonic across reloads, so a re-read with patch parts is never "unchanged".
   slot.patchRevision = previous?.patchRevision;
   // The replacement drops every previous part. If any was a patch, the set of

@@ -3344,6 +3344,7 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .session-indicators { display:inline-flex; align-items:center; justify-content:flex-end; gap:5px; flex:0 0 auto; min-width:30px; }
 .session-indicators > *, .session-timer { flex:none; }
 .session-timer { display:inline-flex; color:var(--accent); }
+.timer-error { color:var(--warn); display:inline-flex; align-items:center; gap:2px; font-weight:700; }
 .project-timer { display:inline-flex; flex:none; color:var(--accent); }
 .workshop-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sidebar-timers { display:flex; align-items:center; gap:8px; padding:8px 10px; color:var(--text-dim); width:100%; font-size:12px; }

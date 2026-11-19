@@ -18,3 +18,12 @@ export function TimerBadge({ tasks, label, size = 14, className = "session-timer
     .join("\n");
   return <span className={className} role="status" aria-label={label} title={title}><Icon name="clock" size={size}/></span>;
 }
+
+/** A paused timer is a clock with attention, not a generic session error. */
+export function TimerAlertBadge({ tasks }: { tasks: readonly ScheduledTask[] }) {
+  if (!tasks.length) return null;
+  const title = tasks.map(task => `${task.title}: ${task.detail ?? "таймер приостановлен"}`).join("\n");
+  return <span className="session-timer timer-error" role="status" aria-label="Таймер приостановлен" title={title}>
+    <Icon name="clock" size={14}/><span aria-hidden="true">!</span>
+  </span>;
+}

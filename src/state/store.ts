@@ -1613,6 +1613,10 @@ class Store {
       },
     }));
     this.persistPrefs();
+    if (opts.sessionId) this.reconcileSlotStatus(opts.sessionId);
+    // A chat clicked from another project paints its transcript as soon as the
+    // messages arrive; do not wait for project metadata and the session list.
+    const preloadHistory = opts.sessionId && directory ? this.loadHistory(opts.sessionId, directory) : null;
     const metadata = this.state.connection.phase === "connected"
       ? this.loadRuntimeMetadata()
       : Promise.resolve();
@@ -1625,7 +1629,7 @@ class Store {
       void this.backend.vcs(directory).then((vcs) => {
         if (gen === this.directoryGeneration) this.patchUi({ vcs });
       });
-    await Promise.all([this.refreshSessions(), metadata]);
+    await Promise.all([this.refreshSessions(), metadata, ...(preloadHistory ? [preloadHistory] : [])]);
     if (gen !== this.directoryGeneration) return;
     if (
       !opts.restoreSession &&
@@ -1642,7 +1646,8 @@ class Store {
     if ((opts.restoreSession || opts.sessionId) && this.state.activeSessionId) {
       const restored = this.state.activeSessionId;
       // Same rule as selectSession: a slot built only from live events is not history.
-      if (!this.state.chat.sessions[restored] || !this.historyLoaded.has(restored))
+      const alreadyLoading = !!preloadHistory && opts.sessionId === restored;
+      if (!alreadyLoading && (!this.state.chat.sessions[restored] || !this.historyLoaded.has(restored)))
         await this.loadHistory(restored, directory);
       if (gen !== this.directoryGeneration) return;
       if (!this.state.ui.historyError) this.markReadIfViewing();
@@ -1695,6 +1700,19 @@ class Store {
 
   // ---------- session selection / history ----------
 
+  /** A background slot can lag the authoritative status; never let it paint a stale spinner. */
+  private reconcileSlotStatus(sessionId: string): void {
+    const live = this.activityStatus(sessionId), slot = this.state.chat.sessions[sessionId];
+    if (!live || !slot) return;
+    if (slot.status.type === live.type && !(live.type === "busy" || live.type === "retry")) return;
+    this.mutate((s) => {
+      const current = s.chat.sessions[sessionId];
+      if (!current) return {};
+      return { chat: { ...s.chat, sessions: { ...s.chat.sessions, [sessionId]: { ...current, status: live,
+        ...(live.type === "busy" || live.type === "retry" ? { lastError: null, lastOutcome: null } : {}) } } } };
+    });
+  }
+
   async selectSession(sessionId: string | null): Promise<void> {
     if (!sessionId && this.state.directory && this.isWorkshopDirectory(this.state.directory))
       sessionId = this.state.prefs.workshop!.session.id;
@@ -1716,6 +1734,10 @@ class Store {
     }));
     this.persistPrefs();
     if (!sessionId || !directory) return;
+    // A slot kept from background events may still say "busy" after settlement.
+    // Adopt the authoritative activity status before history paints, so opening
+    // a finished chat never starts with a stale working spinner.
+    this.reconcileSlotStatus(sessionId);
     // A slot created by live/background events or a status listing is NOT a
     // history read: load the authoritative page (with its cursor) once.
     if (!this.state.chat.sessions[sessionId] || !this.historyLoaded.has(sessionId)) {
@@ -1880,6 +1902,14 @@ class Store {
         const previous = chat.sessions[sessionId];
         // Retain previously paginated history; replay post-request events over the snapshot.
         applyHistory(chat, sessionId, messages);
+        const authoritative = this.activityStatus(sessionId);
+        if (authoritative && chat.sessions[sessionId]) {
+          chat.sessions[sessionId].status = authoritative;
+          if (authoritative.type === "busy" || authoritative.type === "retry") {
+            chat.sessions[sessionId].lastError = null;
+            chat.sessions[sessionId].lastOutcome = null;
+          }
+        }
         // Ids are random (Pi SDK entries), so "older" means "earlier in the
         // previous window than this page's first message", never `id < first`.
         // Without an overlap the old window is dropped and the new cursor wins.
@@ -2633,7 +2663,9 @@ class Store {
   /** Latest observed activity for sidebar ordering. Stored session time alone
    * is stale during a running turn, so live events and status changes count. */
   sessionActivityAt(id: string): number {
-    const slot = this.state.chat.sessions[id]?.lastEventAt ?? 0;
+    // Use the stable turn boundary, never the last streamed delta: sorting on
+    // every token made Recent rows swap under the pointer.
+    const slot = this.state.chat.sessions[id]?.orderAt ?? 0;
     const observed = this.statusObservedAt.get(id) ?? 0;
     const session = this.activitySessions.get(id) ?? this.state.sessions.find(x => x.id === id)
       ?? this.state.recentSessionList.sessions.find(x => x.id === id);
@@ -2644,7 +2676,7 @@ class Store {
   activityOrderSignature(): string {
     const entries: string[] = [];
     for (const [id, slot] of Object.entries(this.state.chat.sessions))
-      entries.push(id + ":" + Math.floor((slot.lastEventAt ?? 0) / 1_000));
+      entries.push(id + ":" + Math.floor((slot.orderAt ?? 0) / 1_000));
     for (const [id, at] of this.statusObservedAt)
       entries.push(id + ":s:" + Math.floor(at / 1_000));
     return entries.sort().join("|");
@@ -3685,6 +3717,12 @@ class Store {
       this.state.chat.sessions[id]?.status ?? this.state.statuses[id];
   }
 
+  /** A terminal error deserves the sidebar mark only for the latest run. */
+  sessionHasAttention(id: string): boolean {
+    const slot = this.state.chat.sessions[id];
+    return !!slot?.lastError && slot.lastOutcome?.state !== "completed";
+  }
+
   isUnread(id: string): boolean {
     return Boolean(this.state.prefs.unreadSessions?.[id]);
   }
@@ -3728,7 +3766,8 @@ class Store {
 
   private visibleActivity(id: string): boolean {
     const session = this.activitySessions.get(id);
-    return !session?.parentID && !session?.time?.archived;
+    // An unresolved old mark is not evidence that its project is hidden.
+    return !session || (!session.parentID && !session.time?.archived && !this.isProjectHidden(session.directory));
   }
 
   private rememberActivitySession(session: Session): void {
@@ -3791,12 +3830,16 @@ class Store {
       this.activityDirectories.set(id, directory);
     const previous = this.activityStatus(id);
     const wasRunning = previous?.type === "busy" || previous?.type === "retry";
+    const wasActive = wasRunning || previous?.type === "waiting";
     const running = status.type === "busy" || status.type === "retry";
+    const active = running || status.type === "waiting";
     // `session.idle` is emitted by the runtime on settlement. It is completion
     // evidence even if a busy status was missed during reconnect or MCP recovery.
     const finished = status.type === "idle" && (wasRunning || completed);
     const changed = !previous || previous.type !== status.type;
-    if (changed && (running || finished || status.type === "waiting")) this.statusObservedAt.set(id, Date.now());
+    // Only entering/leaving active work changes sidebar order. Model-transition
+    // waiting/busy flapping inside one turn must not move a row.
+    if (changed && ((active && !wasActive) || (finished && wasActive))) this.statusObservedAt.set(id, Date.now());
     if (previous?.type === status.type && !running && !(completed && status.type === "idle")) return;
     if (running) this.clearUnread(id);
     if (running || status.type === "waiting") this.ensureActivitySweep();
