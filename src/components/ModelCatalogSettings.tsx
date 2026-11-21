@@ -266,7 +266,7 @@ export function ModelCatalogSettings() {
   const apply = async () => {
     if (!catalog) return;
     if (!state.enabled) {
-      setError("Включите «Применять на этом устройстве», чтобы каталог писался в настройки моделей среды выполнения.");
+      setError("Включите основной режим Hub, чтобы каталог писался в настройки моделей среды выполнения.");
       return;
     }
     setBusy(true);
@@ -369,7 +369,7 @@ export function ModelCatalogSettings() {
           <div className="setting-row">
             <div className="setting-label">
               <div className="setting-field-heading">
-                <label htmlFor="hub-catalog-apply">Применять на этом устройстве</label>
+                <label htmlFor="hub-catalog-apply">Модели и ключи с Hub (основной режим)</label>
                 <SettingHelp topic="Каталог моделей Hub" />
               </div>
               <small>
@@ -382,16 +382,18 @@ export function ModelCatalogSettings() {
                     : "Не загружен"}
               </small>
               <small>
-                Локальные провайдеры и выбранные модели остаются на устройстве; каталог
-                меняет только провайдеры, которые он публиковал раньше.
+                При запуске Enki автоматически получает каталог и ключи с Hub. Если выключить,
+                включается резервный прямой режим: каталог не применяется, внешние модели
+                используют сохранённые настройки. Локальные модели и при прямом режиме
+                требуют Hub для выбора и удержания.
               </small>
             </div>
             <div className="setting-control">
               <input
                 id="hub-catalog-apply"
                 type="checkbox"
-                checked={state.enabled}
-                onChange={(e) => store.setHubModels({ ...state, enabled: e.target.checked })}
+                checked={state.mode === "hub"}
+                onChange={(e) => store.setHubModels({ ...state, mode: e.target.checked ? "hub" : "direct", enabled: e.target.checked })}
               />
             </div>
           </div>
@@ -411,10 +413,10 @@ export function ModelCatalogSettings() {
               <button
                 className="btn primary"
                 disabled={busy || loading || !catalog || catalog.version === 0}
-                title={state.enabled ? undefined : "Сначала включите «Применять на этом устройстве»"}
+                title={state.enabled ? undefined : "Сначала включите основной режим Hub"}
                 onClick={() => void apply()}
               >
-                Применить на этом устройстве
+                Применить сейчас
               </button>
               <button
                 className="btn"

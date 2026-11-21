@@ -664,6 +664,11 @@ export class Runtime {
     await refreshCredentialSnapshot(this.modelRuntime, signal ?? new AbortController().signal).catch(() => undefined);
   }
 
+  /** Re-read Hub credentials after the shared catalog has added providers. */
+  async adoptHubCredentialsNow(signal?: AbortSignal): Promise<void> {
+    await this.adoptHubCredentials(signal);
+  }
+
   /** Providers the owner centralised on Hub: adopt their credentials into this
    * device's vault on start, so every device can select the same models. */
   private async adoptHubCredentials(signal?: AbortSignal): Promise<void> {

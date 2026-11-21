@@ -46,6 +46,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (s.connection.phase === "connected") void store.ensureHubModels?.().catch(() => {});
+  }, [s.connection.phase, s.prefs.hubModels?.mode]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => void store.refreshPiActivity(), 5000);
     return () => window.clearInterval(timer);
   }, []);

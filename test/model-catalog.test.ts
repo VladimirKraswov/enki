@@ -40,6 +40,14 @@ const prefs = hubModelsState({
   },
 });
 
+describe("Hub primary mode", () => {
+  it("defaults to Hub as the model source and keeps an explicit direct fallback", () => {
+    expect(hubModelsState({})).toMatchObject({ mode: "hub", enabled: true });
+    expect(hubModelsState({ hubModels: { mode: "direct" } })).toMatchObject({ mode: "direct", enabled: false });
+    expect(hubModelsState({ hubModels: { mode: "direct", enabled: true } })).toMatchObject({ mode: "direct", enabled: false });
+  });
+});
+
 describe("planCatalog", () => {
   it("keeps non-excluded models and prunes previously applied ids", () => {
     const plan = planCatalog(catalog, prefs);

@@ -18,6 +18,9 @@ import { chooseModel, legacyModelChoice, parseModelId, type ModelChoice } from '
 import {invalidateCapabilities} from "../capabilities/integration";
 import { modelServices, type ModelService } from "../models/services";
 import type { HubModelServices } from "../models/hub";
+import { hubModelsState, type HubModelsPrefs } from "../models/catalog";
+import { applyCatalog, CatalogBusyAbort, fetchCatalog } from "../hub/modelCatalog";
+import { hasActiveSessions } from "./activity";
 import { untilAborted } from "../util/abort";
 import { configureLocalBrowser, invalidateBrowserSetup, browserSetupSnapshot, openSessionBrowser } from "../browser/integration";
 import { browserTaskKey, browserEfforts, browserDefaultEffort } from "../browser/task";
@@ -3197,9 +3200,56 @@ class Store {
     this.mutate((s) => ({ prefs: { ...s.prefs, asr: settings } }));
     this.persistPrefs();
   }
-  setHubModels(state: import("../models/catalog").HubModelsPrefs) {
+  setHubModels(state: HubModelsPrefs, activate = true) {
+    const previous = this.state.prefs.hubModels;
     this.mutate((s) => ({ prefs: { ...s.prefs, hubModels: state } }));
     this.persistPrefs();
+    if (activate && state.mode === "hub" && previous?.mode !== "hub") {
+      this.hubCatalogSync = undefined;
+      void this.ensureHubModels(true).catch(() => {});
+    }
+  }
+
+  private hubCatalogSync?: Promise<void>;
+  private hubCatalogPending = false;
+  private hubSyncBusy(): boolean {
+    return this.state.ui.sending || this.state.ui.workspacePreparing || hasActiveSessions(this.state)
+      || Object.keys(this.state.chat.permissions).length > 0 || Object.keys(this.state.chat.questions).length > 0 || !!this.state.ui.agentDialog;
+  }
+  /** Hub is the primary source: fetch and apply the shared catalog before the first model use. */
+  async ensureHubModels(force = false): Promise<void> {
+    if (!isNative() || this.currentHost()) return;
+    const prefs = hubModelsState(this.state.prefs);
+    if (prefs.mode !== "hub") { this.hubCatalogPending = false; return; }
+    if (this.state.connection.phase !== "connected") return;
+    if (this.hubCatalogSync) {
+      await this.hubCatalogSync;
+      if (!force) return;
+    }
+    if (this.hubSyncBusy()) { this.hubCatalogPending = true; return; }
+    const task = this.syncHubModels(prefs).finally(() => { if (this.hubCatalogSync === task) this.hubCatalogSync = undefined; });
+    this.hubCatalogSync = task;
+    await task;
+  }
+  private async syncHubModels(prefs: HubModelsPrefs): Promise<void> {
+    try {
+      const catalog = await fetchCatalog();
+      if (!catalog || catalog.version === 0 || !Array.isArray(catalog.models)) return;
+      const applied = await applyCatalog(catalog, { ...prefs, mode: "hub", enabled: true }, { client: this.client, remote: false }, () => {
+        if (this.hubSyncBusy()) throw new CatalogBusyAbort();
+      });
+      this.hubCatalogPending = false;
+      this.setHubModels({ ...prefs, mode: "hub", enabled: true, appliedVersion: catalog.version, appliedOpencode: [], appliedPi: applied.appliedPi }, false);
+      // Catalog providers must exist before their Hub credentials can be adopted.
+      await this.client.adoptHubCredentials().catch(() => undefined);
+      await this.client.refreshProviders().catch(() => undefined);
+    } catch (error) {
+      if (error instanceof CatalogBusyAbort) { this.hubCatalogPending = true; return; }
+      this.hubCatalogPending = false;
+      const message = errText(error);
+      if (!/Hub не подключён|Hub не настроен|Hub disabled|not connected/i.test(message))
+        this.patchUi({ toast: `Hub-каталог моделей: ${message}. Использованы сохранённые настройки.` });
+    }
   }
   setModelServices(services: ModelService[]) {
     modelServices.configure(services);
@@ -3856,6 +3906,7 @@ class Store {
           this.finishActivity(id, status, directory);
       });
     }
+    if (finished && this.hubCatalogPending) queueMicrotask(() => void this.ensureHubModels().catch(() => {}));
   }
 
   private startGlobalStream(backend: AgentBackend, generation: number): void {
@@ -4035,7 +4086,8 @@ if (isNative()) modelServices.waitForHub(import("../models/hub").then(({HubModel
   stopHubModels = modelServices.attachHub(hubModels);
   hubModels.start();
 }));
-const refreshHubModels = () => { hubModels?.connectionChanged(); void hubModels?.refresh().catch(() => {}); };
+const refreshHubModels = () => { hubModels?.connectionChanged(); void hubModels?.refresh().catch(() => {});
+  void store.ensureHubModels(true).catch(() => {}); };
 if (typeof window !== "undefined") window.addEventListener("arvela-hub-config-changed", refreshHubModels);
 try {
   modelServices.configure(store.state.prefs.modelServices ?? []);

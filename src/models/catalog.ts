@@ -29,7 +29,9 @@ export interface HubCatalog {
     models: HubModel[];
 }
 export interface HubModelsPrefs {
-    /** When false the catalog is shown but never written into engine configs. */
+    /** Hub is the primary model source; direct is the external-only fallback. */
+    mode: "hub" | "direct";
+    /** Derived from mode; kept for callers that already gate on it. */
     enabled: boolean;
     /** Catalog model ids excluded on this device only. */
     excluded: string[];
@@ -45,8 +47,10 @@ export function hubModelsState(prefs: {
 }): HubModelsPrefs {
     const raw = prefs.hubModels ?? {};
     const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    const mode = raw.mode === "direct" ? "direct" : "hub";
     return {
-        enabled: raw.enabled === true,
+        mode,
+        enabled: mode === "hub",
         excluded: list(raw.excluded),
         appliedVersion: typeof raw.appliedVersion === "number" && raw.appliedVersion > 0
             ? Math.trunc(raw.appliedVersion)

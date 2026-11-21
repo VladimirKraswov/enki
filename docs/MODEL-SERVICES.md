@@ -179,6 +179,25 @@ to an authenticated device. At start the vault-backed runtime adopts them for
 known providers that have no stored credential yet, so every device of the owner
 can select the same models (DeepSeek, Kimi, etc.) without copying keys by hand.
 
+## Основной режим Hub и прямой резерв
+
+In `Настройки → Модели (Hub)` the default is **Hub primary**. On every
+connection Enki reads the shared catalog, merges its Pi providers into the
+runtime `models.json`, then asks the runtime to adopt the provider credentials
+that Hub serves into the OS vault. A new device therefore needs only the Hub
+connection: common local and external model definitions and their keys are
+available without typing them per device. Local models remain Hub-controlled:
+their route and whole-turn reservation are required even in the fallback mode.
+
+Turning the switch off selects the **direct fallback**. The shared catalog is
+not applied automatically; external models use the providers and credentials
+already saved on this device, and local models still require Hub. This is for a
+Hub outage, not a second independent model catalog. The Hub still coordinates
+local gateways and does not proxy token streams: inference goes to the model's
+own endpoint. External provider credentials on Hub are copied into the device's
+system vault only for fallback and normal SDK authentication; they are never
+written into the public catalog.
+
 ## Configuring a service
 
 In Settings → Services of models, add a name, the exact provider ID, a loopback

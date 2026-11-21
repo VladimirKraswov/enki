@@ -635,6 +635,10 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     runtime.modelAccess?.invalidate();
     return result;
   });
+  r("POST", "/credentials/adopt-hub", async (request) => {
+    await runtime.adoptHubCredentialsNow(request.signal);
+    return { ok: true };
+  });
   r("POST", "/credentials/:provider", async (request) => {
     const provider = textParam(request.params.provider, "provider", 128);
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(provider)) throw new HttpError(400, "Некорректный провайдер.");

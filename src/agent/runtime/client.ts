@@ -436,6 +436,7 @@ export class RuntimeClient {
     }>("GET", "/providers/usage", { query: { provider: providerID, model: modelID }, signal, timeoutMs: 20_000 });
   }
   refreshProviders() { return this.request<{ errors: string[] }>("POST", "/providers/refresh", { body: {}, timeoutMs: 45000 }); }
+  adoptHubCredentials() { return this.request<{ ok: true }>("POST", "/credentials/adopt-hub", { body: {}, timeoutMs: 120000 }); }
   checkModel(providerID: string, modelID: string, signal?: AbortSignal) {
     return this.request<{ ok: boolean; detail: string }>("POST", "/models/check", { body: { providerID, modelID }, signal, timeoutMs: 120000 });
   }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Behavior: «Применить на этом устройстве» while an agent is busy.
+// Behavior: «Применить сейчас» while an agent is busy.
 // Old defect (proven before the fix): the busy check ran before reading the
 // models.json, so repeating an already-applied catalog was refused with a red
 // error, and the refusal only appeared after the click.
@@ -70,7 +70,7 @@ beforeEach(() => { document.body.innerHTML = ""; vi.restoreAllMocks?.(); });
 it("re-applying an already matching catalog succeeds while an agent is busy, writing nothing", async () => {
   const { host, client } = await mount(appliedContent(), { busy: true });
   await settle(); // readiness preview resolves
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   expect(host.querySelector('[role="alert"]')).toBeNull();
   expect(host.textContent).toContain("уже применён");
   expect(applyCatalog).not.toHaveBeenCalled();
@@ -85,7 +85,7 @@ it("real changes are visible before the click and stay blocked while busy, witho
   // The status is visible without a click and is a status, not an error.
   expect(host.textContent).toContain("В каталоге есть изменения настроек моделей");
   expect(host.querySelector('[role="alert"]')).toBeNull();
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   // A refusal while busy is a transient status, not a red error.
   expect(host.querySelector('[role="alert"]')).toBeNull();
   expect(host.textContent).toContain("Агенты ещё работают — изменения каталога не применены");
@@ -108,7 +108,7 @@ it("work that starts during the delayed preview read aborts before any write", a
   // after mockImplementation would recursively call this delayed replacement.
   const original = client.modelsConfig.getMockImplementation()!;
   client.modelsConfig.mockImplementation(async () => { await gate; return original(); });
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   fakeStore.state.activityStatuses = { s9: { type: "busy" } };
   await act(async () => { release(); await new Promise((r) => setTimeout(r, 0)); });
   expect(host.querySelector('[role="alert"]')).toBeNull();
@@ -121,7 +121,7 @@ it("work that starts during the delayed preview read aborts before any write", a
 it("a per-device disable of an applied model is a real change, not a false no-op", async () => {
   const { host } = await mount(appliedContent(), { busy: true, hubModels: { excluded: ["qwen"] } });
   await settle();
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   expect(host.textContent).toContain("Агенты ещё работают");
   expect(host.textContent).not.toContain("уже применён");
   expect(applyCatalog).not.toHaveBeenCalled();
@@ -130,7 +130,7 @@ it("a per-device disable of an applied model is a real change, not a false no-op
 it("when idle, a matching apply records ownership/version locally and writes nothing", async () => {
   const { host, client } = await mount(appliedContent(), { busy: false });
   await settle();
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   expect(host.textContent).toContain("уже применён");
   expect(applyCatalog).not.toHaveBeenCalled();
   expect(client.saveModelsConfig).not.toHaveBeenCalled();
@@ -141,7 +141,7 @@ it("when idle and changed, apply proceeds through the full catalog write path", 
   const { host } = await mount('{"providers":{"owner-local":{"models":[]}}}', { busy: false });
   await settle();
   applyCatalog.mockResolvedValue({ report: { added: ["local-qwen"], replaced: [], removed: [] }, appliedOpencode: [], appliedPi: ["local-qwen"] });
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   expect(applyCatalog).toHaveBeenCalledTimes(1);
   expect(host.textContent).toContain("добавлены: local-qwen");
 });
@@ -151,7 +151,7 @@ it("a foreign provider refresh timeout is reported as a re-read problem after a 
   await settle();
   const { CatalogRefreshError: CRE } = await import("../src/hub/modelCatalog");
   applyCatalog.mockRejectedValue(new CRE("Каталог записан, но среда выполнения сообщила об ошибках при перечитывании моделей: deepseek: timeout", ["local-qwen"]));
-  await act(async () => { buttons(host, "Применить на этом устройстве")[0].click(); });
+  await act(async () => { buttons(host, "Применить сейчас")[0].click(); });
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Каталог записан");
   expect(fakeStore.setHubModels).toHaveBeenCalledWith(expect.objectContaining({ appliedPi: ["local-qwen"] }));
 });
