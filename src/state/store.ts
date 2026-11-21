@@ -2636,6 +2636,9 @@ class Store {
 
   async refreshModelCatalog(): Promise<void> {
     const gen = this.directoryGeneration, backend = this.backend;
+    // An explicit refresh is also a Hub-catalog refresh in primary mode. It
+    // fixes devices that connected while the Hub catalog was temporarily empty.
+    if (hubModelsState(this.state.prefs).mode === "hub") await this.ensureHubModels(true);
     // The runtime re-reads models.json and provider discovery, then reports per-provider errors.
     const discovery = backend.client.refreshProviders().then(async ({ errors }) => {
       const prov = await backend.providers(undefined);

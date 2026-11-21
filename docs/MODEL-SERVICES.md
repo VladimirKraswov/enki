@@ -189,6 +189,11 @@ connection: common local and external model definitions and their keys are
 available without typing them per device. Local models remain Hub-controlled:
 their route and whole-turn reservation are required even in the fallback mode.
 
+**Обновить список** in the model picker (and **Обновить модели** in the Hub
+catalog settings) re-fetches and applies the shared catalog in primary mode before
+re-reading providers. This repairs a device that first connected while the Hub
+catalog was temporarily empty.
+
 Turning the switch off selects the **direct fallback**. The shared catalog is
 not applied automatically; external models use the providers and credentials
 already saved on this device, and local models still require Hub. This is for a
