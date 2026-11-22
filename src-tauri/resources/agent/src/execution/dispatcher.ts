@@ -283,7 +283,7 @@ export class Dispatcher {
         this.ledger.update(request.id, "dispatching");
         try {
           // The worker leases the current model only if it must summarize.
-          const result = await worker.transition(payload.model, payload.budget, this.readiness(request, reservation, null), request.id);
+          const result = await worker.transition(payload.model, payload.budget, this.readiness(request, reservation, null), request.id, payload.reset_context === true);
           this.journal.append(request.directory, request.sessionID, { type: "session.model_transition", properties: { sessionID: request.sessionID, target: payload.model, ...result } });
           this.emit(this.ledger.update(request.id, "completed"), request);
         } catch (error) {

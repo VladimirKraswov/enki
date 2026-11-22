@@ -165,7 +165,7 @@ export function Composer() {
   selectionScopeRef.current = selectionScope;
   const selectionTicket = useRef(0), refreshTicket = useRef(0);
   const selectionAbort = useRef<AbortController | null>(null);
-  const [selection, setSelection] = useState<{ providerID: string; modelID: string; label: string; pending: boolean; error: string; progress?: string } | null>(null);
+  const [selection, setSelection] = useState<{ providerID: string; modelID: string; label: string; pending: boolean; error: string; progress?: string; canReset?: boolean } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState("");
   useEffect(() => { selectionAbort.current?.abort(); selectionTicket.current++; refreshTicket.current++; setSelection(null); setRefreshError(""); setRefreshing(false); }, [selectionScope]);
@@ -188,7 +188,7 @@ export function Composer() {
     catch (error) { if (selectionScopeRef.current === expected && ticket === refreshTicket.current) setRefreshError(error instanceof Error ? error.message : String(error)); }
     finally { if (selectionScopeRef.current === expected && ticket === refreshTicket.current) setRefreshing(false); }
   };
-  const selectModel = async (providerID: string, modelID: string) => {
+  const selectModel = async (providerID: string, modelID: string, resetContext = false) => {
     selectionAbort.current?.abort();
     const abort = new AbortController(); selectionAbort.current = abort;
     const expected = selectionScope;
@@ -199,10 +199,14 @@ export function Composer() {
       const variants = store.modelInfo(providerID, modelID)?.variants;
       await store.selectModel(providerID, modelID, variants?.medium ? "medium" : null, abort.signal, progress => {
         if (selectionScopeRef.current === expected && ticket === selectionTicket.current) setSelection(value => value ? {...value, progress} : value);
-      });
+      }, resetContext);
       if (selectionScopeRef.current === expected && ticket === selectionTicket.current) setSelection(null);
     } catch (error) {
-      if (selectionScopeRef.current === expected && ticket === selectionTicket.current) setSelection({ providerID, modelID, label, pending: false, error: error instanceof Error ? error.message : String(error) });
+      // The runtime names the allowed recoveries for this failure; «сбросить
+      // контекст» appears only when it actually offers that path.
+      const canReset = resetContext
+        || (error instanceof Error && (error as Error & { transitionRecovery?: string[] }).transitionRecovery?.includes("reset_context") === true);
+      if (selectionScopeRef.current === expected && ticket === selectionTicket.current) setSelection({ providerID, modelID, label, pending: false, error: error instanceof Error ? error.message : String(error), canReset });
     }
   };
 
@@ -246,7 +250,8 @@ export function Composer() {
         question={selection.pending && s.activeSessionId
           ? Object.values(s.chat.questions).find(q => q.sessionID === s.activeSessionId)?.questions[0]?.question ?? null : null}
         status={modelServices.statusFor(selection.providerID, selection.modelID, undefined, engineId)}
-        onClose={() => { selectionAbort.current?.abort(); selectionTicket.current++; setSelection(null); }} onRetry={() => void selectModel(selection.providerID, selection.modelID)}/>}
+        onClose={() => { selectionAbort.current?.abort(); selectionTicket.current++; setSelection(null); }} onRetry={() => void selectModel(selection.providerID, selection.modelID)}
+        onReset={selection.canReset ? () => void selectModel(selection.providerID, selection.modelID, true) : undefined}/>}
       {!connected && !store.currentHost() && <RuntimeStartupStatus progress={s.connection.startup} error={s.connection.error} onRetry={() => void store.retryConnection()}/>}
       {!connected && store.currentHost() && (
         <div className="offline-banner" role="alert">

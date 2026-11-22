@@ -1,4 +1,4 @@
-import { recoveryText, requestModelTransition, transitionText, type ContextTransitionProgress } from "./modelTransition";
+import { recoveryText, requestModelTransition, transitionText, type ContextTransitionProgress, type TransitionRecovery } from "./modelTransition";
 import {McpNotices} from '../capabilities/notices';
 import { isMcpStartupNotice } from '../capabilities/recovery';
 import type { RuntimeServerStatus } from '../capabilities/registry';
@@ -2461,7 +2461,7 @@ class Store {
    * delivery (manual, queued and timed alike). On failure, the previous
    * choice, the draft and the queue stay exactly as they were.
    */
-  async selectModel(providerID: string, modelID: string, variant?: string | null, signal?: AbortSignal, progress?: (message: string) => void): Promise<boolean> {
+  async selectModel(providerID: string, modelID: string, variant?: string | null, signal?: AbortSignal, progress?: (message: string) => void, resetContext = false): Promise<boolean> {
     const revision = ++this.modelSelectionRevision;
     const directory = this.state.directory, session = this.state.activeSessionId;
     const generation = this.directoryGeneration, backend = this.backend;
@@ -2490,7 +2490,7 @@ class Store {
     this.transitionListeners.add(listener);
     try {
       const outcome = await requestModelTransition(backend.client, { id, sessionID: session, directory, model: { providerID, modelID, variant: variant ?? null },
-        signal, progress: () => this.transitionProgress.get(id) ?? null });
+        resetContext, signal, progress: () => this.transitionProgress.get(id) ?? null });
       switch (outcome.kind) {
         case "applied":
           // The runtime session now uses the target: record it for THAT chat even if the user moved on.
@@ -2504,7 +2504,11 @@ class Store {
         case "detached": return false;
         case "cancelled": throw new Error(`${outcome.message} Прежняя модель, черновик и очередь сохранены.`);
         case "unknown": throw new Error(outcome.message);
-        case "failed": throw new Error(`${outcome.message} Прежняя модель, черновик и очередь сохранены.${recoveryText(outcome.recovery)}`);
+        case "failed": {
+          const error = new Error(`${outcome.message} Прежняя модель, черновик и очередь сохранены.${recoveryText(outcome.recovery)}`) as Error & { transitionRecovery?: TransitionRecovery[] };
+          if (outcome.recovery?.length) error.transitionRecovery = outcome.recovery;
+          throw error;
+        }
       }
     } finally {
       this.transitionListeners.delete(listener);

@@ -16,6 +16,8 @@ it("validates every command kind and normalizes payloads", () => {
   expect(prompt).toEqual({ id: "c1", kind: "prompt", sessionID: "s", directory: "/p", payload: { parts: [{ type: "text", text: "hi" }], model, source: "queue", sourceId: "q1" } });
   expect(validateCommand({ id: "c2", kind: "compact", sessionID: "s", directory: "/p", payload: {} })).toMatchObject({ kind: "compact" });
   expect(validateCommand({ id: "c3", kind: "model.transition", sessionID: "s", directory: "/p", payload: { model, budget: -1 } })).toBeTypeOf("string");
+  expect(validateCommand({ id: "c3b", kind: "model.transition", sessionID: "s", directory: "/p", payload: { model, reset_context: true } })).toEqual({ id: "c3b", kind: "model.transition", sessionID: "s", directory: "/p", payload: { model, reset_context: true } });
+  expect(validateCommand({ id: "c3c", kind: "model.transition", sessionID: "s", directory: "/p", payload: { model, reset_context: "yes" } })).toBeTypeOf("string");
   expect(validateCommand({ id: "c4", kind: "prompt", sessionID: "s", directory: "/p", payload: { parts: [{ type: "file", mime: "image/png", url: "https://x" }], model } })).toBeTypeOf("string");
 });
 

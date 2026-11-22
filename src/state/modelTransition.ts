@@ -13,7 +13,7 @@ import type { CommandReceipt, CommandRequest, ModelRef } from "../../src-tauri/r
 import { ApiError, ConnectionError } from "../api/http";
 
 export type TransitionPhase = "planning" | "summary_model" | "summarizing" | "verifying" | "target_model" | "ready" | "failed" | "cancelled";
-export type TransitionRecovery = "retry" | "larger_model" | "new_session_handoff";
+export type TransitionRecovery = "retry" | "larger_model" | "new_session_handoff" | "reset_context";
 
 export interface ContextTransitionProgress {
   sessionID: string;
@@ -26,7 +26,7 @@ export interface ContextTransitionProgress {
 }
 
 const PHASES: readonly TransitionPhase[] = ["planning", "summary_model", "summarizing", "verifying", "target_model", "ready", "failed", "cancelled"];
-const RECOVERY: readonly TransitionRecovery[] = ["retry", "larger_model", "new_session_handoff"];
+const RECOVERY: readonly TransitionRecovery[] = ["retry", "larger_model", "new_session_handoff", "reset_context"];
 const ref = (value: unknown): value is { providerID: string; modelID: string } =>
   !!value && typeof value === "object" && typeof (value as ModelRef).providerID === "string" && typeof (value as ModelRef).modelID === "string";
 
@@ -59,6 +59,7 @@ const RECOVERY_TEXT: Record<TransitionRecovery, string> = {
   retry: "повторите выбор модели",
   larger_model: "выберите модель с большим контекстом",
   new_session_handoff: "начните новый чат с кратким пересказом",
+  reset_context: "сбросьте контекст (история останется в чате) и перейдите в меньшую модель",
 };
 export function recoveryText(recovery: readonly TransitionRecovery[] | undefined): string {
   return recovery?.length ? ` Что можно сделать: ${recovery.map((r) => RECOVERY_TEXT[r]).join("; ")}.` : "";
@@ -99,6 +100,9 @@ export interface TransitionInput {
   sessionID: string;
   directory: string;
   model: ModelRef;
+  /** Explicit consent: if the history does not fit, reset the model context
+   * (no summarization; the transcript stays in the chat) and switch anyway. */
+  resetContext?: boolean;
   signal?: AbortSignal;
   /** Latest progress for THIS operation (from session.context_transition events). */
   progress?: () => ContextTransitionProgress | null;
@@ -108,7 +112,8 @@ export interface TransitionInput {
 
 /** Submit once (same-id retry after a lost ACK), then follow the ledger receipt. */
 export async function requestModelTransition(port: TransitionPort, input: TransitionInput): Promise<TransitionOutcome> {
-  const request: CommandRequest = { id: input.id, kind: "model.transition", sessionID: input.sessionID, directory: input.directory, payload: { model: input.model } };
+  const request: CommandRequest = { id: input.id, kind: "model.transition", sessionID: input.sessionID, directory: input.directory,
+    payload: { model: input.model, ...(input.resetContext === true ? { reset_context: true } : {}) } };
   const lost = "Связь прервалась во время смены модели. Результат неизвестен: проверьте чат. Повторная отправка не выполнялась.";
   let receipt: CommandReceipt;
   try { receipt = await port.command(request, input.signal); }

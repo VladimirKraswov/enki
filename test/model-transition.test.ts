@@ -31,6 +31,18 @@ describe("requestModelTransition", () => {
     expect(commands).toEqual([{ id: "mt-1", kind: "model.transition", sessionID: "s1", directory: "/p", payload: { model } }]);
   });
 
+  it("explicit reset consent rides the same durable command as reset_context", async () => {
+    const { p, commands } = port({ command: [receipt("accepted")], receipt: [receipt("completed")] });
+    expect(await requestModelTransition(p, { ...input, resetContext: true })).toEqual({ kind: "applied" });
+    expect(commands).toEqual([{ id: "mt-1", kind: "model.transition", sessionID: "s1", directory: "/p", payload: { model, reset_context: true } }]);
+  });
+
+  it("reset_context survives progress parsing and yields user-facing text", () => {
+    const parsed = parseTransitionProgress({ sessionID: "s1", operation: "mt-1", phase: "failed", source: null, target: model, code: "handoff_required", recovery: ["reset_context", "larger_model"] });
+    expect(parsed).toMatchObject({ code: "handoff_required", recovery: ["reset_context", "larger_model"] });
+    expect(recoveryText(["reset_context"])).toMatch(/сбросьте контекст/);
+  });
+
   it("a busy chat defers the choice instead of interrupting the running model", async () => {
     const { p, commands } = port({ command: [receipt("rejected", "В этом чате уже выполняется или готовится операция. Дождитесь её завершения либо остановите её.")], receipt: [] });
     expect((await requestModelTransition(p, input)).kind).toBe("deferred");

@@ -64,7 +64,7 @@ const SUMMARY_PROBE_MS = 10_000;
 
 export type ContextTransitionCode = "invalid_budget" | "model_not_found" | "source_model_missing" | "estimate_unavailable"
   | "prompt_too_large" | "handoff_required" | "compaction_failed" | "does_not_fit" | "cancelled" | "variant_unavailable";
-export type ContextRecovery = "retry" | "larger_model" | "new_session_handoff" | "shorten_prompt";
+export type ContextRecovery = "retry" | "larger_model" | "new_session_handoff" | "shorten_prompt" | "reset_context";
 
 /** Typed, recoverable model/context transition failure. The original history
  * is always retained and the target model was NOT selected. `compacted` tells
@@ -800,12 +800,12 @@ export class SessionWorker {
    * Explicit transfer to another model with an optional caller budget, which
    * can only LOWER the target's own limit. Same path as prompts and setModel.
    */
-  transition(target: ModelRef, budget?: number, readiness?: ModelReadiness, operation: string | null = null): Promise<TransitionResult> {
+  transition(target: ModelRef, budget?: number, readiness?: ModelReadiness, operation: string | null = null, resetContext = false): Promise<TransitionResult> {
     return this.serial(async () => {
       this.assertOpen();
       if (this.busy()) throw new Error("Дождитесь завершения текущей работы перед переносом контекста в меньшую модель.");
       const epoch = this.operationEpoch; this.preparing = true;
-      try { return await this.prepareModel(target, { epoch, budget, readiness, operation }); } finally { this.preparing = false; }
+      try { return await this.prepareModel(target, { epoch, budget, readiness, operation, resetContext }); } finally { this.preparing = false; }
     });
   }
 
@@ -841,7 +841,7 @@ export class SessionWorker {
    * Every await is fenced by the operation epoch (Stop/close); nothing is
    * replayed and the original transcript is never truncated or deleted.
    */
-  private async prepareModel(target: ModelRef, options: { epoch: number; budget?: number; input?: PromptInput; readiness?: ModelReadiness; operation: string | null }): Promise<TransitionResult> {
+  private async prepareModel(target: ModelRef, options: { epoch: number; budget?: number; input?: PromptInput; readiness?: ModelReadiness; operation: string | null; resetContext?: boolean }): Promise<TransitionResult> {
     const { epoch, readiness, operation } = options;
     const result: TransitionResult = { compacted: false, tokensBefore: null, tokensAfter: null, limit: null };
     const fenced = () => {
@@ -915,7 +915,7 @@ export class SessionWorker {
 
   /** Verify (and if needed, make) the context fit the target BEFORE any switch. */
   private async fitTarget(target: ModelRef, targetModel: SdkModel, source: SdkModel | undefined, sourceRef: ModelRef | null,
-    options: { budget?: number; input?: PromptInput; readiness?: ModelReadiness }, result: TransitionResult,
+    options: { budget?: number; input?: PromptInput; readiness?: ModelReadiness; resetContext?: boolean }, result: TransitionResult,
     progress: (phase: ContextTransitionPhase, extra?: Record<string, unknown>) => void, fenced: () => void,
     reveal: () => void = () => {}): Promise<void> {
     const budget = targetBudget(targetModel, options.budget);
@@ -935,12 +935,36 @@ export class SessionWorker {
     const irreducible = before.system + before.tools + incoming;
     if (irreducible > budget.limit)
       throw new ContextTransitionError("prompt_too_large", `Новый запрос вместе с системными инструкциями и инструментами (≈${irreducible} токенов) не помещается в модель ${name} (${budget.limit} токенов). Сжатие истории этого не исправит: сократите запрос или вложения либо выберите модель с большим контекстом. Запрос не отправлен, история сохранена.`, ["shorten_prompt", "larger_model"]);
+    // Explicit user reset: NO summarization inference at all (works even when
+    // the source model is dead or the history exceeds its own window). The old
+    // history stays in the chat file and on screen; it only leaves the model
+    // context via a real SDK compaction entry with an empty keep-marker, so
+    // nothing before it is replayed. Then the ordinary fit gate re-checks.
+    if (options.resetContext) {
+      const leafId = this.session.sessionManager.getLeafId();
+      if (leafId) {
+        this.session.sessionManager.appendCompaction(
+          `Контекст сброшен по запросу пользователя перед переходом в ${name}. Прежняя история осталась в чате, но больше не передаётся модели; суммаризация не выполнялась.`,
+          "", before.tokens, { context_reset: true });
+        // Mirror the SDK's own compaction commit so the next prompt starts
+        // from the compacted context immediately.
+        this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
+        fenced();
+      }
+      result.compacted = true;
+      const after = this.contextEstimate(true);
+      result.tokensAfter = after.tokens;
+      progress("verifying", { reset: true, tokens: after.tokens, limit: budget.limit });
+      if (after.tokens + incoming > budget.limit)
+        throw new ContextTransitionError("does_not_fit", `Даже после сброса контекста запрос не помещается в ${name} (≈${after.tokens + incoming} из ${budget.limit} токенов): системные инструкции и активные инструменты занимают слишком много. Модель не переключена.`, ["larger_model"], true);
+      return;
+    }
     if (!source || !sourceRef)
-      throw new ContextTransitionError("source_model_missing", `История не помещается в ${name}, а текущая модель для сжатия не определена. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff"]);
+      throw new ContextTransitionError("source_model_missing", `История не помещается в ${name}, а текущая модель для сжатия не определена. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff", "reset_context"]);
     // The summary request itself must fit the SOURCE window; never feed the
     // whole old history to a model that cannot hold it.
     if ((before.usage ?? before.estimate) > source.contextWindow)
-      throw new ContextTransitionError("handoff_required", `История превышает контекст и текущей модели ${sourceRef.providerID}/${sourceRef.modelID}, поэтому её нельзя сжать перед переходом в ${name}. История сохранена; выберите модель с большим контекстом или начните новый чат с ограниченной передачей.`, ["larger_model", "new_session_handoff"]);
+      throw new ContextTransitionError("handoff_required", `История превышает контекст и текущей модели ${sourceRef.providerID}/${sourceRef.modelID}, поэтому её нельзя сжать перед переходом в ${name}. История сохранена; выберите модель с большим контекстом, сбросьте контекст или начните новый чат с ограниченной передачей.`, ["larger_model", "new_session_handoff", "reset_context"]);
     progress("summary_model", { model: sourceRef });
     // A quota/auth/unreachable source model cannot summarize at all; a huge
     // summary call would only repeat the same provider verdict. The tiny probe
@@ -972,7 +996,7 @@ export class SessionWorker {
         if (error instanceof ContextTransitionError) throw error;
         problem = availabilityProblem(classifyModelFailure(error));
         if (!problem)
-          throw new ContextTransitionError("compaction_failed", `Текущая модель ${sourceRef.providerID}/${sourceRef.modelID} не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена; повторите или начните новый чат с ограниченной передачей.`, ["retry", "larger_model", "new_session_handoff"]);
+          throw new ContextTransitionError("compaction_failed", `Текущая модель ${sourceRef.providerID}/${sourceRef.modelID} не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена; повторите, сбросьте контекст или начните новый чат с ограниченной передачей.`, ["retry", "larger_model", "new_session_handoff", "reset_context"]);
       }
     }
     if (!compaction) {
@@ -985,10 +1009,10 @@ export class SessionWorker {
       const candidate = candidates[0];
       const sourceName = `${sourceRef.providerID}/${sourceRef.modelID}`;
       if (!candidate)
-        throw new ContextTransitionError("compaction_failed", `Модель ${sourceName} не может сжать историю: ${cause}. Настроенной модели другого провайдера с контекстом не меньше ${neededTokens + 4096} токенов не найдено. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff"]);
+        throw new ContextTransitionError("compaction_failed", `Модель ${sourceName} не может сжать историю: ${cause}. Настроенной модели другого провайдера с контекстом не меньше ${neededTokens + 4096} токенов не найдено. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff", "reset_context"]);
       if (!await this.askFallbackSummary(candidate, sourceName, cause, name, summarySignal)) {
         fenced();
-        throw new ContextTransitionError("compaction_failed", `Переключение не выполнено: сжатие истории моделью ${candidate.name} отклонено. ${sourceName}: ${cause}. История сохранена, текущая модель осталась.`, ["retry", "larger_model", "new_session_handoff"]);
+        throw new ContextTransitionError("compaction_failed", `Переключение не выполнено: сжатие истории моделью ${candidate.name} отклонено. ${sourceName}: ${cause}. История сохранена, текущая модель осталась.`, ["retry", "larger_model", "new_session_handoff", "reset_context"]);
       }
       fenced();
       summaryRef = { providerID: candidate.providerID, modelID: candidate.modelID };
@@ -998,7 +1022,7 @@ export class SessionWorker {
         fenced();
         await this.restoreResidency(sourceRef);
         if (error instanceof ContextTransitionError) throw error;
-        throw new ContextTransitionError("compaction_failed", `Модель ${candidate.name} тоже не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена.`, ["retry", "larger_model", "new_session_handoff"]);
+        throw new ContextTransitionError("compaction_failed", `Модель ${candidate.name} тоже не смогла сжать историю: ${error instanceof Error ? error.message : String(error)}. История сохранена, модель не переключена.`, ["retry", "larger_model", "new_session_handoff", "reset_context"]);
       }
     }
     const restoreOffSource = async () => {
@@ -1008,7 +1032,7 @@ export class SessionWorker {
     fenced();
     if (!compaction.summary.trim()) {
       await restoreOffSource();
-      throw new ContextTransitionError("compaction_failed", "Сжатие не вернуло выжимку; модель не переключена. История сохранена.", ["retry", "new_session_handoff"], true);
+      throw new ContextTransitionError("compaction_failed", "Сжатие не вернуло выжимку; модель не переключена. История сохранена.", ["retry", "new_session_handoff", "reset_context"], true);
     }
     progress("verifying", { model: summaryRef });
     // SDK usage is null right after compaction; the bounded message estimate
@@ -1019,7 +1043,7 @@ export class SessionWorker {
     result.tokensAfter = tokensAfter;
     if (tokensAfter + incoming > budget.limit) {
       await restoreOffSource();
-      throw new ContextTransitionError("does_not_fit", `После сжатия история всё ещё не помещается в выбранную модель ${name} (≈${tokensAfter + incoming} из ${budget.limit} токенов); переключение не выполнено. История сохранена.`, ["larger_model", "new_session_handoff"], true);
+      throw new ContextTransitionError("does_not_fit", `После сжатия история всё ещё не помещается в выбранную модель ${name} (≈${tokensAfter + incoming} из ${budget.limit} токенов); переключение не выполнено. История сохранена.`, ["larger_model", "new_session_handoff", "reset_context"], true);
     }
   }
 

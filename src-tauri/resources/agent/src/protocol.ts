@@ -302,6 +302,10 @@ export interface ModelTransitionPayload {
   model: ModelRef;
   /** Input-token budget of the target; 0 lets the runtime derive it from the catalog. */
   budget?: number;
+  /** Explicit user consent to drop the old context (no summarization) when it
+   * does not fit the target; the transcript stays in the chat, only the model
+   * context is reset before the switch. */
+  reset_context?: boolean;
 }
 
 interface CommandBase {
@@ -497,7 +501,8 @@ export function validateCommand(value: unknown): CommandRequest | string {
       if (!isModelRef(payload.model)) return "Не указана модель.";
       const budget = payload.budget;
       if (budget !== undefined && (typeof budget !== "number" || !Number.isSafeInteger(budget) || budget < 0)) return "Некорректный бюджет контекста.";
-      return { ...base, kind: "model.transition", payload: { model: payload.model, ...(typeof budget === "number" ? { budget } : {}) } };
+      if (payload.reset_context !== undefined && typeof payload.reset_context !== "boolean") return "Некорректный флаг сброса контекста.";
+      return { ...base, kind: "model.transition", payload: { model: payload.model, ...(typeof budget === "number" ? { budget } : {}), ...(payload.reset_context === true ? { reset_context: true } : {}) } };
     }
     case "abort":
       return { ...base, kind: "abort", payload: {} };
