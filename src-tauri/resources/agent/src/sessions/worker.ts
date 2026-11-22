@@ -941,22 +941,7 @@ export class SessionWorker {
     // context via a real SDK compaction entry with an empty keep-marker, so
     // nothing before it is replayed. Then the ordinary fit gate re-checks.
     if (options.resetContext) {
-      const leafId = this.session.sessionManager.getLeafId();
-      if (leafId) {
-        this.session.sessionManager.appendCompaction(
-          `Контекст сброшен по запросу пользователя перед переходом в ${name}. Прежняя история осталась в чате, но больше не передаётся модели; суммаризация не выполнялась.`,
-          "", before.tokens, { context_reset: true });
-        // Mirror the SDK's own compaction commit so the next prompt starts
-        // from the compacted context immediately.
-        this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
-        fenced();
-      }
-      result.compacted = true;
-      const after = this.contextEstimate(true);
-      result.tokensAfter = after.tokens;
-      progress("verifying", { reset: true, tokens: after.tokens, limit: budget.limit });
-      if (after.tokens + incoming > budget.limit)
-        throw new ContextTransitionError("does_not_fit", `Даже после сброса контекста запрос не помещается в ${name} (≈${after.tokens + incoming} из ${budget.limit} токенов): системные инструкции и активные инструменты занимают слишком много. Модель не переключена.`, ["larger_model"], true);
+      this.applyContextReset(name, before.tokens, incoming, budget.limit, result, progress, fenced);
       return;
     }
     if (!source || !sourceRef)
@@ -1010,7 +995,14 @@ export class SessionWorker {
       const sourceName = `${sourceRef.providerID}/${sourceRef.modelID}`;
       if (!candidate)
         throw new ContextTransitionError("compaction_failed", `Модель ${sourceName} не может сжать историю: ${cause}. Настроенной модели другого провайдера с контекстом не меньше ${neededTokens + 4096} токенов не найдено. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff", "reset_context"]);
-      if (!await this.askFallbackSummary(candidate, sourceName, cause, name, summarySignal)) {
+      const choice = await this.askFallbackAction(candidate, sourceName, cause, name, summarySignal);
+      if (choice === "reset") {
+        // The user chose the free path in the chat question itself: no
+        // summarization anywhere, reset the model context and switch.
+        this.applyContextReset(name, before.tokens, incoming, budget.limit, result, progress, fenced);
+        return;
+      }
+      if (!choice) {
         fenced();
         throw new ContextTransitionError("compaction_failed", `Переключение не выполнено: сжатие истории моделью ${candidate.name} отклонено. ${sourceName}: ${cause}. История сохранена, текущая модель осталась.`, ["retry", "larger_model", "new_session_handoff", "reset_context"]);
       }
@@ -1047,20 +1039,47 @@ export class SessionWorker {
     }
   }
 
-  /** Consent gate for summarizing with another provider's model when the
-   * current model cannot take the work (quota/auth/dead server). */
-  private async askFallbackSummary(candidate: AlternativeCandidate, sourceName: string, problem: string,
-    targetName: string, signal: AbortSignal): Promise<boolean> {
+  /** The ONE context-reset mutation: a real SDK compaction entry with an
+   * empty keep-marker and NO model inference. The full transcript stays in
+   * the chat file and on screen; nothing of it is replayed to the model.
+   * The fresh context is re-checked against the target before it is selected. */
+  private applyContextReset(name: string, tokensBefore: number, incoming: number, limit: number,
+    result: TransitionResult, progress: (phase: ContextTransitionPhase, extra?: Record<string, unknown>) => void, fenced: () => void): void {
+    const leafId = this.session.sessionManager.getLeafId();
+    if (leafId) {
+      this.session.sessionManager.appendCompaction(
+        `Контекст сброшен по запросу пользователя перед переходом в ${name}. Прежняя история осталась в чате, но больше не передаётся модели; суммаризация не выполнялась.`,
+        "", tokensBefore, { context_reset: true });
+      // Mirror the SDK's own compaction commit so the next prompt starts
+      // from the compacted context immediately.
+      this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
+      fenced();
+    }
+    result.compacted = true;
+    const after = this.contextEstimate(true);
+    result.tokensAfter = after.tokens;
+    progress("verifying", { reset: true, tokens: after.tokens, limit });
+    if (after.tokens + incoming > limit)
+      throw new ContextTransitionError("does_not_fit", `Даже после сброса контекста запрос не помещается в ${name} (≈${after.tokens + incoming} из ${limit} токенов): системные инструкции и активные инструменты занимают слишком много. Модель не переключена.`, ["larger_model"], true);
+  }
+
+  /** Consent gate when the current model cannot summarize: the user chooses
+   * paid fallback compaction, the free context reset, or nothing. */
+  private async askFallbackAction(candidate: AlternativeCandidate, sourceName: string, problem: string,
+    targetName: string, signal: AbortSignal): Promise<"compact" | "reset" | null> {
     const answer = await this.deps.interactions.askQuestion({
       sessionID: this.id, directory: this.directory, signal,
       questions: [{
-        question: `Модель ${sourceName} не может сжать историю перед переходом в ${targetName}: ${problem}. Сжать историю моделью ${candidate.name} (контекст ${candidate.contextWindow} токенов) от другого провайдера и продолжить переход? Полная история останется в чате.`,
-        header: "Сжатие истории",
-        options: [{ label: "Сжать и продолжить" }, { label: "Отменить переход" }],
+        question: `Модель ${sourceName} не может сжать историю перед переходом в ${targetName}: ${problem}. Выберите: «Сжать и продолжить» — историю сожмёт ${candidate.name} (контекст ${candidate.contextWindow} токенов) от другого провайдера, полная история останется в чате; «Сбросить контекст и продолжить» — без обращения к моделям: прежняя история останется в чате, но перестанет передаваться новой модели; «Отменить переход» — ничего не меняется.`,
+        header: "Переход в меньшую модель",
+        options: [{ label: "Сжать и продолжить" }, { label: "Сбросить контекст и продолжить" }, { label: "Отменить переход" }],
         custom: false,
       }],
     });
-    return "answers" in answer && answer.answers[0]?.[0] === "Сжать и продолжить";
+    const value = "answers" in answer ? answer.answers[0]?.[0] : undefined;
+    if (value === "Сжать и продолжить") return "compact";
+    if (value === "Сбросить контекст и продолжить") return "reset";
+    return null;
   }
 
   /** Best-effort return of SDK residency to the original model after a failed

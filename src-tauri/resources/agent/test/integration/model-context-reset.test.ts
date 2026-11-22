@@ -4,14 +4,14 @@
 // WITHOUT any summarization inference. The transcript stays in the chat file
 // and on screen; only the model context is dropped via a real compaction entry.
 import { afterEach, expect, it } from "vitest";
-import { fauxAssistantMessage } from "../../src/sdk/testing.ts";
+import { fauxAssistantMessage, type FauxResponseStep } from "../../src/sdk/testing.ts";
 import { harness, newSession, promptCommand, type Harness } from "../helpers.ts";
 
 let h: Harness;
 afterEach(async () => { await h?.stop(); });
 
 async function longChat(h: Harness, dir: string): Promise<string> {
-  h.runtime.saveSettings({ ...h.runtime.settings(), compaction: { enabled: true, keepRecentTokens: 64, reserveTokens: 64 } });
+  h.runtime.saveSettings({ ...h.runtime.settings(), retry: { enabled: false }, compaction: { enabled: true, keepRecentTokens: 64, reserveTokens: 64 } });
   const sid = await newSession(h, dir, { model: h.model("large") });
   h.scripted.setResponses([fauxAssistantMessage("noted ".repeat(800)), fauxAssistantMessage("noted again ".repeat(100))]);
   await h.command(promptCommand(h, "long-1", sid, dir, "context ".repeat(4000)));
@@ -59,4 +59,31 @@ it("an ordinary failure to fit offers reset_context as a recovery", async () => 
   const last = failed.at(-1);
   expect(last?.phase).toBe("failed");
   expect(last?.recovery).toContain("reset_context");
+});
+
+it("answering the fallback question with «Сбросить контекст» switches without any fallback inference", async () => {
+  h = await harness({ altModel: true });
+  const dir = h.project("reset-in-question");
+  const sid = await longChat(h, dir);
+  const QUOTA_429 = '429 {"error":{"type":"exceeded_current_quota_error","message":"You\'ve reached your 5-hour usage limit."},"type":"error"}';
+  const step: FauxResponseStep = async () => fauxAssistantMessage("", { stopReason: "error", errorMessage: QUOTA_429 });
+  h.scripted.setResponses(Array.from({ length: 6 }, () => step));
+  await h.command({ id: "move", kind: "model.transition", sessionID: sid, directory: dir, payload: { model: h.model("small") } });
+  const until = Date.now() + 25_000;
+  let questionId = "";
+  for (;;) {
+    const list = await h.request<Array<{ id: string; questions: Array<{ question: string }> }>>("GET", `/questions?directory=${encodeURIComponent(dir)}`);
+    if (list.body[0]) { questionId = list.body[0].id; expect(list.body[0].questions[0].question).toMatch(/Сбросить контекст и продолжить/); break; }
+    if (Date.now() > until) throw new Error("no pending question");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect((await h.request("POST", `/questions/${questionId}/reply?directory=${encodeURIComponent(dir)}`, { answers: [["Сбросить контекст и продолжить"]] })).status).toBe(204);
+  const receipt = await h.waitReceipt("move", ["completed", "failed"], 30_000);
+  expect(receipt.error ?? null).toBeNull();
+  expect(receipt.state).toBe("completed");
+  expect(h.scripted.altCalls()).toBe(0); // the fallback model was never asked to summarize
+  expect(h.runtime.catalog.get(sid)?.model?.modelID).toBe(h.scripted.models.small);
+  const history = await h.request<{ messages: Array<{ info: { role: string; summary?: boolean }; parts: Array<{ text?: string }> }> }>("GET", `/sessions/${sid}/messages`);
+  expect(history.body.messages.filter((m) => m.info.role === "user")).toHaveLength(2);
+  expect(history.body.messages.some((m) => m.info.summary && m.parts.some((p) => p.text?.includes("Контекст сброшен")))).toBe(true);
 });

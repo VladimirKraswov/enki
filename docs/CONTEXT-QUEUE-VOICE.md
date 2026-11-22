@@ -76,13 +76,16 @@ summary model, summarising, verifying, target model) are shown in the composer.
 
 When summarizing is impossible or pointless — the source model lost access or
 otherwise cannot compact, the history already exceeds the source window, or the
-summary still does not fit — the failed transition offers **Сбросить контекст и
-перейти**. That sends the same `model.transition` with `reset_context: true`: the
-runtime appends a real SDK compaction entry **without any model inference**
-(empty keep-marker), so the full transcript stays in the chat file and on screen
-while nothing of the old context is replayed. The ordinary fit gate re-checks
-the fresh context before the target is selected; if even system prompt plus
-tool schemas do not fit, the switch is still refused.
+summary still does not fit — the chat question now offers three answers: paid
+fallback compaction by another provider's model, **«Сбросить контекст и
+продолжить»**, or cancel. The reset answer (and the same-named button in the
+model dialog when a refusal returns `reset_context`) sends the equivalent of
+`model.transition` with `reset_context: true`: the runtime appends a real SDK
+compaction entry **without any model inference** (empty keep-marker), so the
+full transcript stays in the chat file and on screen while nothing of the old
+context is replayed. The ordinary fit gate re-checks the fresh context before
+the target is selected; if even system prompt plus tool schemas do not fit, the
+switch is still refused.
 
 ## Access
 
