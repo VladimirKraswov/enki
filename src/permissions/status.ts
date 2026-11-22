@@ -88,8 +88,10 @@ export function permissionSettingsUrl(key: PermissionKey): string {
 }
 
 export async function openPermissionSettings(key: PermissionKey): Promise<void> {
-  const { openUrl } = await import("@tauri-apps/plugin-opener");
-  await openUrl(permissionSettingsUrl(key));
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke<void>("system_permissions_open_settings", {
+    url: permissionSettingsUrl(key),
+  });
 }
 
 export async function probeMicrophone(): Promise<MicrophoneState> {

@@ -210,6 +210,7 @@ pub fn run() {
             system_permissions::system_permissions_status,
             system_permissions::system_permission_request,
             system_permissions::system_permissions_restart,
+            system_permissions::system_permissions_open_settings,
             control::agent_control_ready,
             control::agent_control_complete,
             control::agent_control_status,
