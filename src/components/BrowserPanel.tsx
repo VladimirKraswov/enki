@@ -113,7 +113,7 @@ export function BrowserPresence() {
   return null;
 }
 
-const FRAME_MS = 150, IDLE_FRAME_MS = 250, MAX_BACKOFF_MS = 2000, SUSPENDED_MS = 400;
+const FRAME_MS = 150, IDLE_FRAME_MS = 250, MAX_BACKOFF_MS = 800, SUSPENDED_MS = 400;
 const NAV_KEYS = ["Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"];
 /** Frames nobody can see are not fetched: hidden window or a native file chooser in front. */
 const suspended = () => document.hidden || fileChooserOpen();
@@ -139,6 +139,7 @@ export function BrowserPanel() {
   const [changingMode, setChangingMode] = useState(false);
   const [detaching, setDetaching] = useState(false);
   const [scrolling, setScrolling] = useState(false);
+  const [dialogText, setDialogText] = useState("");
   const scrollPending = useRef<{pageId?:string;revision?:number} | null>(null);
   const detachPending = useRef(false);
   const viewport = useRef<{ width: number; height: number } | undefined>(undefined);
@@ -205,8 +206,9 @@ export function BrowserPanel() {
       }
       inFlight = false;
       const urgent = refreshPending; refreshPending = false;
-      // A failing service is not hammered continuously.
-      if (!cancelled) timer = setTimeout(() => void poll(), failures ? Math.min(MAX_BACKOFF_MS, FRAME_MS * 2 ** failures) : urgent ? 0 : nextFrameDelay());
+      // A failing service is not hammered continuously, but the panel must not
+      // look frozen either: retry soon while the last frame stays on screen.
+      if (!cancelled) timer = setTimeout(() => void poll(), failures ? Math.min(MAX_BACKOFF_MS, FRAME_MS * failures) : urgent ? 0 : nextFrameDelay());
     };
     refreshFrame.current = () => {
       if (cancelled) return;
@@ -370,6 +372,12 @@ export function BrowserPanel() {
         <select className="browser-mode" aria-label="Режим работы браузера" title={mode === "human" ? "Полная эмуляция: клики мышью, ввод клавиатурой" : "Быстрый: структура страницы и точные действия"} value={mode} disabled={changingMode || frame?.busy} onChange={e => void changeMode(e.target.value as "fast" | "human")}><option value="fast">Быстрый</option><option value="human">Эмуляция</option></select>
       </form>
       {(error || frameError) && <p className="browser-error" role="alert">{error || frameError}</p>}
+      {frame?.blocked?.kind === "dialog" && <div className="browser-dialog" role="group" aria-label="Страница ждёт ответа на диалог">
+        <p>{frame.blocked.type === "prompt" ? "Страница просит ввести текст. Пока диалог открыт, она не реагирует." : "Страница ждёт подтверждения. Пока диалог открыт, она не реагирует."}</p>
+        {frame.blocked.type === "prompt" && <input aria-label="Текст ответа" value={dialogText} maxLength={1024} onChange={e => setDialogText(e.target.value)}/>}
+        <button type="button" disabled={working || !!frame?.busy} onClick={() => { const text = dialogText; setDialogText(""); input("dialog", frame.blocked?.type === "prompt" ? { accept: true, promptText: text } : { accept: true }); }}>Принять</button>
+        <button type="button" disabled={working || !!frame?.busy} onClick={() => { setDialogText(""); input("dialog", { accept: false }); }}>Отклонить</button>
+      </div>}
       <div ref={surface} className="browser-scroll"><div ref={screen} className={`browser-screen${(frameError || resizing || scrolling) ? " stale" : ""}`} tabIndex={0} role="application"
         aria-label="Страница браузера: клик, ввод и прокрутка. Shift+Tab — выйти из страницы." style={{ aspectRatio: `${frame?.width || 1280}/${frame?.height || 800}` }}
         onPointerDown={e => {
@@ -406,7 +414,7 @@ export function BrowserPanel() {
         {frame?.image ? <img ref={image} src={`data:image/jpeg;base64,${frame.image}`} alt={frame.title || "Страница Chromium"} draggable={false} onLoad={() => { if (frame) decoded(frame); }}/> : <p>{app.ui.browserOpen ? "Запускаю встроенный браузер…" : "Откройте браузер кнопкой в верхней панели или задайте адрес страницы."}</p>}
         {cursor && frame?.width && frame?.height && <div className={`browser-agent-cursor ${cursor.owner}`} style={{ left: `${cursor.x / frame.width * 100}%`, top: `${cursor.y / frame.height * 100}%` }} aria-label={cursor.owner === "agent" ? "Курсор агента" : "Курсор пользователя"}><span>➤</span><small>{cursor.owner === "agent" ? "Агент" : "Вы"}</small></div>}
       </div></div>
-      <footer><span className={`browser-status-dot${locked ? " busy" : ""}`}/><span role="status">{scrolling ? "Обновляю после прокрутки…" : resizing ? "Подстраиваю страницу…" : changingMode ? "Меняю режим…" : frame?.busy ? "Агент действует…" : working ? "Выполняю…" : mode === "human" ? "Эмуляция · мышь и клавиатура" : "Быстрый · точные действия"}</span><span className="browser-viewport">{frame?.width && `${frame.width} × ${frame.height}`}</span></footer>
+      <footer><span className={`browser-status-dot${locked ? " busy" : ""}`}/><span role="status">{frame?.blocked?.kind === "crash" ? "Страница упала — переподключаю" : frame?.blocked?.kind === "dialog" ? "Жду решения по диалогу" : scrolling ? "Обновляю после прокрутки…" : resizing ? "Подстраиваю страницу…" : changingMode ? "Меняю режим…" : frame?.busy ? "Агент действует…" : working ? "Выполняю…" : frame?.stale ? "Страница не отвечает — показан последний кадр" : mode === "human" ? "Эмуляция · мышь и клавиатура" : "Быстрый · точные действия"}</span><span className="browser-viewport">{frame?.width && `${frame.width} × ${frame.height}`}</span></footer>
     </>}
   </section>;
 }

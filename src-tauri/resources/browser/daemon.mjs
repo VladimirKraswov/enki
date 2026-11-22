@@ -121,6 +121,12 @@ async function getContext(owned = currentSession()) {
     owned.context = opened; owned.settings = settings;
     opened.on('close', () => {
       if (owned.context === opened) { owned.context = undefined; owned.settings = undefined; }
+      // Backends cached for this browser hold a dead page. Drop them so the
+      // next action opens a fresh one instead of failing once against a corpse.
+      for (const { client, official } of owned.connections.values()) {
+        void client.close().catch(() => {}); void official.close().catch(() => {});
+      }
+      owned.connections.clear();
       if (settings.storage === 'temporary') owned.cleanup = removeTemporaryProfile(profile).catch(() => {});
     });
   }
@@ -214,7 +220,7 @@ async function body(req) {
 }
 const server = http.createServer(async (req, res) => {
   if (!authorized(req)) return reply(res, 403, { error: 'Unauthorized browser connection' });
-  if (req.method === 'GET' && req.url === '/health') return reply(res, 200, { instanceId, version: '0.0.83', running: !closing, browserOpen: !!sessions.get(selectedKey)?.context, scope: selectedScope, scopeKey: selectedKey, environment, environmentPending: [...sessions.values()].filter(s => s.context && JSON.stringify(s.settings) !== JSON.stringify(environment)).length, performance: metrics.snapshot() });
+  if (req.method === 'GET' && req.url === '/health') return reply(res, 200, { instanceId, version: '0.0.83', running: !closing, browserOpen: !!sessions.get(selectedKey)?.context, scope: selectedScope, scopeKey: selectedKey, environment, environmentPending: [...sessions.values()].filter(s => s.context && JSON.stringify(s.settings) !== JSON.stringify(environment)).length, frameError: sessions.get(selectedKey)?.lastFrameError || null, queue: queueState(selectedKey), performance: metrics.snapshot() });
   // Frames do not wait behind a long navigation/tool call, so the panel stays
   // live while the agent acts. Bound to one capture at a time below.
   if (req.method === 'GET' && req.url === '/view') {
@@ -291,7 +297,7 @@ const server = http.createServer(async (req, res) => {
     owned.busy++;
     try { return await sessionContext.run(owned, async () => {
     // Signal interruption immediately, even if the manual request waits in the queue.
-    if (request.owner === 'user' || ['desktop/mode', 'desktop/resize', 'desktop/type', 'desktop/reload', 'desktop/forward', 'desktop/click', 'desktop/drag', 'desktop/wheel', 'desktop/key', 'desktop/copy'].includes(request.method)) currentSession().view.interrupt(false);
+    if (request.owner === 'user' || ['desktop/mode', 'desktop/resize', 'desktop/type', 'desktop/reload', 'desktop/forward', 'desktop/click', 'desktop/drag', 'desktop/wheel', 'desktop/key', 'desktop/copy', 'desktop/dialog'].includes(request.method)) currentSession().view.interrupt(false);
     else if (request.method === 'tools/call') currentSession().view.interrupt(false);
     if (request.method === 'tools/call' || request.owner === 'user' || request.method.startsWith('desktop/') && request.method !== 'desktop/reveal') currentSession().composition?.abort('interrupted');
     const queuedAt = performance.now();
@@ -315,7 +321,7 @@ const server = http.createServer(async (req, res) => {
         await currentSession().view.page();
         return { revealed: true };
       }
-      if (['desktop/click', 'desktop/drag', 'desktop/wheel', 'desktop/key', 'desktop/copy'].includes(request.method)) {
+      if (['desktop/click', 'desktop/drag', 'desktop/wheel', 'desktop/key', 'desktop/copy', 'desktop/dialog'].includes(request.method)) {
         if (!request.expected) throw new Error('A displayed frame is required');
         return currentSession().view.manual(request.method, request);
       }
@@ -413,20 +419,63 @@ const server = http.createServer(async (req, res) => {
 async function captureFrame(observedPageId) {
   const key = selectedKey, scope = selectedScope, owned = sessions.get(key);
   if (!owned?.context) return { browserOpen: false, busy: false, tabs: [], scope };
-  if (owned.frameFlight && owned.frameFlightPageId !== observedPageId) {
+  // One latest-wins capture at a time. A second observer (panel vs monitor)
+  // waits for the capture already in flight instead of recursing into its own.
+  if (owned.frameFlight) {
     await owned.frameFlight.catch(() => {});
-    return captureFrame(observedPageId);
+    if (owned.frameFlightPageId === observedPageId) {
+      const shared = await owned.frameFlight.catch(() => null);
+      if (shared) return { ...shared, scope: selectedScope, scopeKey: selectedKey };
+      return { browserOpen: false, busy: false, tabs: [], scope: selectedScope };
+    }
   }
   if (!owned.frameFlight) {
     owned.frameFlightPageId = observedPageId;
     owned.frameFlight = (async () => {
-    try { return await owned.view.frame(owned.context, observedPageId); }
-    catch (error) { if (!error.frameChanged) throw error; return owned.view.frame(owned.context, observedPageId); }
-  })().finally(() => { owned.frameFlight = undefined; });
+      try { return await owned.view.frame(owned.context, observedPageId); }
+      catch (error) {
+        if (error.frameChanged) return owned.view.frame(owned.context, observedPageId);
+        throw error;
+      }
+    })().finally(() => { owned.frameFlight = undefined; });
   }
-  const frame = await owned.frameFlight;
+  let frame;
+  try {
+    frame = await owned.frameFlight;
+    owned.captureFailures = 0;
+    owned.lastFrameError = null;
+  } catch (error) {
+    // A projection that keeps failing means the shared browser itself is gone
+    // (crash, killed process, lost connection). Verify once instead of
+    // retrying a dead context forever: the next call then launches a fresh one.
+    owned.captureFailures = (owned.captureFailures || 0) + 1;
+    owned.lastFrameError = String(error?.message || 'capture').slice(0, 120);
+    if (owned.captureFailures >= 3) {
+      owned.captureFailures = 0;
+      await recoverContext(owned);
+    }
+    throw error;
+  }
   if (selectedKey !== key) return { browserOpen: false, busy: false, tabs: [], scope: selectedScope };
   return { ...frame, scope, scopeKey: key };
+}
+/** Drop a browser context whose process no longer answers, so the next action
+ * starts a healthy browser. It never closes a browser that is still connected. */
+async function recoverContext(owned) {
+  const context = owned.context;
+  if (!context) return;
+  let connected = true;
+  try { connected = !!context.browser()?.isConnected?.(); } catch { connected = false; }
+  if (connected) return;
+  owned.context = undefined;
+  owned.settings = undefined;
+  await context.close().catch(() => {});
+}
+// Depth of the action queue and how long its head has been running: the panel
+// explains a busy browser with these numbers instead of looking frozen.
+function queueState(key) {
+  const stats = sessions.get(key)?.serial?.stats?.();
+  return stats ? { depth: stats.depth, runningMs: stats.runningSince ? Date.now() - stats.runningSince : 0 } : { depth: 0, runningMs: 0 };
 }
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;

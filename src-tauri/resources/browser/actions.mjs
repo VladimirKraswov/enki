@@ -124,17 +124,32 @@ function recoveryAdvice(reason, completed) {
 
 // Separate queues for isolated browser contexts. Cancellation of the caller
 // never drops the execution barrier: an undelivered queued call is skipped.
+// `stats()` is read-only observability: queue depth and how long the head has
+// been running, so a wedged browser can be explained instead of guessed.
 export function createToolQueue() {
   let pending = Promise.resolve();
-  return (action, signal) => {
-    const operation = pending.then(() => { signal?.throwIfAborted(); return action(); });
-    pending = operation.catch(() => {});
-    if (!signal) return operation;
+  const state = { depth: 0, runningSince: 0 };
+  const run = (action, signal) => {
+    state.depth++;
+    const operation = pending.then(() => {
+      signal?.throwIfAborted();
+      state.runningSince = Date.now();
+      return action();
+    });
+    pending = operation.then(() => {}, () => {});
+    // Exactly one decrement per accepted request, whether it ran or was skipped.
+    const settled = operation.finally(() => {
+      state.depth = Math.max(0, state.depth - 1);
+      if (!state.depth) state.runningSince = 0;
+    });
+    if (!signal) return settled;
     return new Promise((resolve, reject) => {
       const abort = () => reject(signal.reason || new Error('Browser request cancelled'));
       if (signal.aborted) { abort(); return; }
       signal.addEventListener('abort', abort, {once:true});
-      operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+      settled.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
     });
   };
+  run.stats = () => ({ depth: state.depth, runningSince: state.runningSince });
+  return run;
 }

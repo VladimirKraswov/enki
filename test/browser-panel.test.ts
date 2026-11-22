@@ -385,3 +385,24 @@ it("keeps an open browser panel through a transient health failure instead of hi
   expect(fake.setUi).toHaveBeenCalledOnce();
   expect(fake.invoke.mock.calls.filter(([name])=>name==="browser_session")).toHaveLength(1);
 });
+
+it("lets the owner answer a blocking page dialog from the panel", async () => {
+  fake.invoke.mockImplementation(async command => command === "browser_view"
+    ? { ...frame, blocked: { kind: "dialog", type: "confirm" } } : command === "browser_presence" ? { browserOpen: true, scope: frame.scope } : undefined);
+  await mount();
+  const group = document.querySelector('[aria-label="Страница ждёт ответа на диалог"]')!;
+  expect(group).not.toBeNull();
+  expect(document.body.textContent).toContain("Страница ждёт подтверждения");
+  const reject = [...group.querySelectorAll("button")].find(b => b.textContent === "Отклонить")!;
+  await act(async () => reject.click());
+  const call = fake.invoke.mock.calls.find(([name, args]) => name === "browser_input" && args?.action === "dialog");
+  expect(call?.[1]?.args).toMatchObject({ accept: false, scopeKey: "fixture-key" });
+});
+
+it("explains an unanswered page instead of looking frozen", async () => {
+  fake.invoke.mockImplementation(async command => command === "browser_view"
+    ? { ...frame, stale: true, staleReason: "capture" } : command === "browser_presence" ? { browserOpen: true, scope: frame.scope } : undefined);
+  await mount();
+  expect(document.body.textContent).toContain("Страница не отвечает — показан последний кадр");
+  expect(document.querySelector("img")).not.toBeNull();
+});

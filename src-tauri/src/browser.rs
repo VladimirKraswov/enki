@@ -716,6 +716,23 @@ fn panel_tool(action: &str, args: &Value) -> Result<Value, String> {
             ("desktop/wheel", json!({"dy":dy}))
         }
         "copy" => ("desktop/copy", json!({})),
+        // A page waiting on a JavaScript dialog paints nothing new and ignores
+        // input. The owner decides in the panel; the daemon only forwards it.
+        "dialog" => {
+            let accept = args["accept"]
+                .as_bool()
+                .ok_or("Нужно решение по диалогу страницы.")?;
+            let prompt = args
+                .get("promptText")
+                .and_then(|value| value.as_str())
+                .filter(|text| text.len() <= 1024)
+                .map(|text| json!(text))
+                .unwrap_or(Value::Null);
+            (
+                "desktop/dialog",
+                json!({"accept":accept,"promptText":prompt}),
+            )
+        }
         "text" => {
             let text = args["text"]
                 .as_str()

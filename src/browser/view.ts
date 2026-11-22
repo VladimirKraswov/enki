@@ -6,6 +6,11 @@ export interface BrowserFrame {
   scope?: { directory: string; engine: string; sessionID: string } | null;
   scopeKey?: string;
   cursor?: { x: number; y: number; owner: "agent" | "user"; action: string; at: number } | null;
+  /** A page that cannot paint or answer: a native dialog is open or its renderer crashed. */
+  blocked?: { kind: "dialog" | "crash"; type?: string } | null;
+  /** The daemon kept the last painted frame because the page did not answer in time. */
+  stale?: boolean;
+  staleReason?: string;
 }
 export function parseFrame(value: unknown): BrowserFrame {
   if (!value || typeof value !== "object") throw new Error("Некорректный кадр браузера.");
@@ -28,6 +33,9 @@ export function parseFrame(value: unknown): BrowserFrame {
   if (f.pageId !== undefined && (typeof f.pageId !== "string" || !Number.isSafeInteger(f.revision) || f.revision! < 0)) throw new Error("Некорректное состояние страницы.");
   if (f.cursor && (!Number.isFinite(f.cursor.x) || !Number.isFinite(f.cursor.y) || !["agent", "user"].includes(f.cursor.owner)))
     throw new Error("Некорректный курсор.");
+  if (f.blocked != null && (typeof f.blocked !== "object" || !["dialog", "crash"].includes(f.blocked.kind)
+      || (f.blocked.type !== undefined && typeof f.blocked.type !== "string"))) throw new Error("Некорректное состояние страницы.");
+  if (f.stale !== undefined && typeof f.stale !== "boolean") throw new Error("Некорректный признак устаревшего кадра.");
   return f;
 }
 export function browserPoint(clientX: number, clientY: number, rect: { left: number; top: number; width: number; height: number }, frame: BrowserFrame) {

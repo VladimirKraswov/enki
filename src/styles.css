@@ -172,6 +172,10 @@ select {
 .browser-status-dot.busy { background: var(--accent); }
 .browser-viewport { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .browser-error { color: var(--text); background: var(--accent-soft); padding: 8px; margin: 0; font-size: 12px; }
+.browser-dialog { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; font-size: 12px; background: var(--bg-elevated, var(--bg)); border-top: 1px solid var(--border); }
+.browser-dialog p { flex: 1 1 100%; margin: 0; color: var(--text); }
+.browser-dialog input { flex: 1 1 140px; min-width: 0; font-size: 12px; }
+.browser-dialog button { font-size: 12px; }
 @media (max-width: 1100px) {
   .browser-panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(var(--browser-panel-width, 420px), calc(100% - 48px)); min-width: 0; z-index: 25; box-shadow: var(--shadow); }
 }
