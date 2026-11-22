@@ -286,6 +286,9 @@ fn model_control_path(path: &str, body: Option<&Value>) -> bool {
         "model-services/status" | "model-services/release" => {
             value.len() == 1 && text("ticket", 36)
         }
+        // Owner-centralised provider credential: the device names a provider and
+        // never learns an endpoint, so the response is the only secret it reads.
+        "model-services/credentials" => value.len() == 1 && text("providerID", 64),
         "model-services/inspect" | "model-services/prepare" => {
             let prepare = path.ends_with("prepare");
             value.len() == (if prepare { 5 } else { 3 })
@@ -619,7 +622,14 @@ pub(crate) fn broker_request(
     body: Option<Value>,
     expected: &str,
 ) -> Result<Value, String> {
-    let allowed = ["catalog", "prepare", "status", "release", "inspect"];
+    let allowed = [
+        "catalog",
+        "prepare",
+        "status",
+        "release",
+        "inspect",
+        "credentials",
+    ];
     let models = path
         .strip_prefix("model-services/")
         .is_some_and(|rest| allowed.contains(&rest));
@@ -984,6 +994,19 @@ mod tests {
         assert!(!model_control_path(
             "model-services/release",
             Some(&json!({"ticket":"x","device":"another"}))
+        ));
+        assert!(model_control_path(
+            "model-services/credentials",
+            Some(&json!({"providerID":"deepseek"}))
+        ));
+        assert!(!model_control_path("model-services/credentials", None));
+        assert!(!model_control_path(
+            "model-services/credentials",
+            Some(&json!({"providerID":"deepseek","endpoint":"http://attacker"}))
+        ));
+        assert!(!model_control_path(
+            "model-services/credentials",
+            Some(&json!({"providerID":"deepseek;env"}))
         ));
     }
     #[test]
