@@ -45,6 +45,7 @@ export function TopBar() {
         <button role="menuitem" disabled={!store.workspaceToolsAvailable()} onClick={() => action(() => store.setLayout({ rightOpen: !l.rightOpen }))}><Icon name="panel" size={17}/><span>{l.rightOpen ? "Скрыть изменения" : "Изменения и файлы"}</span></button>
         <div role="separator"/>
         {session && !archive && <button role="menuitem" disabled={!ready || !RUNTIME_CAPABILITIES.fork} onClick={() => action(() => store.setUi({ handoffSource: session }))}><Icon name="handoff" size={17}/><span>Передать задание</span></button>}
+        {session && !archive && <button role="menuitem" disabled={!ready} onClick={() => action(() => store.setUi({ remoteSend: session }))}><Icon name="forward" size={17}/><span>Отправить в удалённую сессию</span></button>}
         <button role="menuitem" onClick={() => action(() => setRecovery(true))}><Icon name="refresh" size={17}/><span>Журнал отправок и восстановление</span></button>
         {s.ui.vcs?.branch && <div className="chat-actions-branch" title={s.ui.vcs.branch}><Icon name="branch" size={14}/><span>{s.ui.vcs.branch}</span></div>}
       </div>

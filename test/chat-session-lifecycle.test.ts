@@ -6,7 +6,7 @@ const f = vi.hoisted(() => ({ session: "a", mounted: new Set<string>(), opened: 
 vi.mock("../src/state/store", () => ({ applyTheme: vi.fn(), store: {
   state: { prefs: { theme: "dark" }, ui: {} }, connect: async () => {}, restorePiRuntime: async () => {},
   refreshPiActivity: async () => {}, isLegacySession: () => false, workspaceToolsAvailable: () => false,
-}, useAppSelector: () => ({ prefs: { layout: { sidebarOpen: false } }, ui: {}, connection: { phase: "connected" }, directory: "/project", activeSessionId: f.session }) }));
+}, useAppState: () => ({ prefs: { theme: "dark", layout: {} }, ui: { remoteSend: null }, connection: { phase: "connected" }, directory: "/project", activeSessionId: f.session }), useAppSelector: () => ({ prefs: { layout: { sidebarOpen: false } }, ui: {}, connection: { phase: "connected" }, directory: "/project", activeSessionId: f.session }) }));
 vi.mock("../src/native/platform", () => ({ platform: () => "mac", isNative: () => false, hasOverlayWindowControls: () => false }));
 vi.mock("../src/agent/runtime/backend", () => ({ RUNTIME_CAPABILITIES: {} }));
 vi.mock("../src/components/McpRecoveryNotice", () => ({ McpRecoveryNotice: ({ sessionId }: { sessionId: string }) => createElement("div", { "data-recovery": sessionId }, sessionId) }));

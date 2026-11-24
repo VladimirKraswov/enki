@@ -5,6 +5,7 @@ import { ContextPanel } from "./components/ContextPanel";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ScheduleRuntime } from "./schedules/Runtime";
 import { HandoffDialog } from "./components/HandoffDialog";
+import { RemoteSendDialog } from "./components/RemoteSendDialog";
 import { BrowserPanel, BrowserPresence } from "./components/BrowserPanel";
 import { PiDialog } from "./components/PiDialog";
 import { HostDialogs } from "./components/HostDialogs";
@@ -205,6 +206,7 @@ export default function App() {
       {s.ui.settingsOpen && <Suspense fallback={<div role="status">Загрузка настроек…</div>}><SettingsScreen /></Suspense>}
       <HostDialogs />
       {capabilities.fork && <HandoffDialog />}
+      <RemoteSendDialog />
       <PiDialog />
       <DeleteConfirm />
       <Toast />

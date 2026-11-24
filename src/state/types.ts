@@ -63,6 +63,8 @@ export interface UiState {
   paletteOpen: boolean;
   confirmDelete: Session | null;
   handoffSource: Session | null;
+  /** Chat being sent to another Enki on the Hub. */
+  remoteSend: Session | null;
   toast: string | null;
   /** Blocking extension dialog (confirm/input/select/editor) awaiting the user. Never auto-answered. */
   agentDialog: DialogRequestDTO | null;

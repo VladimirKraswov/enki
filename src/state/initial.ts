@@ -57,6 +57,7 @@ export function initialState(prefs: Prefs): AppState {
       paletteOpen: false,
       confirmDelete: null,
       handoffSource: null,
+  remoteSend: null,
       toast: null,
       agentDialog: null,
       extensionStatus: {},

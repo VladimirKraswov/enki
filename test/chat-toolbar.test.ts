@@ -20,7 +20,7 @@ it("keeps three compact controls and exposes named actions with keyboard navigat
     expect(node.querySelector('[aria-label="Открыть браузер агента"]')?.getAttribute("data-compact")).toBe("true");
     act(() => node.querySelector<HTMLButtonElement>('[aria-label="Действия чата"]')!.click());
     const rows = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-    expect(rows.map(r => r.textContent)).toEqual(["ТерминалCtrl+`", "Изменения и файлы", "Передать задание", "Журнал отправок и восстановление"]);
+    expect(rows.map(r => r.textContent)).toEqual(["ТерминалCtrl+`", "Изменения и файлы", "Передать задание", "Отправить в удалённую сессию", "Журнал отправок и восстановление"]);
     expect(document.activeElement).toBe(rows[0]);
     act(() => rows[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(rows.at(-1));
