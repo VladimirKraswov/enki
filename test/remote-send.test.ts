@@ -6,7 +6,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 const fake = vi.hoisted(() => ({
-  overview: vi.fn(), command: vi.fn(), send: vi.fn(), create: vi.fn(),
+  overview: vi.fn(), command: vi.fn(), send: vi.fn(), create: vi.fn(), paste: vi.fn(),
   state: {} as any, setUi: vi.fn(),
 }));
 vi.mock("../src/hub/remote", async () => {
@@ -14,7 +14,7 @@ vi.mock("../src/hub/remote", async () => {
   return {
     ...actual,
     remoteOverview: fake.overview, remoteCommand: fake.command,
-    sendToSession: fake.send, createRemoteSession: fake.create,
+    sendToSession: fake.send, createRemoteSession: fake.create, pasteToSession: fake.paste,
   };
 });
 vi.mock("../src/state/store", () => ({
@@ -41,6 +41,7 @@ beforeEach(() => {
   fake.command.mockResolvedValue({ id: "c1", device: device.id, session: "aa11", kind: "prompt", state: "done", result: {} });
   fake.send.mockResolvedValue({ id: "c1", card: { id: "c1", state: "queued" } });
   fake.create.mockResolvedValue({ id: "c2", card: { id: "c2", state: "queued" } });
+  fake.paste.mockResolvedValue({ id: "c3", card: { id: "c3", state: "queued" } });
   const node = document.createElement("div"); document.body.append(node); root = createRoot(node);
 });
 afterEach(() => { act(() => root.unmount()); document.body.innerHTML = ""; vi.unstubAllGlobals(); });
@@ -62,7 +63,7 @@ it("sends a request into the chosen session on the chosen device", async () => {
   expect(document.body.textContent).toContain("Энки Ольга");
   await act(async () => document.querySelector<HTMLButtonElement>(".handoff-target")!.click());
   await fill("Текст запроса", "  привет из мастерской  ");
-  await act(async () => button("Отправить").click());
+  await act(async () => button("Переслать и выполнить").click());
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(fake.send).toHaveBeenCalledWith(device.id, expect.objectContaining({ id: "aa11" }), "привет из мастерской");
   expect(document.body.textContent).toContain("Запрос отправлен");
@@ -84,7 +85,7 @@ it("creates a new session in a folder of the receiving device", async () => {
     pick.dispatchEvent(new Event("change", { bubbles: true }));
   });
   await fill("Текст запроса", "новая задача");
-  await act(async () => button("Отправить").click());
+  await act(async () => button("Переслать и выполнить").click());
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(fake.create).toHaveBeenCalledWith(device.id, "/Users/olga/proj", "новая задача",
     { providerID: "deepseek", modelID: "deepseek-flash", variant: null });
@@ -95,7 +96,7 @@ it("reports a receiver-side failure instead of claiming success", async () => {
   await mount();
   await act(async () => document.querySelector<HTMLButtonElement>(".handoff-target")!.click());
   await fill("Текст запроса", "задача");
-  await act(async () => button("Отправить").click());
+  await act(async () => button("Переслать и выполнить").click());
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   expect(document.body.textContent).toContain("Получатель не выполнил запрос");
   expect(document.body.textContent).toContain("Выберите модель.");
@@ -105,5 +106,29 @@ it("does not offer devices the Hub knows nothing about", async () => {
   fake.overview.mockResolvedValue({ devices: [{ id: "x", name: "Старый", platform: "macos", online: false }] });
   await mount();
   expect(document.body.textContent).toContain("Нет доступных устройств");
-  expect(button("Отправить").disabled).toBe(true);
+  expect(button("Переслать и выполнить").disabled).toBe(true);
+  expect(button("Только переслать").disabled).toBe(true);
+});
+
+it("delivers text only, without starting the receiver's agent", async () => {
+  fake.command.mockResolvedValue({ id: "c3", device: device.id, session: "aa11", kind: "paste", state: "done", result: { staged: true, text: "черновик" } });
+  await mount();
+  await act(async () => document.querySelector<HTMLButtonElement>(".handoff-target")!.click());
+  await fill("Текст запроса", "черновик");
+  await act(async () => button("Только переслать").click());
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(fake.paste).toHaveBeenCalledWith(device.id, expect.objectContaining({ id: "aa11" }), "черновик");
+  expect(fake.send).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("Агент не запущен");
+});
+
+it("does not offer text-only delivery for a session that does not exist yet", async () => {
+  await mount();
+  const mode = document.querySelector<HTMLSelectElement>('[aria-label="Способ отправки"]')!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(mode), "value")!.set!;
+    setter.call(mode, "new");
+    mode.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(button("Только переслать").disabled).toBe(true);
 });

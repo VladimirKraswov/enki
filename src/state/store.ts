@@ -2735,6 +2735,14 @@ class Store {
     return this.state.prefs.drafts[draftKey(sessionId, directory)] ?? "";
   }
   /** Canonical text adopted from the runtime draft; not echoed back as a local edit. */
+  /** Remote deliveries already inserted into a draft; bounded like other prefs. */
+  markRemotePastes(ids: string[]): void {
+    if (!ids.length) return;
+    const seen = [...this.state.prefs.pastesSeen, ...ids].slice(-200);
+    this.mutate((s) => ({ prefs: { ...s.prefs, pastesSeen: seen } }));
+    this.persistPrefs();
+  }
+
   setDraftFor(sessionId: string, directory: string, text: string): void {
     const key = draftKey(sessionId, directory);
     if ((this.state.prefs.drafts[key] ?? "") === text) return;

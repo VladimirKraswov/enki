@@ -137,6 +137,8 @@ export interface Prefs {
   selectedDirectory: string | null;
   lastSessionByDir: Record<string, string>;
   drafts: Record<string, string>;
+  /** Remote deliveries already inserted into a draft, newest last. */
+  pastesSeen: string[];
   layout: {
     sidebarOpen: boolean;
     sidebarWidth: number;
@@ -164,6 +166,7 @@ export const DEFAULT_PREFS: Prefs = {
   selectedDirectory: null,
   lastSessionByDir: {},
   drafts: {},
+  pastesSeen: [],
   layout: {
     sidebarOpen: true,
     sidebarWidth: 252,
@@ -204,6 +207,7 @@ export function loadPrefs(): Prefs {
       layout: { ...DEFAULT_PREFS.layout, ...(parsed.layout ?? {}) },
       lastSessionByDir: parsed.lastSessionByDir ?? {},
       drafts: parsed.drafts ?? {},
+      pastesSeen: Array.isArray(parsed.pastesSeen) ? parsed.pastesSeen.slice(-200) : [],
       modelChoice: parsed.modelChoice ?? {},
       agentChoice: parsed.agentChoice ?? {},
       ptyIds: parsed.ptyIds ?? {},

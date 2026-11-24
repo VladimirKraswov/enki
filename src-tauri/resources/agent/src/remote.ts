@@ -65,6 +65,16 @@ export class RemoteControl {
         }
         return { receipt: this.submit(command, "prompt", { parts: [{ type: "text", text: value }], model }) };
       }
+      case "paste": {
+        // Deliver text into the receiving chat without starting the agent: the
+        // Hub stores this payload, the desktop shell appends it to the composer
+        // draft and the request stays unsent until the person decides.
+        const record = this.record(command);
+        if (isReadOnlyOrigin(record.origin)) throw new Error("Архив доступен только для чтения.");
+        const value = text(payload.text, 32_000);
+        if (!value.trim()) throw new Error("Пустой текст.");
+        return { staged: true, session: record.id, text: value };
+      }
       case "stop": {
         const record = this.record(command);
         this.runtime.queue.stop(record.id);

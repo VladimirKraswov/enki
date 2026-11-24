@@ -78,3 +78,23 @@ export async function createRemoteSession(device: string, directory: string, tex
   });
   return { id: command, card };
 }
+
+/** Stage text in a remote chat without starting its agent. */
+export async function pasteToSession(device: string, session: RemoteSession, text: string, id?: string) {
+  const command = id ?? crypto.randomUUID();
+  const card = await request<RemoteCommandCard>("remote/command", {
+    id: command, device, session: session.id, kind: "paste", payload: { text },
+  });
+  return { id: command, card };
+}
+
+/** Deliveries staged for one chat: the receiving Runtime acknowledged them and
+ * the Hub still holds the result, so the shell can append them to the draft. */
+export async function stagedPastes(device: string, session: string): Promise<{ id: string; text: string }[]> {
+  const value = await request<{ commands?: { id: string; kind: string; state: string; result?: { text?: string } | null }[] }>(
+    `remote/session?device=${encodeURIComponent(device)}&session=${encodeURIComponent(session)}`);
+  return (value.commands ?? [])
+    .filter(c => c.kind === "paste" && c.state === "done" && typeof c.result?.text === "string" && c.result.text.trim())
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    .map(c => ({ id: c.id, text: String(c.result!.text) }));
+}

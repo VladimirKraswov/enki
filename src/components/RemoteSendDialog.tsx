@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "../api/types";
 import { store, useAppState } from "../state/store";
 import { Icon } from "./Icon";
-import { remoteOverview, remoteCommand, sendToSession, createRemoteSession, modelRef, newestSession,
+import { remoteOverview, remoteCommand, sendToSession, createRemoteSession, pasteToSession, modelRef, newestSession,
   type RemoteDevice, type RemoteSession } from "../hub/remote";
 import { pathBasename } from "../util/paths";
 
@@ -54,7 +54,7 @@ function RemoteSendForm({ source }: { source: Session }) {
   useEffect(() => () => clearTimeout(poll.current), []);
   useEffect(() => { setSessionId(""); }, [deviceId]);
 
-  async function watch(id: string) {
+  async function watch(id: string, run: boolean) {
     let failures = 0;
     const tick = async () => {
       try {
@@ -63,7 +63,9 @@ function RemoteSendForm({ source }: { source: Session }) {
         if (TERMINAL.has(card.state)) {
           const failure = (card.result as { error?: string } | null | undefined)?.error;
           setReceipt(card.state === "done" && !failure
-            ? { state: "accepted", detail: "Устройство приняло запрос." }
+            ? { state: "accepted", detail: run
+                ? "Устройство приняло запрос и запустило работу."
+                : "Текст доставлен в поле ввода получателя. Агент не запущен — отправит человек." }
             : { state: "failed", detail: failure || "Устройство не выполнило запрос." });
           setSending(false);
           return;
@@ -75,17 +77,18 @@ function RemoteSendForm({ source }: { source: Session }) {
     await tick();
   }
 
-  async function send() {
+  async function send(run: boolean) {
     if (!device || !text.trim() || sending) return;
+    if (mode === "new" && !run) return;
     setSending(true); setError("");
     try {
       if (mode === "existing") {
         if (!target) throw new Error("Выберите сессию получателя.");
-        const { id } = await sendToSession(device.id, target, text.trim());
-        await watch(id);
+        const { id } = run ? await sendToSession(device.id, target, text.trim()) : await pasteToSession(device.id, target, text.trim());
+        await watch(id, run);
       } else {
         const { id } = await createRemoteSession(device.id, directory, text.trim(), modelRef(newestSession(device)));
-        await watch(id);
+        await watch(id, true);
       }
     } catch (e) { setError(errorText(e)); setSending(false); }
   }
@@ -123,7 +126,7 @@ function RemoteSendForm({ source }: { source: Session }) {
             </label>}
         <label>Запрос<textarea aria-label="Текст запроса" placeholder="Что нужно сделать в сессии на другом компьютере…" rows={4} maxLength={200000} value={text} disabled={sending} onChange={e => setText(e.target.value)}/></label>
         {mode === "new" && <p className="handoff-note">Новая сессия создаётся на получателе и сразу запускается с этим запросом{fallbackModel ? ` на модели ${fallbackModel.providerID}/${fallbackModel.modelID}` : ""}.</p>}
-        {mode === "existing" && target && !modelRef(target) && <p className="handoff-error" role="alert">У выбранной сессии не записана модель — выберите другую сессию или создайте новую.</p>}
+        {mode === "existing" && target && !modelRef(target) && <p className="handoff-note">У выбранной сессии не записана модель: «Переслать и выполнить» недоступно, «Только переслать» работает.</p>}
       </>}
       {receipt && <div className="handoff-receipt" role="status">
         <h4>{receipt.state === "accepted" ? "Запрос отправлен" : receipt.state === "pending" ? "Отправляю…" : receipt.state === "failed" ? "Получатель не выполнил запрос" : "Доставка не подтверждена"}</h4>
@@ -133,7 +136,12 @@ function RemoteSendForm({ source }: { source: Session }) {
       {error && <p className="handoff-error" role="alert">{error}</p>}
       <div className="btn-row">
         <button className="btn" disabled={sending} onClick={close}>{receipt ? "Закрыть" : "Отмена"}</button>
-        {!receipt && <button className="btn primary" disabled={!ready || sending} onClick={() => void send()}>{sending ? "Отправляю…" : "Отправить"}</button>}
+        {!receipt && <>
+          <button className="btn" disabled={!ready || sending || mode === "new" || !target || !modelRef(target)}
+            title={mode === "new" ? "Для новой сессии сразу запускается работа" : "Текст появится в поле ввода получателя, агент не запустится"}
+            onClick={() => void send(false)}>Только переслать</button>
+          <button className="btn primary" disabled={!ready || sending || (mode === "existing" && !!target && !modelRef(target))} onClick={() => void send(true)}>{sending ? "Отправляю…" : "Переслать и выполнить"}</button>
+        </>}
         {receipt && <button className="btn primary" onClick={close}>Готово</button>}
       </div>
     </div>

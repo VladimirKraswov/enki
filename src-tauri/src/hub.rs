@@ -445,8 +445,21 @@ fn remote_path(path: &str, write: bool) -> bool {
         matches!(path, "remote/sync" | "remote/complete" | "remote/command") && !path.contains('?')
     } else {
         matches!(path, "remote/overview" | "remote/session")
+            || remote_session_query(path)
             || path.strip_prefix("remote/command?id=").is_some_and(id_ok)
     }
+}
+
+/// `remote/session?device=<id>&session=<id>`: exactly two bounded identifiers,
+/// in that order, with no extra parameters. Used to read staged deliveries.
+fn remote_session_query(path: &str) -> bool {
+    let Some(query) = path.strip_prefix("remote/session?device=") else {
+        return false;
+    };
+    let Some((device, rest)) = query.split_once("&session=") else {
+        return false;
+    };
+    id_ok(device) && id_ok(rest)
 }
 
 fn memory_path(path: &str) -> bool {
@@ -956,6 +969,17 @@ mod tests {
         assert!(remote_path("remote/session", false));
         assert!(remote_path("remote/command", true));
         assert!(remote_path("remote/command?id=abc-123", false));
+        assert!(remote_path("remote/session?device=abc&session=def", false));
+        assert!(!remote_path("remote/session?device=abc", false));
+        assert!(!remote_path("remote/session?session=def&device=abc", false));
+        assert!(!remote_path(
+            "remote/session?device=abc&session=def&other=1",
+            false
+        ));
+        assert!(!remote_path(
+            "remote/session?device=../x&session=def",
+            false
+        ));
         assert!(!remote_path("remote/command?id=bad id", false));
         assert!(!remote_path("remote/sync?device=other", true));
         assert!(!remote_path("remote/../updates", true));

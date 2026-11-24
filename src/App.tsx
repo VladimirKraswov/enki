@@ -6,6 +6,7 @@ import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ScheduleRuntime } from "./schedules/Runtime";
 import { HandoffDialog } from "./components/HandoffDialog";
 import { RemoteSendDialog } from "./components/RemoteSendDialog";
+import { RemotePasteInbox } from "./components/RemotePasteInbox";
 import { BrowserPanel, BrowserPresence } from "./components/BrowserPanel";
 import { PiDialog } from "./components/PiDialog";
 import { HostDialogs } from "./components/HostDialogs";
@@ -207,6 +208,7 @@ export default function App() {
       <HostDialogs />
       {capabilities.fork && <HandoffDialog />}
       <RemoteSendDialog />
+      <RemotePasteInbox />
       <PiDialog />
       <DeleteConfirm />
       <Toast />
