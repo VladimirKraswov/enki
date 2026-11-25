@@ -85,8 +85,24 @@ it("routes session.create and prompt through the receiving Runtime dispatcher, n
     payload: { text: "Продолжи", model: { providerID: "p", modelID: "m" } } });
 });
 
+it("keeps the model optional so an unpinned prompt still routes and the receiver picks the model", async () => {
+  const f = fixture();
+  await f.tool.execute("c", { action: "prompt", recipient: "mac2", recipientSession: "sess", text: "Без модели" });
+  const prompt = f.requests.find(p => p.path === "remote/command");
+  expect(prompt?.body).toMatchObject({ kind: "prompt", payload: { text: "Без модели" } });
+  expect(JSON.stringify(prompt?.body)).not.toContain("model");
+});
+
+it("reads the device overview and a single command state for the receiver", async () => {
+  const f = fixture();
+  await f.tool.execute("o", { action: "overview" });
+  expect(f.requests.find(p => p.path === "remote/overview")).toBeTruthy();
+  await f.tool.execute("q", { action: "command", id: "call_00_abc" });
+  expect(f.requests.find(p => p.path === "remote/command?id=call_00_abc")).toBeTruthy();
+});
+
 it("rejects remote commands without the required recipient fields", async () => {
   const f = fixture();
   await expect(f.tool.execute("c", { action: "create-session", recipient: "mac2", directory: "/proj", text: "" })).rejects.toThrow("Нужны устройство, папка и текст.");
-  await expect(f.tool.execute("c", { action: "prompt", recipient: "mac2", recipientSession: "s", text: "x", model: "" })).rejects.toThrow("Нужны устройство, сессия, текст и модель.");
+  await expect(f.tool.execute("c", { action: "prompt", recipient: "mac2", recipientSession: "", text: "x" })).rejects.toThrow("Нужны устройство, сессия и текст.");
 });
