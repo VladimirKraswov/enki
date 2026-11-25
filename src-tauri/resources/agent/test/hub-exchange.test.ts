@@ -71,3 +71,22 @@ it("uses the ordinary runtime permission decision and cannot turn a read grant i
     grants: [{ permission: read.permission, pattern: read.pattern, identity: read.identity }] });
   expect(send.decision).toBe("ask"); expect(send.identity).not.toBe(read.identity);
 });
+
+it("routes session.create and prompt through the receiving Runtime dispatcher, not the message queue", async () => {
+  const f = fixture();
+  await f.tool.execute("c1", { action: "create-session", recipient: "mac2", directory: "/proj", text: "Привет" });
+  const create = f.requests.find(p => p.path === "remote/command");
+  expect(create?.body).toMatchObject({ device: "mac2", session: null, kind: "session.create",
+    payload: { directory: "/proj", prompt: "Привет" } });
+  await f.tool.execute("c2", { action: "prompt", recipient: "mac2", recipientSession: "sess", text: "Продолжи",
+    model: JSON.stringify({ providerID: "p", modelID: "m" }) });
+  const prompt = f.requests.filter(p => p.path === "remote/command")[1];
+  expect(prompt?.body).toMatchObject({ device: "mac2", session: "sess", kind: "prompt",
+    payload: { text: "Продолжи", model: { providerID: "p", modelID: "m" } } });
+});
+
+it("rejects remote commands without the required recipient fields", async () => {
+  const f = fixture();
+  await expect(f.tool.execute("c", { action: "create-session", recipient: "mac2", directory: "/proj", text: "" })).rejects.toThrow("Нужны устройство, папка и текст.");
+  await expect(f.tool.execute("c", { action: "prompt", recipient: "mac2", recipientSession: "s", text: "x", model: "" })).rejects.toThrow("Нужны устройство, сессия, текст и модель.");
+});
