@@ -340,3 +340,28 @@ it("a late redelivery of the same turn does not resurrect the dot after reading"
   expect(store.isUnread("ses_a")).toBe(false);
   expect(chime).toHaveBeenCalledTimes(1);
 });
+
+it("shows that a background chat waits for an answer instead of pretending to work", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  status("ses_a", "/work/a", "busy");
+  local.emitGlobal({ type: "question.asked", properties: { sessionID: "ses_a", id: "q1", questions: [] } } as never, "/work/a");
+  await vi.waitFor(() => expect(store.sessionNeedsAnswer("ses_a")).toBe(true));
+  expect(store.isUnread("ses_a")).toBe(true);
+  // The open question is announced once, not once per replayed event.
+  local.emitGlobal({ type: "question.asked", properties: { sessionID: "ses_a", id: "q1", questions: [] } } as never, "/work/a");
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(chime).toHaveBeenCalledTimes(1);
+  expect(store.sessionNeedsAnswer("ses_a")).toBe(true);
+  local.emitGlobal({ type: "question.replied", properties: { sessionID: "ses_a", requestID: "q1" } } as never, "/work/a");
+  await vi.waitFor(() => expect(store.sessionNeedsAnswer("ses_a")).toBe(false));
+});
+
+it("treats a permission request like a question", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  local.emitGlobal({ type: "permission.asked", properties: { sessionID: "ses_a", id: "p1" } } as never, "/work/a");
+  await vi.waitFor(() => expect(store.sessionNeedsAnswer("ses_a")).toBe(true));
+  local.emitGlobal({ type: "permission.replied", properties: { sessionID: "ses_a", requestID: "p1" } } as never, "/work/a");
+  await vi.waitFor(() => expect(store.sessionNeedsAnswer("ses_a")).toBe(false));
+});

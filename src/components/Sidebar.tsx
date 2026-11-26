@@ -35,7 +35,10 @@ function ActivityMark({ id, directory, pending = false }: { id: string; director
   // still have a recurring Enki schedule. Never let another indicator hide it.
   const timer = <TimerBadge tasks={timers} label={timerAriaLabel(timers)} />;
   const withTimer = (indicator: ReactNode) => <>{indicator}{timer}</>;
-  if (mark === "waiting") return withTimer(<span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>);
+  // A chat waiting for a question, permission or dialog cannot make progress on
+  // its own, so the "working" spinner would be a lie: the person must see it.
+  if (mark === "waiting" || store.sessionNeedsAnswer(id))
+    return withTimer(<span className="pending-dot waiting-for-user" role="status" aria-label="Ожидает вашего ответа" title="Ожидает вашего ответа">!</span>);
   if (mark === "unconfirmed") return withTimer(<span className="pending-dot connection-pending" role="status" aria-label="Нет свежего статуса задачи" title="Восстанавливаем связь. Статус задачи пока не подтверждён."><Icon name="connectionLost" size={13}/></span>);
   if (mark === "working") return withTimer(<SessionSpinner/>);
   const unread = store.isUnread(id) && <span className="unread-dot" role="status" aria-label="Задача завершена, результат не прочитан" />;

@@ -3907,10 +3907,44 @@ class Store {
     }
   }
 
+  /** Sessions blocked on the person: a question, permission or dialog is open.
+   * The spinner would claim "working" while nothing can progress without him. */
+  private pendingAsks = new Map<string, Set<string>>();
+
   /** Announced completion per session, tied to that turn's `session.updated`.
    * A redelivered idle carries the same stamp, so it never announces twice —
    * even minutes later, after the person already read the result. */
   private announcedCompletion = new Map<string, { at: number; updated: number }>();
+
+  /** True while an interaction waits for this session's answer. */
+  sessionNeedsAnswer(id: string): boolean {
+    return (this.pendingAsks.get(id)?.size ?? 0) > 0;
+  }
+
+  private observePendingAsk(id: string, requestID: string, open: boolean, directory?: string): void {
+    if (directory && !this.activityDirectories.has(id)) this.activityDirectories.set(id, directory);
+    const open_asks = this.pendingAsks.get(id) ?? new Set<string>();
+    const wasBlocked = open_asks.size > 0;
+    if (open) open_asks.add(requestID); else open_asks.delete(requestID);
+    if (open_asks.size) this.pendingAsks.set(id, open_asks); else this.pendingAsks.delete(id);
+    // The dot and the sound exist so a blocked chat is noticed from elsewhere; a
+    // replayed event for an already open request must not announce it again.
+    if (open && !wasBlocked && !this.isViewing(id) && this.visibleActivity(id)) this.announceAttention(id, directory);
+    this.mutate(() => ({}));
+  }
+
+  /** Mark a chat that needs the person: unread dot plus one chime per event. */
+  private announceAttention(id: string, directory?: string): void {
+    if (!this.visibleActivity(id) || this.isViewing(id)) return;
+    let unread = { ...this.state.prefs.unreadSessions, [id]: {
+      time: Date.now(), directory: this.activityDirectories.get(id) ?? directory,
+    } };
+    if (Object.keys(unread).length > 500) unread = Object.fromEntries(Object.entries(unread)
+      .sort((a, b) => a[1].time - b[1].time).slice(-500));
+    this.mutate(s => ({ prefs: { ...s.prefs, unreadSessions: unread } }));
+    this.persistPrefs();
+    void completionChime().catch(() => {});
+  }
 
   private finishActivity(id: string, _status: SessionStatus, directory?: string): void {
     if (!this.visibleActivity(id) || this.isViewing(id)) return;
@@ -4014,6 +4048,16 @@ class Store {
         if (typeof id !== "string") return;
         if (payload.type === "session.deleted") {
           this.forgetActivity(id);
+          return;
+        }
+        if (payload.type === "question.asked" || payload.type === "permission.asked" || payload.type === "dialog.asked") {
+          const request = (payload.properties as { id?: unknown }).id;
+          if (typeof request === "string" && request) this.observePendingAsk(id, request, true, directory);
+          return;
+        }
+        if (payload.type === "question.replied" || payload.type === "question.rejected" || payload.type === "permission.replied") {
+          const request = (payload.properties as { requestID?: unknown }).requestID;
+          if (typeof request === "string" && request) this.observePendingAsk(id, request, false, directory);
           return;
         }
         if (payload.type === "session.status" || payload.type === "session.idle" || payload.type === "session.error") {
