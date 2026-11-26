@@ -12,7 +12,7 @@ const header = { type: "session", version: 3, id: "ses-big", timestamp: new Date
 const user = (id: string, parentId: string | null, pad = 0) => ({ type: "message", id, parentId, message: { role: "user", content: `текст ${id} ${"x".repeat(pad)}` } });
 
 function bigFile(name: string, count: number, pad: number) {
-  const entries = [header];
+  const entries: unknown[] = [header];
   let parent: string | null = null;
   for (let i = 0; i < count; i++) { const id = `m${i}`; entries.push(user(id, parent, pad)); parent = id; }
   const file = path.join(dir, name);
