@@ -146,3 +146,25 @@ describe("pre-dispatch refusal in the delivery surfaces", () => {
 function draftKeyFor(sessionId: string, _directory: string): string {
   return sessionId;
 }
+
+it("does not resurface a refusal the chat has already moved past", async () => {
+  // Real case: a 129 MB chat refused at 15:02 kept showing the red banner after a
+  // later send had actually completed, which read as a fresh failure.
+  const old = acceptedRecord("msg_old", "s1", { state: "refused", updatedAt: Date.now() - 40 * 60_000 });
+  setup([old]);
+  Object.defineProperty(store, "backend", { configurable: true, get: () => ({ client: { receipt: vi.fn(async () => ({ id: "msg_old", state: "rejected", error: "История Pi слишком велика" })) } }) });
+  store.state = { ...store.state, chat: { ...store.state.chat, sessions: { s1: { messageOrder: [], messages: {}, partsByMessage: {}, parts: {}, status: { type: "idle" }, lastError: null, orderAt: 0, lastEventAt: Date.now() } as never } } };
+  await store.refreshNotSent("s1");
+  expect(store.notSent.get("s1")).toBeUndefined();
+});
+
+it("keeps only the newest refusal when several attempts were refused", async () => {
+  setup([
+    acceptedRecord("msg_a", "s1", { state: "refused", updatedAt: Date.now() - 90_000 }),
+    acceptedRecord("msg_b", "s1", { state: "refused", updatedAt: Date.now() - 30_000 }),
+  ]);
+  Object.defineProperty(store, "backend", { configurable: true, get: () => ({ client: { receipt: vi.fn(async (id: string) => ({ id, state: "rejected", error: "нет модели" })) } }) });
+  store.state = { ...store.state, chat: { ...store.state.chat, sessions: { s1: { messageOrder: [], messages: {}, partsByMessage: {}, parts: {}, status: { type: "idle" }, lastError: null, orderAt: 0, lastEventAt: 0 } as never } } };
+  await store.refreshNotSent("s1");
+  expect(store.notSent.get("s1")!.map(item => item.id)).toEqual(["msg_b"]);
+});

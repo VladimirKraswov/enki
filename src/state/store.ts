@@ -1808,6 +1808,14 @@ class Store {
         out.push({ id: record.id, text: record.text, state: record.state, reason: reason ?? fallback, record });
       }
     } catch { return; }
+    // Only the newest refusal of a chat is actionable. An older one describes an
+    // attempt the person already retried, and once the chat has moved on after
+    // it (a later message, answer or successful send) showing it again reads as
+    // "the send just failed" — which is exactly how a stale banner was believed.
+    out.sort((a, b) => b.record.updatedAt - a.record.updatedAt);
+    const newest = out[0];
+    if (newest && (chat?.lastEventAt ?? 0) > newest.record.updatedAt + 2_000) out.length = 0;
+    else if (newest) out = [newest];
     if (out.length) this.notSent.set(sessionId, out); else this.notSent.delete(sessionId);
     this.mutate({});
   }
