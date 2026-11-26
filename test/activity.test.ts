@@ -296,3 +296,47 @@ it('a confirmed question answer invalidates older snapshots even if its event wa
   local.on('POST','/questions/:id/reply',()=>undefined);expect(await store.replyQuestion(req,[['yes']])).toBe(true);
   finish({...emptySnapshot(),questions:[req]});await restoring;expect(store.pendingInteraction('ses_a').questions).toEqual([]);
 });
+
+it("announces one completion once, however many idle events arrive", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  const idle = () => local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  idle(); idle(); idle();
+  await vi.waitFor(() => expect(store.isUnread("ses_a")).toBe(true));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(chime).toHaveBeenCalledTimes(1);
+});
+
+it("notifies again for the next real turn, and only then", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  status("ses_a", "/work/a", "busy");
+  local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  await vi.waitFor(() => expect(chime).toHaveBeenCalledTimes(1));
+  // A redelivered idle of the same turn is not a new completion.
+  local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(chime).toHaveBeenCalledTimes(1);
+  // The next turn is.
+  store.clearUnread("ses_a");
+  status("ses_a", "/work/a", "busy");
+  local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  await vi.waitFor(() => expect(chime).toHaveBeenCalledTimes(2));
+});
+
+it("a late redelivery of the same turn does not resurrect the dot after reading", async () => {
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  status("ses_a", "/work/a", "busy");
+  local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  await vi.waitFor(() => expect(store.isUnread("ses_a")).toBe(true));
+  store.clearUnread("ses_a");
+  expect(store.isUnread("ses_a")).toBe(false);
+  // The runtime replays the same idle minutes later; nothing new happened.
+  await store.setDirectory("/work/a");
+  await store.setDirectory("/work/b");
+  local.emitGlobal({ type: "session.idle", properties: { sessionID: "ses_a" } } as never, "/work/a");
+  await new Promise(resolve => setTimeout(resolve, 40));
+  expect(store.isUnread("ses_a")).toBe(false);
+  expect(chime).toHaveBeenCalledTimes(1);
+});

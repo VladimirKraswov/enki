@@ -3907,8 +3907,21 @@ class Store {
     }
   }
 
-  private finishActivity(id: string, status: SessionStatus, directory?: string): void {
-    if (this.state.activityStatuses[id] !== status || !this.visibleActivity(id) || this.isViewing(id)) return;
+  /** Announced completion per session, tied to that turn's `session.updated`.
+   * A redelivered idle carries the same stamp, so it never announces twice —
+   * even minutes later, after the person already read the result. */
+  private announcedCompletion = new Map<string, { at: number; updated: number }>();
+
+  private finishActivity(id: string, _status: SessionStatus, directory?: string): void {
+    if (!this.visibleActivity(id) || this.isViewing(id)) return;
+    // Identity comparison of freshly built status objects never matched, so every
+    // redelivered idle re-announced the same completion. The marker is keyed to
+    // the turn, which is what actually distinguishes two completions.
+    const now = Date.now();
+    const stamped = this.activitySessions.get(id)?.time?.updated ?? 0;
+    const previous = this.announcedCompletion.get(id);
+    if (previous && now - previous.at < 2_000) return;
+    this.announcedCompletion.set(id, { at: now, updated: Math.max(stamped, previous?.updated ?? 0) });
     let unread = { ...this.state.prefs.unreadSessions, [id]: {
       time: Date.now(), directory: this.activityDirectories.get(id) ?? directory,
     } };
@@ -3931,13 +3944,26 @@ class Store {
     const active = running || status.type === "waiting";
     // `session.idle` is emitted by the runtime on settlement. It is completion
     // evidence even if a busy status was missed during reconnect or MCP recovery.
-    const finished = status.type === "idle" && (wasRunning || completed);
+    // `session.idle` is completion evidence even if a busy status was missed
+    // (reconnect, MCP recovery). The same event can also be delivered again and
+    // again, so a completion counts only when that turn was not announced yet.
+    const knownSession = this.activitySessions.get(id) ?? this.state.sessions.find(x => x.id === id)
+      ?? this.state.prefs.projectlessSessions?.find(x => x.id === id);
+    const stamp = knownSession?.time?.updated ?? 0;
+    const announced = this.announcedCompletion.get(id);
+    const redelivered = status.type === "idle" && completed && !!announced
+      && (stamp === 0 || stamp <= announced.updated) && Date.now() - announced.at < 60_000;
+    const finished = status.type === "idle" && (wasRunning || (completed && !redelivered));
     const changed = !previous || previous.type !== status.type;
     // Only entering/leaving active work changes sidebar order. Model-transition
     // waiting/busy flapping inside one turn must not move a row.
     if (changed && ((active && !wasActive) || (finished && wasActive))) this.statusObservedAt.set(id, Date.now());
     if (previous?.type === status.type && !running && !(completed && status.type === "idle")) return;
-    if (running) this.clearUnread(id);
+    if (running) {
+      // A new turn resets the marker: its completion must notify again.
+      this.announcedCompletion.delete(id);
+      this.clearUnread(id);
+    }
     if (running || status.type === "waiting") this.ensureActivitySweep();
     this.mutate(s => ({ activityStatuses: { ...s.activityStatuses, [id]: status } }));
     const known = this.activitySessions.get(id) ?? this.state.sessions.find(x => x.id === id)
