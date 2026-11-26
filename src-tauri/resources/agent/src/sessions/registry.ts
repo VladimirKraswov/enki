@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isReadOnlyOrigin, type MessageDTO, type ModelRef, type PermissionRule, type SessionStatusDTO } from "../protocol.ts";
-import { branchSessionFile, listSessionFiles, openSessionReader } from "../sdk/adapter.ts";
+import { branchSessionFile, listSessionFiles, openReadableSessionReader, openSessionReader } from "../sdk/adapter.ts";
 import { entriesPage, entriesToMessages } from "../sdk/history.ts";
 import { SessionWorker, type WorkerDeps } from "./worker.ts";
 import { moveSessionTranscript } from "./move.ts";
@@ -148,7 +148,7 @@ export class SessionRegistry {
     const file = worker.sessionFile() ?? source.sessionFile;
     if (!file || !fs.existsSync(file)) throw new Error("В этом чате ещё нет сохранённой истории.");
     const sessionDir = this.deps.sessionDir(source.directory);
-    const reader = openSessionReader(file, sessionDir);
+    const reader = openReadableSessionReader(file);
     let leaf: string | null;
     if (messageID === null) {
       leaf = reader.leafId();
@@ -213,7 +213,7 @@ export class SessionRegistry {
     if (worker) return worker.historyPage(limit, before);
     if (!record.sessionFile || !fs.existsSync(record.sessionFile)) return { messages: [] };
     // The persisted reader already owns a private copy of its entries.
-    return entriesPage(record.id, openSessionReader(record.sessionFile, this.deps.sessionDir(record.directory)).branch(), limit, before);
+    return entriesPage(record.id, openReadableSessionReader(record.sessionFile).branch(), limit, before);
   }
 
   /** Adopt transcripts found in a directory's session folder (e.g. copied Pi CLI chats). */

@@ -487,8 +487,55 @@ export function openSessionReader(file: string, _sessionDir: string): SessionRea
   return { ...reader, file };
 }
 
+/** Tail window big enough for a readable history page and a fresh context. */
+const WINDOW_BUDGET = 24 * 1024 * 1024;
+
+/**
+ * Reader for a transcript that is too large for the exhaustive parse: the
+ * newest entries are loaded in order and the walk stops where the window ends.
+ * The chat stays readable and branchable; older entries stay on disk untouched.
+ */
+function readBoundedEntries(file: string): { entries: FileEntry[]; header: { version?: number; cwd: string; id: string }; truncated: boolean } {
+  const headerLine = readHeaderLine(file);
+  if (!headerLine) throw new Error("Заголовок истории Pi повреждён.");
+  const header = JSON.parse(headerLine) as { type?: string; version?: number; cwd?: string; id?: string };
+  if (header.type !== "session" || typeof header.cwd !== "string" || typeof header.id !== "string")
+    throw new Error("Заголовок истории Pi повреждён.");
+  const window = scanTail(file, WINDOW_BUDGET).lines;
+  const entries: FileEntry[] = [];
+  for (const line of window) {
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { throw new Error("Строка истории Pi повреждена."); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Строка истории Pi повреждена.");
+    const entry = value as FileEntry;
+    if (entry.type === "session") continue;
+    entries.push(entry);
+  }
+  // Keep only the newest parent chain that is fully inside the window.
+  const byId = new Map((entries as { id: string; parentId?: string | null }[]).map(entry => [entry.id, entry]));
+  const newest = entries.at(-1) as unknown as { id: string } | undefined;
+  const chain: FileEntry[] = [];
+  let cursor = newest ? byId.get(newest.id) : undefined;
+  while (cursor) { chain.unshift(cursor as unknown as FileEntry); cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined; }
+  return { entries: chain, header: { version: header.version ?? 3, cwd: header.cwd, id: header.id }, truncated: true };
+}
+
+function readerFrom(entries: FileEntry[], header: { version?: number; cwd: string; id: string }, file: string): SessionReader {
+  const reader = readerFromManager(SessionManager.inMemory(header.cwd, undefined, structuredClone(entries)));
+  return { ...reader, file };
+}
+
 export function sessionReaderOf(session: SdkSession): SessionReader {
   return readerFromManager(session.sessionManager);
+}
+
+/** Read paths (history, branch) use the bounded reader for oversized files:
+ * refusing to open a 129 MB chat left the user with no way to continue. */
+export function openReadableSessionReader(file: string): SessionReader {
+  const size = fs.statSync(file).size;
+  if (size <= FULL_READ_BUDGET) return openSessionReader(file, "");
+  const { entries, header } = readBoundedEntries(file);
+  return readerFrom([{ type: "session", ...header } as FileEntry, ...entries], header, file);
 }
 
 /**
@@ -552,7 +599,7 @@ export async function listSessionFiles(cwd: string, sessionDir: string): Promise
  * The source file is opened by a dedicated manager that never appends to it.
  */
 export function branchSessionFile(sourceFile: string, sessionDir: string, leafId: string | null, cwd: string, newId: string): string {
-  const source = openSessionReader(sourceFile, sessionDir), all = source.all();
+  const source = openReadableSessionReader(sourceFile), all = source.all();
   const byId = new Map(all.map(entry => [entry.id, entry]));
   const branch: SdkEntry[] = []; let next = leafId;
   while (next !== null) {
