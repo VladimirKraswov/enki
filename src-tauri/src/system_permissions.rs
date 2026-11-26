@@ -208,6 +208,45 @@ pub fn system_permissions_restart(
     app.restart()
 }
 
+/// Only the system preferences scheme may be opened this way. The frontend
+/// builds a fixed, short URL for the exact privacy pane; everything else is
+/// rejected so the `open` command can never be pointed at an arbitrary target.
+#[cfg(target_os = "macos")]
+fn valid_settings_url(url: &str) -> bool {
+    url.len() <= 256 && url.starts_with("x-apple.systempreferences:")
+}
+
+/// Open the exact macOS Settings pane. The opener plugin refuses the
+/// `x-apple.systempreferences:` scheme, so this uses the system `open` command
+/// and allows only that one scheme.
+#[tauri::command]
+pub fn system_permissions_open_settings(
+    window: tauri::WebviewWindow,
+    url: String,
+) -> Result<(), String> {
+    main_window(&window)?;
+    #[cfg(target_os = "macos")]
+    {
+        if !valid_settings_url(&url) {
+            return Err("Некорректный адрес настроек macOS".into());
+        }
+        let status = Command::new("/usr/bin/open")
+            .arg(&url)
+            .status()
+            .map_err(|error| format!("Не удалось открыть настройки macOS: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Не удалось открыть раздел настроек macOS".into())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        Err("Системные разрешения macOS доступны только на macOS".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +267,18 @@ mod tests {
         // Read-only: this test must never open a prompt or change TCC.
         let _ = macos::screen_access();
         let _ = macos::accessibility_access();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn settings_url_allows_only_the_system_preferences_scheme() {
+        assert!(valid_settings_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ));
+        assert!(!valid_settings_url("https://example.com"));
+        assert!(!valid_settings_url("file:///etc/passwd"));
+        assert!(!valid_settings_url(""));
+        let overlong = format!("x-apple.systempreferences:{}", "a".repeat(300));
+        assert!(!valid_settings_url(&overlong));
     }
 }

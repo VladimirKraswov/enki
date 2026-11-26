@@ -13,6 +13,11 @@ import { RemoteSyncTransport, type RemoteCommand } from "./remote/sync.ts";
 import { hubRequest } from "./remote/hub.ts";
 export { fitRemoteDetail } from "./remote/snapshot.ts";
 
+function newestModel(runtime: Runtime): ModelRef | null {
+  const records = runtime.catalog.all().filter(r => r.model).sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
+  return records[0]?.model ?? null;
+}
+
 function text(value: unknown, limit = 200_000): string {
   if (typeof value !== "string") throw new Error("Нужен текст.");
   if (value.length > limit) throw new Error("Текст слишком длинный.");
@@ -56,8 +61,10 @@ export class RemoteControl {
       case "prompt": {
         const record = this.record(command);
         if (isReadOnlyOrigin(record.origin)) throw new Error("Архив доступен только для чтения.");
-        const model = payload.model;
-        if (!isModelRef(model)) throw new Error("Выберите модель.");
+        const rawModel = payload.model;
+        if (rawModel !== undefined && rawModel !== null && !isModelRef(rawModel)) throw new Error("Некорректная модель.");
+        const model = isModelRef(rawModel) ? rawModel : (record.model ?? newestModel(this.runtime) ?? this.runtime.configDefaults().model);
+        if (!model) throw new Error("Выберите модель.");
         const value = text(payload.text);
         if (!value.trim()) throw new Error("Пустой запрос.");
         if (this.runtime.dispatcher.inFlight(record.id)) {
@@ -101,13 +108,14 @@ export class RemoteControl {
       case "session.create": {
         const directory = text(payload.directory, 4096);
         if (!path.isAbsolute(directory) || !validDirectory(directory)) throw new Error("Папка проекта недоступна на этом компьютере.");
-        const model = payload.model;
-        if (model !== undefined && model !== null && !isModelRef(model)) throw new Error("Некорректная модель.");
-        const created = this.runtime.registry.create({ directory, model: isModelRef(model) ? model : this.runtime.configDefaults().model });
+        const rawModel = payload.model;
+        if (rawModel !== undefined && rawModel !== null && !isModelRef(rawModel)) throw new Error("Некорректная модель.");
+        const fallback = newestModel(this.runtime) ?? this.runtime.configDefaults().model;
+        const created = this.runtime.registry.create({ directory, model: isModelRef(rawModel) ? rawModel : fallback });
         let receipt: unknown = null;
         const prompt = payload.prompt === undefined ? "" : text(payload.prompt);
         if (prompt.trim()) {
-          const selected = created.model ?? this.runtime.configDefaults().model;
+          const selected = created.model ?? fallback;
           if (!selected) throw new Error("Выберите модель для нового задания.");
           receipt = this.runtime.dispatcher.submit({ id: `${command.id}:prompt`, sessionID: created.id, directory,
             kind: "prompt", payload: { parts: [{ type: "text", text: prompt }], model: selected } }, { source: "manual", sourceId: null });

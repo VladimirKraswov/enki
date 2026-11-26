@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+const native = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
 import {
+  openPermissionSettings,
   permissionRows,
   permissionSettingsUrl,
   shouldOpenPermissionCenter,
@@ -59,5 +62,12 @@ describe("macOS permission center", () => {
     expect(permissionSettingsUrl("fullDisk")).toContain("Privacy_AllFiles");
     expect(permissionSettingsUrl("files")).toContain("Privacy_FilesAndFolders");
     expect(PERMISSION_VERSION_KEY).toBe("enki.permissions.checked-version");
+  });
+
+  it("opens the macOS privacy pane through the native command, not the URL opener", async () => {
+    await openPermissionSettings("accessibility");
+    expect(native.invoke).toHaveBeenCalledWith("system_permissions_open_settings", {
+      url: permissionSettingsUrl("accessibility"),
+    });
   });
 });

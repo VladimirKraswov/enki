@@ -20,17 +20,16 @@ pub const ERR_CROSS_DEVICE: &str =
 pub const ERR_EXISTS: &str = "CONFIG_GENERATION_EXISTS: поколение настроек уже опубликовано";
 
 fn linked(meta: &Metadata) -> bool {
-    if meta.file_type().is_symlink() {
-        return true;
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if meta.file_attributes() & 0x400 != 0 {
-            return true;
-        }
+        // FILE_ATTRIBUTE_REPARSE_POINT (0x400): junction/symlink on Windows.
+        meta.file_type().is_symlink() || (meta.file_attributes() & 0x400 != 0)
     }
-    false
 }
 
 /// Every absolute ancestor (inclusive) must exist as a real directory.
