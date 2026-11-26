@@ -2,10 +2,10 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const f = vi.hoisted(() => ({ state: {} as any, invoke: vi.fn(), save: vi.fn(), refresh: vi.fn(), connect: vi.fn() }));
+const f = vi.hoisted(() => ({ state: {} as any, invoke: vi.fn(), save: vi.fn(), refresh: vi.fn(), connect: vi.fn(), owner: vi.fn() }));
 vi.mock("../src/state/store", () => ({ useAppState: () => f.state, store: {
   get state() { return f.state; }, currentHost: () => null, mcpServerStatuses: () => [], mcpConnectionError: () => null,
-  capabilitiesCommitted: f.refresh, connectCurrentMcp: f.connect,
+  capabilitiesCommitted: f.refresh, connectCurrentMcp: f.connect, markComputerOwner: f.owner,
 } }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: f.invoke }));
 vi.mock("../src/native/platform", () => ({ platform: () => "macos" }));

@@ -163,13 +163,18 @@ fn copy_and_publish(
 mod tests {
     use super::*;
     fn fixture() -> PathBuf {
+        // pid + nanos can repeat across threads of one test binary, and then two
+        // tests share a root: one removes the other's files and the failure looks
+        // random. A process-wide counter makes every root unique.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "oc-browser-migration-{}-{}",
+            "oc-browser-migration-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(root.join("legacy/profile")).unwrap();
         std::fs::create_dir_all(root.join("shared")).unwrap();

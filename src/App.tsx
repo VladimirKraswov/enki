@@ -51,6 +51,41 @@ export default function App() {
     if (s.connection.phase === "connected") void store.ensureHubModels?.().catch(() => {});
   }, [s.connection.phase, s.prefs.hubModels?.mode]);
 
+  // An update replaces the bundle and its runtime artifact. The owner's computer
+  // access must survive that: re-apply the remembered decision once per version.
+  useEffect(() => {
+    if (s.connection.phase !== "connected") return;
+    let cancelled = false;
+    void (async () => {
+      // Any unavailable piece (a host without the desktop store, a hidden setting)
+      // must stay a no-op: startup never fails because of this repair.
+      try {
+        const { restoreComputerAfterUpdate } = await import("./computer/restore");
+        const { invoke } = await import("@tauri-apps/api/core");
+        const { COMPUTER_SERVER, setReservedServer } = await import("./capabilities/reserved");
+        const { invalidateCapabilities } = await import("./capabilities/integration");
+        const { isNative } = await import("./native/platform");
+        const { isLocalComputer } = await import("./state/computer");
+        if (cancelled) return;
+        await restoreComputerAfterUpdate({
+          native: isNative(),
+          local: isLocalComputer(store.state.prefs.endpoint, !!store.currentHost?.()),
+          accessMode: () => store.getAccessMode(),
+          ownedByOwner: () => !!store.state.prefs.computerEnabledByOwner,
+          checkedVersion: () => store.state.prefs.computerCheckedVersion,
+          markChecked: (version) => store.markComputerChecked(version),
+          status: () => invoke("computer_status"),
+          setPolicy: (fullAccess) => invoke("computer_set_policy", { fullAccess }),
+          repairBridge: () => invoke("shared_install", { nodeProgram: store.state.prefs.pi?.nodeProgram ?? store.state.prefs.browser?.nodeProgram ?? null }),
+          enableEntry: () => setReservedServer(COMPUTER_SERVER, true),
+          refreshCapabilities: async () => { invalidateCapabilities(); await store.capabilitiesCommitted(null); },
+          report: (message) => store.setUi({ toast: message }),
+        });
+      } catch { /* never blocks startup */ }
+    })();
+    return () => { cancelled = true; };
+  }, [s.connection.phase]);
+
   useEffect(() => {
     const timer = window.setInterval(() => void store.refreshPiActivity(), 5000);
     return () => window.clearInterval(timer);

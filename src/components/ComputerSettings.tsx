@@ -44,6 +44,7 @@ export function ComputerSettings(){
       // CAS update of Enki's reserved registry entry; a foreign entry with this id is never replaced.
       try{await setReservedServer(COMPUTER_SERVER,enabled);written=true;}
       catch(e){if(enabled&&!status.enabled)await invoke("computer_set_enabled",{enabled:false});throw e;}
+      store.markComputerOwner(enabled);
       invalidateCapabilities();
       // The reserved registry entry is committed: idle chats reopen with it, busy ones once idle.
       const refreshed=await store.capabilitiesCommitted(null);

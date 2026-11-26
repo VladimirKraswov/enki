@@ -3185,6 +3185,18 @@ class Store {
     return !!id && this.pendingInteraction(id).permissions.length > 0 && !this.isLegacySession(id);
   }
 
+  /** Remember the owner's own decision about computer control. */
+  markComputerOwner(enabled: boolean): void {
+    this.mutate((s) => ({ prefs: { ...s.prefs, computerEnabledByOwner: enabled } }));
+    this.persistPrefs();
+  }
+
+  markComputerChecked(version: string): void {
+    if (this.state.prefs.computerCheckedVersion === version) return;
+    this.mutate((s) => ({ prefs: { ...s.prefs, computerCheckedVersion: version } }));
+    this.persistPrefs();
+  }
+
   /** Persist the computer-control policy that matches the chat's access mode. */
   async syncComputerPolicy(mode: AccessMode | "custom" = this.getAccessMode()): Promise<void> {
     try {

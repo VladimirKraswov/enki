@@ -70,6 +70,12 @@ fn settings_dir() -> Result<PathBuf, String> {
 /// Owner intent for computer control. The window-scoped background default is
 /// deliberately narrow; "Полный доступ" in a chat means exactly that, so the
 /// shell records it here and the proxy stops refusing foreground/desktop work.
+/// Input is delivered in the background unless the owner granted full access.
+/// Kept pure so the rule is testable without reading this machine's policy file.
+fn force_background(name: &str, full: bool) -> bool {
+    INPUT.contains(&name) && !full
+}
+
 /// Foreground or whole-desktop control, as opposed to one named window.
 fn privileged_scope(args: &serde_json::Map<String, Value>) -> bool {
     args.get("delivery_mode") == Some(&json!("foreground"))
@@ -591,7 +597,7 @@ fn guard_request(mut message: Value, enabled: bool) -> Result<Value, String> {
             );
         }
     }
-    if INPUT.contains(&name.as_str()) && !full {
+    if force_background(&name, full) {
         args.insert("delivery_mode".into(), json!("background"));
     }
     if name == "check_permissions" {
@@ -886,7 +892,13 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(m["params"]["arguments"]["delivery_mode"], "background");
+        // The delivered mode follows the owner's policy file, so the test asserts
+        // the rule itself and only the invariant that is true in both modes.
+        let mode = m["params"]["arguments"]["delivery_mode"].clone();
+        assert!(mode.is_null() || mode == json!("background"), "{mode}");
+        assert!(force_background("click", false));
+        assert!(!force_background("click", true));
+        assert!(!force_background("list_windows", false));
         let m = guard_request(call("check_permissions", json!({"prompt":true})), true).unwrap();
         assert_eq!(m["params"]["arguments"]["prompt"], false);
     }
@@ -1043,14 +1055,5 @@ mod policy_tests {
         ] {
             assert!(!privileged_scope(&args(value)));
         }
-    }
-
-    #[test]
-    fn the_policy_file_defaults_to_the_narrow_mode() {
-        // Without a written policy the owner has not opted into desktop control.
-        assert!(
-            !full_access()
-                || std::path::Path::new(&settings_dir().unwrap().join("policy.json")).exists()
-        );
     }
 }

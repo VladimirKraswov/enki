@@ -76,6 +76,10 @@ export interface PiSettings {
 export interface Prefs {
   workshop?: import("../workshop/workspace").WorkshopRecord;
   recoveredOperations?: string[];
+  /** The owner enabled computer control; re-applied after every update. */
+  computerEnabledByOwner?: boolean;
+  /** Version whose post-update computer restore already ran. */
+  computerCheckedVersion?: string;
   /** Pre-dispatch refusals the owner explicitly hid from the chat. */
   dismissedOperations?: string[];
   /** Audio is removed only after its text and receipt are durably saved together. */
