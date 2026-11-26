@@ -255,9 +255,13 @@ export function ownedSessionFile(file: string, shard: string): string {
   const root = fs.realpathSync(path.dirname(shard)), resolved = fs.realpathSync(file);
   if (fs.lstatSync(file).isSymbolicLink() || !resolved.startsWith(root + path.sep))
     throw new Error("Историю можно изменять только в рабочем хранилище Enki; сначала импортируйте внешний файл.");
-  const reader = openSessionReader(resolved, shard);
-  if (reader.header && readEntries(resolved).header.version !== 3)
+  // Format check without a full parse: the header line carries the version.
+  const headerLine = readHeaderLine(resolved);
+  const header = headerLine ? (JSON.parse(headerLine) as { version?: number; type?: string }) : null;
+  if (!header || header.type !== "session") throw new Error("Заголовок истории Pi повреждён.");
+  if ((header.version ?? 1) !== 3)
     throw new Error("Старый формат Pi должен быть импортирован в рабочую копию до запуска.");
+  openReadableSessionReader(resolved);
   return resolved;
 }
 

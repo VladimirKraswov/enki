@@ -198,7 +198,7 @@ export class SessionRegistry {
     const worker = this.workers.get(record.id);
     if (worker) return worker.history();
     if (!record.sessionFile || !fs.existsSync(record.sessionFile)) return [];
-    return entriesToMessages(record.id, openSessionReader(record.sessionFile, this.deps.sessionDir(record.directory)).branch());
+    return entriesToMessages(record.id, openReadableSessionReader(record.sessionFile).branch());
   }
 
   /** One history page (same cursor semantics as pageMessages over history()),

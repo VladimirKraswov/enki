@@ -8,7 +8,7 @@ import { SessionUi, type WorkerUiPorts } from "../plugin-ui/runtime.ts";
 import type { CommandReceipt, MessageDTO, ModelRef, PromptCommand, PromptPart, SessionStatusDTO } from "../protocol.ts";
 import { steeringText } from "../policy/prompt.ts";
 import {
-  ownedSessionFile, appendRecoveryToolResult, bindSessionUi, openSessionReader, contextUsage, estimateSessionContext, findModel, isThinkingLevel, openAgentSession, sessionReaderOf, shutdownSession,
+  ownedSessionFile, appendRecoveryToolResult, bindSessionUi, openSessionReader, openReadableSessionReader, contextUsage, estimateSessionContext, findModel, isThinkingLevel, openAgentSession, sessionReaderOf, shutdownSession,
   IMAGE_TOKEN_ALLOWANCE, type SessionContextEstimate,
   setSessionCompaction, catalogSnapshot,
   type SdkAssistantMessage, type SdkEvent, type SdkImage, type SdkModel, type SdkModelRuntime, type SdkSession, type SdkSessionRuntime, type SdkCommandActions, type ResourceSpec, type SettingsSpec,
@@ -98,7 +98,9 @@ export interface ModelReadiness {
   target?(model: ModelRef): Promise<void>;
 }
 
-export interface TransitionResult { compacted: boolean; tokensBefore: number | null; tokensAfter: number | null; limit: number | null }
+export interface TransitionResult {
+  /** The context had to be reset without asking: history exceeded every window. */
+  autoReset?: boolean; compacted: boolean; tokensBefore: number | null; tokensAfter: number | null; limit: number | null }
 
 export interface TargetBudget { window: number; outputReserve: number; limit: number }
 
@@ -479,7 +481,7 @@ export class SessionWorker {
         // A transcript whose tail does not carry them (unusually large entry)
         // falls back to the exhaustive, strictly validated read exactly once.
         if (ids.size !== wanted.size) {
-          ids = new Set(openSessionReader(file, this.deps.sessionDir(this.directory, this.id)).all().map(entry => entry.id));
+          ids = new Set(openReadableSessionReader(file).all().map(entry => entry.id));
         }
         for (let index = this.correlations.length - 1; index >= 0; index--) {
           const pending = this.correlations[index];
@@ -956,8 +958,16 @@ export class SessionWorker {
       throw new ContextTransitionError("source_model_missing", `История не помещается в ${name}, а текущая модель для сжатия не определена. История сохранена, модель не переключена.`, ["larger_model", "new_session_handoff", "reset_context"]);
     // The summary request itself must fit the SOURCE window; never feed the
     // whole old history to a model that cannot hold it.
-    if ((before.usage ?? before.estimate) > source.contextWindow)
-      throw new ContextTransitionError("handoff_required", `История превышает контекст и текущей модели ${sourceRef.providerID}/${sourceRef.modelID}, поэтому её нельзя сжать перед переходом в ${name}. История сохранена; выберите модель с большим контекстом, сбросьте контекст или начните новый чат с ограниченной передачей.`, ["larger_model", "new_session_handoff", "reset_context"]);
+    if ((before.usage ?? before.estimate) > source.contextWindow) {
+      // The history is larger than the window of the model that would summarise
+      // it, so no summary can ever be produced. Refusing here left a large chat
+      // permanently unusable ("запрос не отправлен"); the honest recovery is the
+      // context reset: the transcript stays on screen and on disk, the model
+      // simply stops receiving it.
+      this.applyContextReset(name, before.tokens, incoming, budget.limit, result, progress, fenced);
+      result.autoReset = true;
+      return;
+    }
     progress("summary_model", { model: sourceRef });
     // A quota/auth/unreachable source model cannot summarize at all; a huge
     // summary call would only repeat the same provider verdict. The tiny probe
