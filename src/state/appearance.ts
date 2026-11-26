@@ -51,7 +51,11 @@ export function applyAppearance(raw: unknown): void {
   root.style.setProperty("--ui-font-size", `${a.uiFontSize}px`);
   root.style.setProperty("--chat-font-size", `${a.chatFontSize}px`);
   root.style.setProperty("--code-font-size", `${a.codeFontSize}px`);
-  root.style.setProperty("--chat-width", a.chatWidth === "full" ? "100%" : a.chatWidth === "wide" ? "1060px" : "830px");
+  // A fixed 830 px column wastes a wide screen and squeezes tables. The presets
+  // scale with the window and keep a readable floor on smaller ones.
+  root.style.setProperty("--chat-width", a.chatWidth === "full" ? "100%"
+    : a.chatWidth === "wide" ? "clamp(1060px, 78vw, 1800px)"
+    : "clamp(830px, 58vw, 1400px)");
   root.style.setProperty("--chat-line-height", a.lineSpacing === "relaxed" ? "1.85" : "1.6");
   const keys = ["--accent", "--accent-fill", "--accent-on", "--accent-soft"];
   if (a.accent === "neutral") keys.forEach(k => root.style.removeProperty(k));

@@ -571,10 +571,20 @@ body[data-session-dragging] .session-item { cursor: grabbing; }
   background: none;
   padding: 0;
 }
+/* A wide table must keep readable columns: it scrolls sideways instead of
+   breaking every word to one letter per line on a narrow chat column. */
+.md .md-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 8px 0;
+}
 .md table {
   border-collapse: collapse;
   font-size: 0.857143rem;
+  width: max-content;
+  min-width: 100%;
 }
+.md th, .md td { min-width: 4.5ch; }
 .md th,
 .md td {
   border: 1px solid var(--border);

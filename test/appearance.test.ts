@@ -30,7 +30,7 @@ it("applies independent font/width/spacing variables and clears a custom accent 
   applyAppearance({ ...DEFAULT_APPEARANCE, uiFontSize: 16, chatFontSize: 22, codeFontSize: 18, accent: "#5599ee", chatWidth: "wide", lineSpacing: "relaxed" });
   const style = document.documentElement.style;
   expect(style.getPropertyValue("--ui-font-size")).toBe("16px"); expect(style.getPropertyValue("--chat-font-size")).toBe("22px"); expect(style.getPropertyValue("--code-font-size")).toBe("18px");
-  expect(style.getPropertyValue("--chat-width")).toBe("1060px"); expect(style.getPropertyValue("--chat-line-height")).toBe("1.85");
+  expect(style.getPropertyValue("--chat-width")).toMatch(/clamp\(1060px, 78vw, 1800px\)/); expect(style.getPropertyValue("--chat-line-height")).toBe("1.85");
   applyAppearance(DEFAULT_APPEARANCE); expect(style.getPropertyValue("--accent")).toBe(""); expect(style.getPropertyValue("--accent-fill")).toBe(""); expect(style.getPropertyValue("--chat-font-size")).toBe("14px");
 });
 it("keeps the CPU helper address global when switching OpenCode servers", () => {

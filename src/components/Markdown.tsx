@@ -37,6 +37,8 @@ const components:Components={
  },
  // Markdown images remain bounded; late dimensions are handled by the viewport observer.
  img({src,alt}) {return <img src={src} alt={alt??''} loading="lazy" referrerPolicy="no-referrer"/>;},
+ // Tables scroll themselves: a squeezed table is worse than a horizontal scroll.
+ table({children}) {return <div className="md-table-scroll"><table>{children}</table></div>;},
 };
 export function needsTextPaging(source:string) {
  if(source.length>32768)return true;
