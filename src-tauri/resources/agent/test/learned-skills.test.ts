@@ -10,7 +10,9 @@ it("writes a valid SKILL.md with frontmatter that the SDK can discover", () => {
   expect(saved.name).toBe("release-check");
   const body = fs.readFileSync(saved.path, "utf8");
   expect(body).toContain("name: release-check");
-  expect(body).toContain("description: Как проверять релиз");
+  // Quoted on purpose: a plain scalar with ": " would be rejected by YAML and the
+  // skill would silently vanish from the catalogue.
+  expect(body).toContain('description: "Как проверять релиз"');
   expect(body).toContain("1. Соберите");
   expect(saved.path).toBe(path.join(root, "release-check", "SKILL.md"));
 });

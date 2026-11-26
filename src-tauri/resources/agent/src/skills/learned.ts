@@ -17,7 +17,10 @@ export function saveLearnedSkill(root: string, input: LearnedSkillInput): { path
   const directory = path.join(root, name);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const file = path.join(directory, "SKILL.md");
-  const body = `---\nname: ${name}\ndescription: ${description}\n---\n\n${content}\n`;
+  // YAML: a plain scalar containing ": " (or " #") stops being a scalar and the
+  // whole skill is silently dropped from the catalogue. A double-quoted scalar
+  // keeps any description intact — this is also how a JSON string is encoded.
+  const body = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${content}\n`;
   fs.writeFileSync(file, body, { mode: 0o600 });
   return { path: file, name };
 }
