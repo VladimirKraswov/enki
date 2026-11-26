@@ -67,6 +67,46 @@ fn settings_dir() -> Result<PathBuf, String> {
     Ok(crate::paths::app_data_dir()?.join("computer"))
 }
 
+/// Owner intent for computer control. The window-scoped background default is
+/// deliberately narrow; "Полный доступ" in a chat means exactly that, so the
+/// shell records it here and the proxy stops refusing foreground/desktop work.
+/// Foreground or whole-desktop control, as opposed to one named window.
+fn privileged_scope(args: &serde_json::Map<String, Value>) -> bool {
+    args.get("delivery_mode") == Some(&json!("foreground"))
+        || args.get("scope") == Some(&json!("desktop"))
+        || args.get("capture_scope") == Some(&json!("desktop"))
+        || args
+            .get("target")
+            .is_some_and(|target| target["kind"] == "desktop")
+}
+
+fn full_access() -> bool {
+    let Ok(dir) = settings_dir() else {
+        return false;
+    };
+    let Ok(raw) = fs::read_to_string(dir.join("policy.json")) else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&raw)
+        .ok()
+        .and_then(|value| value.get("fullAccess").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn computer_set_policy(full_access: bool) -> Result<Value, String> {
+    let dir = settings_dir()?;
+    fs::create_dir_all(&dir).map_err(|_| "Не удалось создать каталог настроек компьютера.")?;
+    let path = dir.join("policy.json");
+    let text = serde_json::to_string(&json!({ "fullAccess": full_access }))
+        .map_err(|_| "Не удалось сохранить политику управления компьютером.")?;
+    let temp = path.with_extension("json.tmp");
+    fs::write(&temp, text).map_err(|_| "Не удалось записать политику управления компьютером.")?;
+    fs::rename(&temp, &path)
+        .map_err(|_| "Не удалось сохранить политику управления компьютером.")?;
+    Ok(json!({ "fullAccess": full_access }))
+}
+
 // Prefer the official installer, then versioned per-user binary installs.
 // Version directories are bounded and restricted to numeric dotted versions;
 // discovery never executes a shell or searches the current working directory.
@@ -526,12 +566,9 @@ fn guard_request(mut message: Value, enabled: bool) -> Result<Value, String> {
         }
         args.insert("target".into(), decoded);
     }
-    if args.get("delivery_mode") == Some(&json!("foreground"))
-        || args.get("scope") == Some(&json!("desktop"))
-        || args.get("capture_scope") == Some(&json!("desktop"))
-        || args.get("target").is_some_and(|t| t["kind"] == "desktop")
-    {
-        return Err("Доступны только фоновые действия в отдельном окне. Управление рабочим столом и захват вашей мыши выключены. Сообщите пользователю, если приложение требует переднего плана.".into());
+    let full = full_access();
+    if !full && privileged_scope(args) {
+        return Err("Доступны только фоновые действия в отдельном окне: включите «Полный доступ» в чате, если приложению нужен передний план. Управление рабочим столом и ваша мышь в этом режиме не захватываются.".into());
     }
     if WINDOW_ACTIONS.contains(&name.as_str()) {
         let positive = |v: Option<&Value>| v.and_then(Value::as_u64).is_some_and(|id| id > 0);
@@ -554,7 +591,7 @@ fn guard_request(mut message: Value, enabled: bool) -> Result<Value, String> {
             );
         }
     }
-    if INPUT.contains(&name.as_str()) {
+    if INPUT.contains(&name.as_str()) && !full {
         args.insert("delivery_mode".into(), json!("background"));
     }
     if name == "check_permissions" {
@@ -973,5 +1010,47 @@ mod tests {
         let official = make("Programs/Cua/cua-driver/bin/cua-driver.exe");
         assert_eq!(windows_driver_path(&root), official);
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    fn args(value: Value) -> serde_json::Map<String, Value> {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn foreground_and_desktop_requests_are_privileged_scopes() {
+        assert!(privileged_scope(&args(
+            json!({"delivery_mode":"foreground"})
+        )));
+        assert!(privileged_scope(&args(json!({"scope":"desktop"}))));
+        assert!(privileged_scope(&args(json!({"capture_scope":"desktop"}))));
+        assert!(privileged_scope(&args(
+            json!({"target":{"kind":"desktop"}})
+        )));
+    }
+
+    #[test]
+    fn window_scoped_actions_stay_unprivileged() {
+        for value in [
+            json!({"delivery_mode":"background"}),
+            json!({"target":{"kind":"window","pid":7,"window_id":3}}),
+            json!({"scope":"window"}),
+            json!({}),
+        ] {
+            assert!(!privileged_scope(&args(value)));
+        }
+    }
+
+    #[test]
+    fn the_policy_file_defaults_to_the_narrow_mode() {
+        // Without a written policy the owner has not opted into desktop control.
+        assert!(
+            !full_access()
+                || std::path::Path::new(&settings_dir().unwrap().join("policy.json")).exists()
+        );
     }
 }

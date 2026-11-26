@@ -206,6 +206,7 @@ pub fn run() {
             sound::completion_chime,
             computer::computer_status,
             computer::computer_set_enabled,
+            computer::computer_set_policy,
             computer::computer_action,
             system_permissions::system_permissions_status,
             system_permissions::system_permission_request,

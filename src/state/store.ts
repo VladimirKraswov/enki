@@ -3185,7 +3185,18 @@ class Store {
     return !!id && this.pendingInteraction(id).permissions.length > 0 && !this.isLegacySession(id);
   }
 
+  /** Persist the computer-control policy that matches the chat's access mode. */
+  async syncComputerPolicy(mode: AccessMode | "custom" = this.getAccessMode()): Promise<void> {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("computer_set_policy", { fullAccess: mode === "full" });
+    } catch { /* An absent native computer keeps its own defaults. */ }
+  }
+
   async setAccessMode(mode: AccessMode) {
+    // Computer control follows the same switch: "Полный доступ" unlocks
+    // foreground/desktop automation, anything narrower keeps the safe default.
+    void this.syncComputerPolicy(mode);
     if (!this.accessChangeAllowed()) {
       this.patchUi({ toast: "Остановите ответ, чтобы изменить режим доступа." });
       return;
