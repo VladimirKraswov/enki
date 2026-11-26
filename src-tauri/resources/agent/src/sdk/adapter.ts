@@ -39,6 +39,7 @@ import type {
   ToolResultMessage, UserMessage,
 } from "@earendil-works/pi-ai";
 import fs from "node:fs";
+import { FULL_READ_BUDGET, readHeaderLine, scanHead, scanTail, HEAD_BUDGET, TAIL_BUDGET } from "../sessions/tail-scan.ts";
 import path from "node:path";
 import { ScopedResources } from "../plugin-ui/scoped-resources.ts";
 import { SDK_VERSION } from "../protocol.ts";
@@ -444,7 +445,9 @@ function readEntries(file: string): { entries: FileEntry[]; header: { version?: 
   let content: string;
   try {
     const before = fs.fstatSync(fd);
-    if (!before.isFile() || before.size > 128 * 1024 * 1024) throw new Error("История Pi имеет неверный тип или слишком велика.");
+    if (!before.isFile()) throw new Error("История Pi не является обычным файлом.");
+    if (before.size > 128 * 1024 * 1024)
+      throw new Error(`История Pi слишком велика (${Math.round(before.size / 1024 / 1024)} МБ). Создайте ветку или новый чат: полное чтение ограничено 128 МБ.`);
     content = fs.readFileSync(fd, "utf8");
     const after = fs.fstatSync(fd);
     if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ino !== after.ino) throw new Error("История изменилась во время чтения.");
@@ -488,6 +491,46 @@ export function sessionReaderOf(session: SdkSession): SessionReader {
   return readerFromManager(session.sessionManager);
 }
 
+/**
+ * Listing metadata for one transcript. Small files keep the exhaustive read;
+ * a large one is summarised from a bounded head (real first message, used as a
+ * title) and a bounded tail (proof the file still parses), so a chat that grew
+ * past the full-read budget no longer disappears from the folder.
+ */
+function sessionFileInfo(file: string, cwd: string, sessionDir: string): SdkSessionInfo {
+  const stat = fs.statSync(file);
+  if (stat.size <= FULL_READ_BUDGET) {
+    const reader = openSessionReader(file, sessionDir);
+    const messages = reader.all().filter(entry => entry.type === "message");
+    const texts = messages.flatMap(entry => entry.type === "message" && entry.message.role === "user" ?
+      typeof entry.message.content === "string" ? [entry.message.content] : entry.message.content.flatMap(block => block.type === "text" ? [block.text] : []) : []);
+    return { path: file, id: reader.id, cwd, name: reader.name, parentSessionPath: reader.header?.parentSession,
+      created: new Date(reader.header?.timestamp ?? 0), modified: stat.mtime,
+      messageCount: messages.length, firstMessage: texts[0] ?? "", allMessagesText: texts.join("\n") };
+  }
+  const headerLine = readHeaderLine(file);
+  const header = headerLine ? (JSON.parse(headerLine) as { id?: unknown; cwd?: unknown; timestamp?: unknown; parentSession?: unknown }) : null;
+  if (!header || typeof header.id !== "string" || typeof header.cwd !== "string") throw new Error("Заголовок истории Pi повреждён.");
+  const head = scanHead(file, HEAD_BUDGET);
+  const tail = scanTail(file, TAIL_BUDGET);
+  if (!head.length && !tail.lines.length) throw new Error("Строка истории Pi повреждена.");
+  let firstMessage = "";
+  for (const line of [...head, ...tail.lines]) {
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { continue; }
+    const entry = value as { type?: string; message?: { role?: string; content?: unknown } };
+    if (entry.type !== "message" || entry.message?.role !== "user") continue;
+    const content = entry.message.content;
+    const textValue = typeof content === "string" ? content
+      : Array.isArray(content) ? content.flatMap(block => (block as { type?: string; text?: string }).type === "text" ? [String((block as { text?: string }).text ?? "")] : []).join("\n") : "";
+    if (textValue.trim()) { firstMessage = textValue; break; }
+  }
+  const count = (lines: string[]) => lines.filter(line => line.includes('"type":"message"')).length;
+  return { path: file, id: header.id, cwd, name: undefined, parentSessionPath: typeof header.parentSession === "string" ? header.parentSession : undefined,
+    created: new Date(typeof header.timestamp === "string" ? header.timestamp : 0), modified: stat.mtime,
+    messageCount: count(head) + count(tail.lines), firstMessage, allMessagesText: firstMessage };
+}
+
 export async function listSessionFiles(cwd: string, sessionDir: string): Promise<SdkSessionInfo[]> {
   if (!fs.existsSync(sessionDir)) return [];
   const result: SdkSessionInfo[] = [];
@@ -496,15 +539,10 @@ export async function listSessionFiles(cwd: string, sessionDir: string): Promise
     const file = path.join(sessionDir, entry.name);
     // One unreadable/corrupt file stays on disk untouched; it must not hide
     // every other transcript of this folder from adoption.
-    let reader: SessionReader;
-    try { reader = openSessionReader(file, sessionDir); } catch { continue; }
-    if (reader.cwd !== cwd) continue;
-    const messages = reader.all().filter(entry => entry.type === "message");
-    const texts = messages.flatMap(entry => entry.type === "message" && entry.message.role === "user" ?
-      typeof entry.message.content === "string" ? [entry.message.content] : entry.message.content.flatMap(block => block.type === "text" ? [block.text] : []) : []);
-    result.push({ path: file, id: reader.id, cwd, name: reader.name, parentSessionPath: reader.header?.parentSession,
-      created: new Date(reader.header?.timestamp ?? 0), modified: fs.statSync(file).mtime,
-      messageCount: messages.length, firstMessage: texts[0] ?? "", allMessagesText: texts.join("\n") });
+    let info: SdkSessionInfo;
+    try { info = sessionFileInfo(file, cwd, sessionDir); } catch { continue; }
+    if (info.cwd !== cwd) continue;
+    result.push(info);
   }
   return result;
 }

@@ -13,6 +13,7 @@ import {
   setSessionCompaction, catalogSnapshot,
   type SdkAssistantMessage, type SdkEvent, type SdkImage, type SdkModel, type SdkModelRuntime, type SdkSession, type SdkSessionRuntime, type SdkCommandActions, type ResourceSpec, type SettingsSpec,
 } from "../sdk/adapter.ts";
+import { confirmEntries } from "./tail-scan.ts";
 import { entriesPage, entriesToMessages } from "../sdk/history.ts";
 import type { ModelSlotQueue } from "../sdk/inference-transport.ts";
 import { StreamTranslator } from "../sdk/translate.ts";
@@ -466,13 +467,20 @@ export class SessionWorker {
       }
       if (!changed) return;
       const file = session.sessionFile;
-      // Re-reading the whole persisted transcript only confirms command
-      // correlations; with none waiting for a durable id there is nothing to do.
+      // Confirming a save only needs the newest entries. Re-reading the whole
+      // transcript made large chats fail ("history is too large") and burned CPU
+      // on every append; the same ids are provable from a bounded tail scan.
       if (file && this.correlations.some(item => item.entry) && fs.existsSync(file)) {
         // Force the SDK's already-written bytes before committing their identity
         // to the FULL-synchronous command ledger; never write a parallel JSONL.
         syncOwnedFile(file);
-        const ids = new Set(openSessionReader(file, this.deps.sessionDir(this.directory, this.id)).all().map(entry => entry.id));
+        const wanted = new Set(this.correlations.flatMap(item => (item.entry ? [item.entry] : [])));
+        let ids = confirmEntries(file, wanted);
+        // A transcript whose tail does not carry them (unusually large entry)
+        // falls back to the exhaustive, strictly validated read exactly once.
+        if (ids.size !== wanted.size) {
+          ids = new Set(openSessionReader(file, this.deps.sessionDir(this.directory, this.id)).all().map(entry => entry.id));
+        }
         for (let index = this.correlations.length - 1; index >= 0; index--) {
           const pending = this.correlations[index];
           if (pending.entry && ids.has(pending.entry)) { this.deps.ledger.recordEntry(pending.command, pending.entry); this.correlations.splice(index, 1); }
