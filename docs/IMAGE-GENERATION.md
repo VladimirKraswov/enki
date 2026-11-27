@@ -53,6 +53,17 @@ Results are saved without overwriting files in the agent workspace `.enki/genera
 
 No previews, ZIP bundles or material maps exist any more: the Hub returns one PNG per generated item and optional edit metadata. Whole-frame editing is what the model does; exact pixel preservation, masks and transparency are not promised.
 
+## Shared runtime self-repair
+
+Shared tools (images, web search, project map, schedules) are part of the product, not a
+manual setup step. Every session start calls a bounded repair: the runtime directory gets
+the files this build embeds, `node.json` is restored when a profile lost it, and the pinned
+MCP SDK is installed once per app run only when it is actually missing (offline file
+refresh never runs npm). A successful repair makes the tools appear in every chat,
+including projectless ones; a failed one is reported as `mcpUnavailable` with the reason
+instead of failing the session. This is why an app update cannot leave the tools
+half-installed: the next session start reconciles the files with the new build.
+
 Native update required for settings commands and shared runtime. A UI-only activation cannot install the native reader, OS vault integration or shared tool files. Publication does not interrupt active agents; install through the normal idle native-update flow.
 
 Upgrade to this schema is one-time: `image-generation.json` keeps `enabled`/`endpoint`, the retired `provider`/`model` fields are dropped, the previous file is saved as `image-generation.before-hub-v1.json` and a `image-hub-v1.json` marker is written.

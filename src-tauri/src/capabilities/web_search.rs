@@ -7,8 +7,14 @@ pub(super) fn ensure(root: &Path) -> Result<(), String> {
     if !runtime_ready_at(&runtime) {
         return Ok(());
     }
-    let Some(node) = recorded_node(&runtime)? else {
-        return Ok(());
+    // A missing node.json used to disable the tool for good; fall back to the
+    // bundled Node this build ships so a fresh profile still registers it.
+    let node = match recorded_node(&runtime)? {
+        Some(node) => node,
+        None => crate::browser::node_program(None)?
+            .to_str()
+            .ok_or("Путь Node недоступен")?
+            .to_string(),
     };
     private(root)?;
     let lock_path = root.join("registry.lock");

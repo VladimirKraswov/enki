@@ -551,18 +551,10 @@ pub async fn shared_catalog(
     let runtime = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         private(&root()?)?;
-        let path = root()?.join("runtime");
-        // Refresh only an already installed pinned runtime. First installation remains explicit.
-        let sdk =
-            fs::read_to_string(path.join("node_modules/@modelcontextprotocol/sdk/package.json"))
-                .ok()
-                .and_then(|s| serde_json::from_str::<Value>(&s).ok());
-        if !runtime_ready_at(&path)
-            && sdk.is_some_and(|v| v["version"] == "1.32.0")
-            && recorded_node(&path)?.is_some()
-        {
-            install(None, &runtime)?;
-        }
+        // Shared tools are a product feature, not a manual setup step: repair the
+        // runtime before a session asks for its tools. A file refresh is offline;
+        // only a missing pinned SDK needs npm, and that runs once per app run.
+        repair_shared_runtime(&runtime, None)?;
         authoring::ensure(&root()?)?;
         web_search::ensure(&root()?)?;
         schedules::ensure(&root()?)?;
@@ -659,6 +651,52 @@ fn save_node(runtime: &Path, node: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+/// The pinned SDK is what npm ci provides; scripts are compared separately.
+fn dependencies_ready(runtime: &Path) -> bool {
+    fs::read_to_string(runtime.join("node_modules/@modelcontextprotocol/sdk/package.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .is_some_and(|v| v["version"] == "1.32.0")
+}
+/// One repair attempt per app run: a failing npm must not stall every prompt.
+static REPAIR_TRIED: AtomicBool = AtomicBool::new(false);
+/// Bring the shared runtime to the files this build embeds. Returns whether it
+/// is ready afterwards. Never fatal: a session without tools still works.
+pub(crate) fn repair_shared_runtime(
+    state: &SharedRuntime,
+    runtime: Option<&Path>,
+) -> Result<bool, String> {
+    let path = runtime
+        .map(Path::to_path_buf)
+        .unwrap_or(root()?.join("runtime"));
+    if !path.is_dir() {
+        fs::create_dir_all(&path).map_err(|_| "Каталог общих инструментов недоступен")?;
+    }
+    // The registry records the Node it launches. Keep that record even when the
+    // scripts already match, so a profile that lost it still registers tools.
+    if recorded_node(&path)?.is_none() {
+        let node = crate::browser::node_program(None)?;
+        save_node(&path, &node)?;
+    }
+    if runtime_ready_at(&path) {
+        return Ok(true);
+    }
+    if REPAIR_TRIED.swap(true, Ordering::AcqRel) {
+        return Ok(runtime_ready_at(&path));
+    }
+    // A failed npm (offline first run) leaves sessions usable without shared tools.
+    Ok(match install(None, state) {
+        Ok(_) => runtime_ready_at(&path),
+        Err(_) => false,
+    })
+}
+/// Write the files this build ships into the shared runtime.
+fn sync_scripts(runtime: &Path) -> Result<(), String> {
+    for (name, content) in FILES {
+        fs::write(runtime.join(name), content).map_err(|_| "Не удалось сохранить мост MCP")?;
+    }
+    Ok(())
+}
 fn install(node: Option<&str>, state: &SharedRuntime) -> Result<bool, String> {
     if state.closing.load(Ordering::Acquire) {
         return Err("Установка отменена при выходе".into());
@@ -682,17 +720,9 @@ fn install(node: Option<&str>, state: &SharedRuntime) -> Result<bool, String> {
     if runtime_ready_at(&runtime) {
         return Ok(true);
     }
-    let dependencies_ready =
-        fs::read_to_string(runtime.join("node_modules/@modelcontextprotocol/sdk/package.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .is_some_and(|v| v["version"] == "1.32.0")
-            && FILES.iter().take(2).all(|(name, value)| {
-                fs::read_to_string(runtime.join(name)).ok().as_deref() == Some(*value)
-            });
-    for (name, content) in FILES {
-        fs::write(runtime.join(name), content).map_err(|_| "Не удалось сохранить мост MCP")?;
-    }
+    // Scripts are refreshed below; only the pinned SDK decides whether npm must run.
+    let dependencies_ready = dependencies_ready(&runtime);
+    sync_scripts(&runtime)?;
     if dependencies_ready && runtime_ready_at(&runtime) {
         return Ok(true);
     }
@@ -780,6 +810,9 @@ pub fn runtime_scope(directory: &Path, session: Option<&str>) -> Result<Value, S
     )?;
     let project_key = key_for("project", directory.to_str())?.0;
     let root = root()?;
+    // Every session start repairs the shared runtime: an app update changes the
+    // embedded files, a fresh profile has none, and a lost node.json is restored.
+    let _ = repair_shared_runtime(&SharedRuntime::default(), None);
     authoring::ensure(&root)?;
     web_search::ensure(&root)?;
     schedules::ensure(&root)?;
@@ -808,8 +841,9 @@ pub fn runtime_scope(directory: &Path, session: Option<&str>) -> Result<Value, S
             vec!["global", key.as_str()]
         },
         "mcp": servers && ready,
-        "mcpUnavailable": (servers && !ready)
-            .then_some("Включены MCP-подключения, но общие MCP-инструменты не установлены. Установите их в настройках Enki."),
+        "mcpUnavailable": (servers && !ready).then_some(
+            "Включены MCP-подключения, но общие инструменты не установлены: автоматическая установка не удалась. Проверьте сеть и повторите; повторная установка доступна в настройках Enki.",
+        ),
         "executable": std::env::current_exe().map_err(|_| "Путь Enki недоступен")?,
         "browser": browser_skills.is_some(),
         "browserSkillPath": browser_skills,
@@ -1007,6 +1041,75 @@ pub fn mcp_main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shipped_scripts_are_restored_without_network_and_without_touching_dependencies() {
+        let root = std::env::temp_dir().join(format!(
+            "enki-sync-scripts-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("node_modules/@modelcontextprotocol/sdk")).unwrap();
+        fs::write(
+            root.join("node_modules/@modelcontextprotocol/sdk/package.json"),
+            r#"{"version":"1.32.0"}"#,
+        )
+        .unwrap();
+        assert!(!scripts_ready(&root), "an empty runtime is not ready");
+        assert!(dependencies_ready(&root));
+        sync_scripts(&root).unwrap();
+        assert!(scripts_ready(&root));
+        assert!(
+            runtime_ready_at(&root),
+            "scripts plus the pinned SDK are enough; npm must not run for a file refresh"
+        );
+        // A stale script is repaired by the same call.
+        fs::write(root.join("proxy.mjs"), "stale").unwrap();
+        assert!(!scripts_ready(&root));
+        sync_scripts(&root).unwrap();
+        assert!(runtime_ready_at(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn the_recorded_node_survives_and_can_be_restored_by_repair() {
+        let root = std::env::temp_dir().join(format!(
+            "enki-node-record-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        assert!(recorded_node(&root).unwrap().is_none());
+        let node = crate::browser::node_program(None).unwrap();
+        save_node(&root, &node).unwrap();
+        assert_eq!(
+            recorded_node(&root).unwrap().as_deref(),
+            node.to_str()
+        );
+        // Repair keeps an existing record instead of rewriting it on every call.
+        let before = fs::read_to_string(root.join("node.json")).unwrap();
+        save_node(&root, &node).unwrap();
+        assert_eq!(fs::read_to_string(root.join("node.json")).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_missing_pinned_sdk_is_the_only_reason_to_run_npm() {
+        let root = std::env::temp_dir().join(format!(
+            "enki-no-sdk-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        assert!(!dependencies_ready(&root));
+        sync_scripts(&root).unwrap();
+        assert!(scripts_ready(&root));
+        assert!(!runtime_ready_at(&root), "without the SDK the runtime stays unready");
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn shared_runtime_ships_no_agent_engine_plugins() {
         // Agent-side gates and bridges are bundled into the Enki Runtime; the
