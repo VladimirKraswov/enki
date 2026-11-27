@@ -333,7 +333,8 @@ runtime (171 + 1 skip), runtime-artifact и Hub release unit gates, но одн�
 (299 passed, 1 failed, 7 ignored). Тест прошёл изолированно; до публикации нужно
 повторить полный Rust gate и установить причину/устойчивость. Повторный релизный
 gate прошёл runtime/артефактные наборы, но компиляция выявила неверное место вызова
-Tauri exit API (`AppHandle`, не `App`); вызов исправлен, gate требуется повторить.
+Tauri exit API (`AppHandle`, не `App`); затем clippy попросил заменить `matches!(Ok)`
+на `is_ok()`. Обе правки внесены; gate требуется повторить.
 
 ## Палитра Codex из снимка экрана / 2.0.123
 

@@ -91,9 +91,9 @@ mod tests {
             lock(first.path(), "instance", true),
             Err(LockError::Busy)
         ));
-        assert!(matches!(lock(second.path(), "instance", true), Ok(_)));
+        assert!(lock(second.path(), "instance", true).is_ok());
         drop(one);
-        assert!(matches!(lock(first.path(), "instance", true), Ok(_)));
+        assert!(lock(first.path(), "instance", true).is_ok());
     }
 
     #[test]
