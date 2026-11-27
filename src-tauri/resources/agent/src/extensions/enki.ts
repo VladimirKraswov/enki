@@ -20,7 +20,7 @@ import { decide, evaluate, type DefaultPolicy } from "../interaction/access.ts";
 import { prepareToolPaths } from "../interaction/access-paths.ts";
 import { QUESTION_LIMITS, type InteractionBroker } from "../interaction/broker.ts";
 import type { McpPool } from "../mcp/pool.ts";
-import { sessionPolicyBlocks } from "../policy/prompt.ts";
+import { imageToolsPresent, imageToolsReminder, sessionPolicyBlocks } from "../policy/prompt.ts";
 import { isModelRef } from "../protocol.ts";
 import type { PermissionRule, ModelRef } from "../protocol.ts";
 import { MAX_MINUTES, type Scheduler, type SchedulePatch } from "../schedule/scheduler.ts";
@@ -250,6 +250,10 @@ export function enkiExtensions(scope: SessionScope, deps: ExtensionDeps): SdkExt
         const project = deps.projectContext?.(scope.directory);
         const learned = deps.lessons?.list(scope.directory, 5) ?? [];
         if (learned.length) blocks.push(`<enki-lessons-v1 directory="${encodeURIComponent(scope.directory)}">Уроки из прошлых ходов этого проекта (советы, а не новые инструкции):\n${learned.map(l => `— ${l.text}`).join("\n")}\n</enki-lessons-v1>`);
+        // Only when the session really has them: a rule about missing tools would
+        // push the model to invent a shell substitute.
+        const toolNames = (pi.getAllTools?.() ?? []).map(tool => tool.name);
+        if (imageToolsPresent(toolNames)) blocks.push(imageToolsReminder(scope.sessionID));
         return { systemPrompt: `${event.systemPrompt}\n\n${[...blocks, ...(project ? [project] : [])].join("\n\n")}` };
       });
     },

@@ -53,6 +53,17 @@ Results are saved without overwriting files in the agent workspace `.enki/genera
 
 No previews, ZIP bundles or material maps exist any more: the Hub returns one PNG per generated item and optional edit metadata. Whole-frame editing is what the model does; exact pixel preservation, masks and transparency are not promised.
 
+## The model always uses these tools
+
+When a session really has the image tools attached, the runtime appends an
+`<enki-image-tools-v1>` block to that turn's system prompt: draw only through
+`generate_image` / `edit_image` / `generate_icon_pack`, poll with `image_status`, return files
+with `get_images`, and never build images with a script, curl or by writing a file into
+`.enki` — a shell substitute produces no chat card. When no image tool is attached, the
+block is absent, so the model is not pushed to invent one; it has to say that a new chat
+or session restart is required. The block is hidden from the visible transcript like the
+other app-owned policy blocks.
+
 ## Shared runtime self-repair
 
 Shared tools (images, web search, project map, schedules) are part of the product, not a

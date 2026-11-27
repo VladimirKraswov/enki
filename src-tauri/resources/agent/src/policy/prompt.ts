@@ -22,6 +22,10 @@ const legacyScheduleReminder = (sessionId: string, directory: string) => schedul
 
 export const scheduleWakeReminder = (sessionId: string, taskId: string) => `<enki-schedule-wake-v1 session="${encodeURIComponent(sessionId)}" task="${encodeURIComponent(taskId)}">\nЭто плановое пробуждение по ранее сохранённому заданию, а не новая просьба человека. Выполни проверку по текущему контексту. Не создавай дополнительные таймеры. Если наблюдение завершено, удали этот таймер через desktop_schedule. Сообщай владельцу о значимых изменениях, завершении, ошибке или необходимости его решения.\n</enki-schedule-wake-v1>`;
 
+export const IMAGE_TOOLS_CONTEXT = `Изображения в Enki: когда пользователь просит нарисовать, изменить или перерисовать картинку, работай только через инструменты изображений этой сессии (generate_image, edit_image, generate_icon_pack, image_inputs, image_status, get_images, cancel_image; имя может быть с префиксом сервера). Результат попадает в чат карточкой автоматически, файлы сохраняются в папке сессии. Никогда не создавай изображения обходными путями — скриптом, curl, python или записью файла в .enki — иначе пользователь не увидит карточку. Если инструментов изображений нет в наборе, так и скажи: их подключение требует нового чата или перезапуска сессии; не рисуй суррогатом. Пересказ промпта не заменяет изображение.`;
+/** Present only when the session really has the image tools attached. */
+export const imageToolsPresent = (names: readonly string[]) => names.some((name) => name === "generate_image" || name.endsWith("generate_image"));
+export const imageToolsReminder = (sessionId: string) => `<enki-image-tools-v1 session="${encodeURIComponent(sessionId)}">\n${IMAGE_TOOLS_CONTEXT}\n</enki-image-tools-v1>`;
 export const languageReminder = (sessionId: string) => `<arvela-response-language-v1 session="${encodeURIComponent(sessionId)}">\n${RESPONSE_LANGUAGE_CONTEXT}\n</arvela-response-language-v1>`;
 
 export const steeringReminder = (sessionId: string) => `<arvela-steering-v1 session="${encodeURIComponent(sessionId)}">\nЭто уточнение текущего задания. Продолжай текущую работу и учти уточнение на следующем шаге. Не начинай независимое задание.\n</arvela-steering-v1>`;
@@ -50,7 +54,7 @@ function removeExactBlock(text: string, block: string): string {
 /** Hide only exact app-owned, same-session blocks placed before attachments;
  * never strip quoted text, assistant output or file data. */
 export function visiblePromptText(text: string, sessionId: string): string {
-  for (const reminder of [toolWorkflowReminder(sessionId), legacyV2ToolWorkflowReminder(sessionId), legacyToolWorkflowReminder(sessionId), languageReminder(sessionId), languageReminder(sessionId).replace("Язык общения Enki:", "Язык общения Arvela:"), steeringReminder(sessionId), userWaitReminder(sessionId)])
+  for (const reminder of [toolWorkflowReminder(sessionId), legacyV2ToolWorkflowReminder(sessionId), legacyToolWorkflowReminder(sessionId), languageReminder(sessionId), languageReminder(sessionId).replace("Язык общения Enki:", "Язык общения Arvela:"), imageToolsReminder(sessionId), steeringReminder(sessionId), userWaitReminder(sessionId)])
     text = removeExactBlock(text, reminder);
   const wakePrefix = `<enki-schedule-wake-v1 session="${encodeURIComponent(sessionId)}" task="`;
   const wakeAt = text.indexOf(wakePrefix), quote = wakeAt < 0 ? -1 : text.indexOf('"', wakeAt + wakePrefix.length);

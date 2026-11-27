@@ -7,24 +7,34 @@
 import { describe, expect, it } from "vitest";
 import { browserAccess, enkiExtensions, type ExtensionDeps } from "../src/extensions/enki.ts";
 import type { SdkExtension } from "../src/sdk/adapter.ts";
-import { languageReminder, scheduleReminder, sessionPolicyBlocks, userWaitReminder } from "../src/policy/prompt.ts";
+import { imageToolsReminder, languageReminder, scheduleReminder, sessionPolicyBlocks, userWaitReminder } from "../src/policy/prompt.ts";
 import { toolWorkflowReminder } from "../src/policy/toolWorkflow.ts";
+import { visiblePromptText } from "../src/policy/prompt.ts";
 import { workQualityReminder } from "../src/policy/workQuality.ts";
 import { workshopReminder } from "../src/policy/workshop.ts";
 
 type Handler = (event: { systemPrompt: string }) => { systemPrompt: string };
 type NamedExtension = Extract<SdkExtension, { factory: unknown }>;
-function turnPolicy(workshop: () => boolean): Handler {
+function turnPolicy(workshop: () => boolean, tools: { name: string }[] = []): Handler {
   const deps = { broker: {}, journal: {}, pool: {}, defaultPolicy: () => "ask", capabilities: null } as unknown as ExtensionDeps;
   const extensions = enkiExtensions({ sessionID: "ses/1", directory: "/work", rules: () => [], workshop }, deps);
   // InlineExtension is `ExtensionFactory | { name; factory }`: narrow to the named form.
   const policy = extensions.find((e): e is NamedExtension => typeof e !== "function" && e.name === "enki-turn-policy")!;
   let handler: Handler | undefined;
-  policy.factory({ on: (name: string, h: Handler) => { if (name === "before_agent_start") handler = h; } } as never);
+  policy.factory({ on: (name: string, h: Handler) => { if (name === "before_agent_start") handler = h; }, getAllTools: () => tools } as never);
   return handler!;
 }
 
 describe("turn policy", () => {
+  it("tells the model to use the session's image tools, and stays silent when none are attached", () => {
+    const withTools = turnPolicy(() => false, [{ name: "bash" }, { name: "mesh_enki_images_generate_image" }])({ systemPrompt: "BASE" }).systemPrompt;
+    expect(withTools).toContain(imageToolsReminder("ses/1"));
+    expect(withTools).toContain("не создавай изображения обходными путями");
+    const withoutTools = turnPolicy(() => false, [{ name: "bash" }, { name: "read" }])({ systemPrompt: "BASE" }).systemPrompt;
+    expect(withoutTools).not.toContain(imageToolsReminder("ses/1"));
+    // The injected contract is hidden from the visible transcript.
+    expect(visiblePromptText(withTools, "ses/1")).not.toContain("<enki-image-tools-v1");
+  });
   it("appends the session's language, tool workflow and timer blocks to every turn without touching the base prompt", () => {
     const out = turnPolicy(() => false)({ systemPrompt: "BASE" }).systemPrompt;
     expect(out.startsWith("BASE\n\n")).toBe(true);
