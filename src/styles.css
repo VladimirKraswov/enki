@@ -1298,23 +1298,28 @@ body[data-session-dragging] .session-item { cursor: grabbing; }
   background: var(--err);
 }
 
-/* Desktop workspace: neutral, quiet hierarchy, matching the Codex task layout. */
+/* Desktop workspace palette sampled visually from the supplied Codex screenshot. */
 :root[data-theme="dark"] {
-  --bg: #202020;
-  --bg-raised: #191919;
-  --bg-sunken: #292929;
-  --bg-input: #303030;
-  --panel: #202020;
-  --border: #343434;
-  --border-strong: #505050;
-  --text: #ededed;
-  --text-dim: #aaa;
-  --text-faint: #777;
-  --accent: #ededed;
-  --accent-soft: #303030;
-  --code-bg: #181818;
-  --ok: #8ab998;
-  --shadow: 0 12px 40px #0005;
+  --bg: #1d1c19;
+  --bg-raised: #262520;
+  --bg-sunken: #191815;
+  --bg-input: #34332f;
+  --panel: #23221e;
+  --border: #393832;
+  --border-strong: #57554d;
+  --text: #e8e5dc;
+  --text-dim: #aaa69b;
+  --text-faint: #77746a;
+  --accent: #e2aa36;
+  --accent-soft: #393222;
+  --code-bg: #1a1916;
+  --ok: #83b98e;
+  --warn: #d9aa50;
+  --err: #e8796e;
+  --peak: #df8baa;
+  --peak-soft: #38242b;
+  --tool: #9eb8dc;
+  --shadow: 0 12px 40px #0006;
 }
 :root[data-theme="light"] {
   --bg: #fff;

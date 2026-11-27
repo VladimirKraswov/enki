@@ -70,20 +70,6 @@ pub fn run() {
             return;
         }
     };
-    // Acquire profile ownership before Tauri's setup hook. A second process is
-    // a normal activation race; returning here lets the existing instance keep
-    // running instead of turning a lock conflict into a setup panic/SIGABRT.
-    let ownership = match instance_guard::profile_startup() {
-        Ok(Some(guard)) => guard,
-        Ok(None) => {
-            eprintln!("Enki profile is already owned by another running instance; ignoring duplicate launch.");
-            return;
-        }
-        Err(error) => {
-            eprintln!("Cannot acquire Enki profile ownership: {error}");
-            return;
-        }
-    };
     let hot = hub_updates::assets::HotAssets::load();
     let mut context = tauri::generate_context!();
     let mut profile_windows = Vec::new();
@@ -127,8 +113,23 @@ pub fn run() {
         .manage(browser::BrowserRuntime::default())
         .manage(control::AgentControl::default())
         .setup(move |app| {
-            // Backstop for simultaneous starts or unavailable OS activation IPC.
-            // No runtime/controller is started without exclusive profile ownership.
+            // The single-instance plugin runs before this hook and normally
+            // forwards activation to the existing app. Keep this lock as a
+            // backstop for stale/unavailable activation IPC, but never turn a
+            // duplicate launch into Tauri's setup panic/SIGABRT.
+            let ownership = match instance_guard::profile_startup() {
+                Ok(Some(guard)) => guard,
+                Ok(None) => {
+                    eprintln!("Enki profile is already owned; closing duplicate launch.");
+                    app.exit(0);
+                    return Ok(());
+                }
+                Err(error) => {
+                    eprintln!("Cannot acquire Enki profile ownership: {error}");
+                    app.exit(1);
+                    return Ok(());
+                }
+            };
             app.manage(ownership);
             if let Some(profile) = &webview_profile {
                 for window in &profile_windows {
