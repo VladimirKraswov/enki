@@ -121,12 +121,12 @@ pub fn run() {
                 Ok(Some(guard)) => guard,
                 Ok(None) => {
                     eprintln!("Enki profile is already owned; closing duplicate launch.");
-                    app.exit(0);
+                    app.handle().exit(0);
                     return Ok(());
                 }
                 Err(error) => {
                     eprintln!("Cannot acquire Enki profile ownership: {error}");
-                    app.exit(1);
+                    app.handle().exit(1);
                     return Ok(());
                 }
             };

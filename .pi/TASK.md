@@ -331,7 +331,9 @@ src-tauri/Cargo.toml --locked instance_guard::tests --lib` — 3 passed. Доб�
 runtime (171 + 1 skip), runtime-artifact и Hub release unit gates, но однажды
 поймал плавающий отказ существующего lock-теста в полном параллельном Cargo-наборе
 (299 passed, 1 failed, 7 ignored). Тест прошёл изолированно; до публикации нужно
-повторить полный Rust gate и установить причину/устойчивость.
+повторить полный Rust gate и установить причину/устойчивость. Повторный релизный
+gate прошёл runtime/артефактные наборы, но компиляция выявила неверное место вызова
+Tauri exit API (`AppHandle`, не `App`); вызов исправлен, gate требуется повторить.
 
 ## Палитра Codex из снимка экрана / 2.0.123
 
