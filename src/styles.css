@@ -3577,3 +3577,19 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .capability-scope-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
 .capability-scope-head h2 { margin:0 0 5px; font-size:1.2rem; }
 .capability-scope-head p { margin:0; max-width:70ch; color:var(--text-dim); line-height:1.45; }
+.turn-image-jobs{margin:12px 0;max-width:760px}
+.image-job-card{padding:12px 14px;background:var(--panel);border:1px solid var(--border);border-radius:12px}
+.image-job-card+.image-job-card{margin-top:8px}
+.image-job-card.failed{border-color:var(--danger,#b42318)}
+.image-job-head{display:flex;align-items:center;gap:8px;margin:0;font-size:.928571rem}
+.image-job-percent{margin-left:auto;color:var(--text-dim);font-variant-numeric:tabular-nums}
+.image-job-bar{height:6px;margin-top:10px;background:var(--border);border-radius:999px;overflow:hidden}
+.image-job-bar>span{display:block;height:100%;background:var(--accent,#4f7cff);border-radius:999px;transition:width .4s ease}
+.image-job-dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim)}
+.image-job-dot.done{background:var(--accent,#4f7cff)}
+.image-job-dot.cancelled{background:var(--text-dim)}
+.image-job-dot.failed{background:var(--danger,#b42318)}
+.image-job-note{margin:8px 0 0;color:var(--text-dim);font-size:.857143rem}
+.image-job-actions{display:flex;align-items:center;gap:10px;margin-top:10px}
+.image-job-actions:empty{display:none}
+@media (prefers-reduced-motion:reduce){.image-job-bar>span{transition:none}}

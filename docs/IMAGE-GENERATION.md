@@ -28,6 +28,21 @@ States: `queued → running → completed | failed | cancelled`. Progress is rea
 
 The model should call these tools for raster-generation requests, retrieve and show the actual output, and visually inspect it when capable. A returned text description is not an image. Non-Vision models get file references without image-input blocks; Vision gets actual PNG blocks when requested. Never claim visual review without seeing those pixels.
 
+## What the chat shows
+
+While a job runs, the turn shows one **progress card per job** — phase from the engine
+(`В очереди → Готовлю задание → Загружаю исходник → Рисую 2 из 4`), an accessible percent
+bar and **Отменить**. The card is driven by a native proxy (`image_job`,
+`image_job_cancel`, `image_job_result`): the WebView never receives the service key, and
+polling stops as soon as the job reaches a terminal state. Errors show the service’s own
+message, never a fake success.
+
+If a turn ends before the agent retrieved the pictures (Stop, a long edit, a closed
+window), the card saves the finished PNGs into `<chat>/.enki/generated-images/<job>/`
+itself and shows them, so work already paid for on the GPU is not lost. Once the turn’s
+own result cards contain the same job, the progress card disappears instead of repeating
+the image. Cancelled and failed jobs keep a one-line honest note.
+
 ## Editing and budget
 
 Attach a PNG/JPEG/WebP and ask «Перерисуй это в стиле аниме». Enki privately stages the original bytes for the actual session/message; the agent calls `image_inputs` → `edit_image(source=attachment:1)` → `image_status` → `get_images`. A follow-up «Поменяй волосы на синие» uses `source=latest`, the last completed primary image of this session. A new attached original replaces the retained one; edits keep the source aspect unless a size is given and send the actual pixels, never a path.

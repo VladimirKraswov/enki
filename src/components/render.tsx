@@ -1,5 +1,6 @@
 import { useStreamStalled } from "./useStreamStalled";
 import {turnImageResults} from "../images/results";
+import {imageJobRefs} from "../images/jobs";
 import { imageReference } from '../../src-tauri/resources/agent/src/policy/image-reference';
 import { partsPresentation } from '../chat/presentation';
 import { executionEvidence, executionLabel, type ExecutionEvidence } from '../chat/execution';
@@ -24,6 +25,7 @@ import { ModelConnectionCheck } from "./ModelConnectionCheck";
 import { ToolActivity } from "./ToolActivity";
 export { Markdown } from "./Markdown";
 const GeneratedImages = lazy(() => import("./GeneratedImages"));
+const ImageJobs = lazy(() => import("./ImageJobProgress").then(m => ({default: m.ImageJobs})));
 const OutputLimitNotice = lazy(() => import("./OutputLimitNotice"));
 
 function MessageTimestamp({value}:{value:number}) {
@@ -288,6 +290,8 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
     && visibleParts(allParts.filter(p => p.messageID === m.id)).length === 0
     && !allParts.some(p => p.messageID === m.id && p.type === 'file'));
   const generated = turnImageResults(allParts);
+  const imageJobs = imageJobRefs(allParts);
+  const imageUrls = generated.flatMap(result => result.images.map(image => image.url));
   const actions = allParts.filter(p => p.type === 'tool').length;
   const errors = allParts.filter(p => p.type === 'tool' && p.state?.status === 'error').length;
   const metrics = turnMetrics(messages);
@@ -330,6 +334,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
         </div>;
       })}
     </div>
+    {imageJobs.length>0 && <div className="turn-image-jobs"><Suspense fallback={null}><ImageJobs jobs={imageJobs} imageUrls={imageUrls}/></Suspense></div>}
     {generated.length>0 && <div className="turn-generated-results"><Suspense fallback={<p>Изображения готовы…</p>}>{generated.map((result,i)=><GeneratedImages key={result.images[0]?.url??i} result={result}/>)}</Suspense></div>}
     {terminal && <div className="message-footer turn-footer">
       {!!answerText(parts).trim() && <CopyButton text={answerText(parts)} label={last.summary ? "Копировать сводку" : hasFinal ? "Копировать весь ответ" : "Копировать незавершённый ответ"} compact />}

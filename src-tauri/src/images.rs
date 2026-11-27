@@ -404,6 +404,167 @@ pub async fn image_asset(window: tauri::WebviewWindow, file_url: String) -> Resu
     ))
 }
 
+/// A job id from the Hub: exactly the UUID shape the service issues.
+fn valid_job_id(value: &str) -> bool {
+    value.len() == 36 && value.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+async fn image_api(method: &str, route: &str, timeout: u64) -> Result<reqwest::Response, String> {
+    let settings = read()?;
+    if !settings.enabled {
+        return Err("Включите генерацию изображений в настройках Enki".into());
+    }
+    let key = tauri::async_runtime::spawn_blocking(load_api_key)
+        .await
+        .map_err(|_| "Связка ключей недоступна")??;
+    if key.is_empty() {
+        return Err("Ключ генератора не задан в настройках Enki".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Не удалось создать соединение")?;
+    let url = format!("{}{}", settings.endpoint.trim_end_matches('/'), route);
+    let request = if method == "DELETE" {
+        client.delete(url)
+    } else {
+        client.get(url)
+    };
+    request
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|_| "Сервис изображений не отвечает. Проверьте URL и доступность".to_string())
+}
+async fn json_bounded(mut response: reqwest::Response, limit: usize) -> Result<serde_json::Value, String> {
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        return Err(format!(
+            "Сервис изображений HTTP {status}: {}",
+            if status == 401 || status == 403 {
+                "проверьте ключ генератора"
+            } else if status == 404 {
+                "задание не найдено"
+            } else {
+                "проверьте настройки и состояние сервиса"
+            }
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Ответ сервиса оборвался")? {
+        if bytes.len() + chunk.len() > limit {
+            return Err("Слишком большой ответ сервиса".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "Сервис вернул некорректный JSON".into())
+}
+/// Progress and result metadata of one image job for the chat card.
+#[tauri::command]
+pub async fn image_job(window: tauri::WebviewWindow, job_id: String) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("Недоступно в этом окне".into());
+    }
+    if !valid_job_id(&job_id) {
+        return Err("Некорректное задание".into());
+    }
+    json_bounded(image_api("GET", &format!("/jobs/{job_id}"), 20).await?, 262144).await
+}
+/// Cancel a queued or running job; finished images stay available.
+#[tauri::command]
+pub async fn image_job_cancel(window: tauri::WebviewWindow, job_id: String) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("Недоступно в этом окне".into());
+    }
+    if !valid_job_id(&job_id) {
+        return Err("Некорректное задание".into());
+    }
+    json_bounded(image_api("DELETE", &format!("/jobs/{job_id}"), 30).await?, 262144).await
+}
+/// Save the finished images of a job into the open chat's generated-images
+/// folder and return their file URLs. Used when a turn ended before the agent
+/// retrieved them, so an interrupted answer never loses a paid-for result.
+#[tauri::command]
+pub async fn image_job_result(
+    window: tauri::WebviewWindow,
+    job_id: String,
+    directory: String,
+) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("Недоступно в этом окне".into());
+    }
+    if !valid_job_id(&job_id) || directory.len() > 4096 || !std::path::Path::new(&directory).is_absolute() {
+        return Err("Некорректный запрос результата".into());
+    }
+    let state = json_bounded(image_api("GET", &format!("/jobs/{job_id}"), 20).await?, 262144).await?;
+    if state["state"] != "completed" {
+        return Err("Задание ещё не завершено".into());
+    }
+    let names: Vec<String> = state["images"]
+        .as_array()
+        .filter(|list| !list.is_empty() && list.len() <= 8)
+        .ok_or("Сервис не вернул список изображений")?
+        .iter()
+        .map(|image| image["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    if names.iter().any(|name| !asset_name(name)) {
+        return Err("Некорректное имя файла".into());
+    }
+    let base = fs::canonicalize(&directory).map_err(|_| "Рабочая папка чата недоступна")?;
+    let mut folder = base.clone();
+    for segment in [".enki", "generated-images"] {
+        folder = folder.join(segment);
+        fs::create_dir_all(&folder).map_err(|_| "Папка результатов недоступна")?;
+        if fs::symlink_metadata(&folder).map_err(|_| "Папка результатов недоступна")?.is_symlink() {
+            return Err("Папка результатов не должна быть ссылкой".into());
+        }
+    }
+    folder = folder.join(&job_id);
+    fs::create_dir_all(&folder).map_err(|_| "Папка результатов недоступна")?;
+    if fs::symlink_metadata(&folder).map_err(|_| "Папка результатов недоступна")?.is_symlink() {
+        return Err("Папка результатов не должна быть ссылкой".into());
+    }
+    let mut saved = Vec::new();
+    for name in &names {
+        let response = image_api("GET", &format!("/jobs/{job_id}/images/{name}"), 120).await?;
+        let mut response = response;
+        if !response.status().is_success() {
+            return Err("Сервис не вернул файл изображения".into());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| "Передача PNG оборвалась")? {
+            if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
+                return Err("PNG больше 8 МБ".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if !valid_png(&bytes) {
+            return Err("Сервис вернул повреждённый PNG".into());
+        }
+        use std::io::Write as _;
+        let path = folder.join(name);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => file.write_all(&bytes).map_err(|_| "Не удалось сохранить PNG")?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let existing = fs::read(&path).map_err(|_| "Файл результата недоступен")?;
+                if existing != bytes {
+                    return Err("Файл результата уже существует и отличается".into());
+                }
+            }
+            Err(_) => return Err("Не удалось сохранить PNG".into()),
+        }
+        let url = url::Url::from_file_path(&path).map_err(|_| "Некорректный путь результата")?;
+        saved.push(serde_json::json!({"name": name, "url": url.as_str()}));
+    }
+    Ok(serde_json::json!({
+        "jobId": job_id,
+        "images": saved,
+        "width": state["width"],
+        "height": state["height"],
+        "seed": state["seed"],
+        "progress": state["progress"],
+    }))
+}
 fn valid_png(bytes: &[u8]) -> bool {
     if bytes.len() < 33 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR" {
         return false;
@@ -525,6 +686,17 @@ fn remote_reference(u: &url::Url) -> Option<(&str, &str)> {
     let name = parts[n - 1];
     (id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') && asset_name(name))
         .then_some((id, name))
+}
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+    #[test]
+    fn accepts_only_hub_job_ids() {
+        assert!(valid_job_id("01234567-1234-1234-1234-123456789abc"));
+        for value in ["", "../jobs", "01234567-1234-1234-1234-123456789ab", "01234567-1234-1234-1234-123456789abc/", "zzzzzzzz-1234-1234-1234-123456789abc"] {
+            assert!(!valid_job_id(value), "{value}")
+        }
+    }
 }
 #[cfg(test)]
 mod remote_tests {
