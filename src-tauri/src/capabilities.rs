@@ -1084,10 +1084,7 @@ mod tests {
         assert!(recorded_node(&root).unwrap().is_none());
         let node = crate::browser::node_program(None).unwrap();
         save_node(&root, &node).unwrap();
-        assert_eq!(
-            recorded_node(&root).unwrap().as_deref(),
-            node.to_str()
-        );
+        assert_eq!(recorded_node(&root).unwrap().as_deref(), node.to_str());
         // Repair keeps an existing record instead of rewriting it on every call.
         let before = fs::read_to_string(root.join("node.json")).unwrap();
         save_node(&root, &node).unwrap();
@@ -1107,7 +1104,10 @@ mod tests {
         assert!(!dependencies_ready(&root));
         sync_scripts(&root).unwrap();
         assert!(scripts_ready(&root));
-        assert!(!runtime_ready_at(&root), "without the SDK the runtime stays unready");
+        assert!(
+            !runtime_ready_at(&root),
+            "without the SDK the runtime stays unready"
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
