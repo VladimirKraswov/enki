@@ -3,11 +3,11 @@ import { toolOutputText } from '../src-tauri/resources/agent/src/sdk/history';
 import { imageResult, turnImageResults } from '../src/images/results';
 
 const base = 'file:///work/.enki/generated-images/01234567-1234-1234-1234-123456789abc/';
-const names = ['image-01', 'normal', 'height', 'roughness', 'metallic', 'relight', 'relight-right', 'tile-preview'];
-const result = { enkiImages: 1, status: 'completed', images: names.map(n => ({ name: `${n}.png`, url: `${base}${n}.png` })), archive: `${base}images.zip` };
+const names = ['image-01', 'image-02', 'image-03', 'image-04', 'image-05', 'image-06', 'image-07', 'image-08'];
+const result = { enkiImages: 1, status: 'completed', images: names.map(n => ({ name: `${n}.png`, url: `${base}${n}.png` })) };
 const output = (text: string, images = 8) => toolOutputText([{ type: 'text', text }, ...Array.from({ length: images }, () => ({ type: 'image' }))]);
 
-it('shows all material cards and ZIP from the actual SDK Vision tool-output projection, including reopened history', () => {
+it('shows every set image from the actual SDK Vision tool-output projection, including reopened history', () => {
   const state = { output: output(JSON.stringify(result)) };
   expect(state.output).toContain('\n[изображение]');
   expect(turnImageResults([{ state }])).toEqual([result]);

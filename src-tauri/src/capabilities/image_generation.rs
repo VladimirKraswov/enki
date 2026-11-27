@@ -24,7 +24,7 @@ pub(super) fn ensure(root: &Path) -> Result<(), String> {
         .map_err(|_| "Реестр генератора недоступен")?;
     lock.try_lock_exclusive()
         .map_err(|_| "Реестр инструментов занят")?;
-    crate::images::migrate_quality_default_at(root)?;
+    crate::images::migrate_hub_settings_at(root)?;
     let (mut registry, expected) = read_at(root, "global")?;
     if registry.servers.iter().any(|s| s.id == "enki-images") {
         return Ok(());

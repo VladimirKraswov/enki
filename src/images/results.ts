@@ -1,16 +1,16 @@
-export interface GeneratedImage {name:string;url:string;previewUrl?:string}
-export interface ImageResult {enkiImages:1;status:string;images:GeneratedImage[];archive?:string}
-const generated=/\/\.enki\/generated-images\/[a-f0-9-]{36}\/(?:(?:image|preview)-\d{2}|(?:preview-)?(?:normal|height|roughness|metallic|relight|relight-right|tile-preview))\.png$/;
-export function generatedFileUrl(value:unknown,archive=false):value is string{
+export interface GeneratedImage {name:string;url:string}
+export interface ImageResult {enkiImages:1;status:string;images:GeneratedImage[]}
+const generated=/\/\.enki\/generated-images\/[a-f0-9-]{36}\/image-\d{2}\.png$/;
+export function generatedFileUrl(value:unknown):value is string{
  if(typeof value!=='string'||value.length>8192)return false;
- try{const u=new URL(value);return u.protocol==='file:'&&!u.host&&!u.search&&!u.hash&&(archive?/\/\.enki\/generated-images\/[a-f0-9-]{36}\/images\.zip$/:generated).test(decodeURIComponent(u.pathname))}catch{return false}
+ try{const u=new URL(value);return u.protocol==='file:'&&!u.host&&!u.search&&!u.hash&&generated.test(decodeURIComponent(u.pathname))}catch{return false}
 }
 export function imageResult(output:unknown):ImageResult|null{
  if(typeof output!=='string'||output.length>32768||!output.includes('"enkiImages"'))return null;
  // SDK history projects Vision blocks as these exact trailing markers. Keep
  // the original size/path limits and reject every other non-JSON suffix.
  const json=output.replace(/(?:\n\[изображение\]){1,8}$/u,'');
- try{const r=JSON.parse(json);if(r.enkiImages!==1||typeof r.status!=='string'||!Array.isArray(r.images)||r.images.length>8||!r.images.every((i:GeneratedImage)=>i&&typeof i.name==='string'&&/^(?:image-\d{2}|normal|height|roughness|metallic|relight|relight-right|tile-preview)\.png$/.test(i.name)&&generatedFileUrl(i.url)&&(i.previewUrl===undefined||generatedFileUrl(i.previewUrl)))||(r.archive!==undefined&&!generatedFileUrl(r.archive,true)))return null;return r}catch{return null}
+ try{const r=JSON.parse(json);if(r.enkiImages!==1||typeof r.status!=='string'||!Array.isArray(r.images)||r.images.length>8||!r.images.every((i:GeneratedImage)=>i&&typeof i.name==='string'&&/^image-\d{2}\.png$/.test(i.name)&&generatedFileUrl(i.url)))return null;return r}catch{return null}
 }
 
 // A streamed turn re-renders on every delta: parse each tool output once. The

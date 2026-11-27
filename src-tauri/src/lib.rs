@@ -158,7 +158,6 @@ pub fn run() {
             asr::transcribe_audio,
             images::image_settings,
             images::image_asset,
-            images::image_archive_save,
             images::image_probe,
             image_context::image_prompt_context,
             journal::operation_journal,

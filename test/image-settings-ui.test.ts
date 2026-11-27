@@ -5,7 +5,7 @@ vi.mock('../src/capabilities/integration',()=>({capabilityNative:calls.invoke,in
 import Settings from '../src/components/ImageGenerationSettings';
 it('loads redacted settings, changes API without inference and saves a key only when explicitly replacing',async()=>{
  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
- const settings={enabled:false,provider:'enki',endpoint:'http://127.0.0.1/api/images',model:'lcm-dreamshaper-v7'};
+ const settings={enabled:false,endpoint:'http://127.0.0.1/api/images'};
  calls.invoke.mockImplementation(async(_cmd,args)=>({settings:args.settings??settings,hasKey:true}));
  const node=document.createElement('div');document.body.append(node);const root=createRoot(node);
  try{await act(async()=>root.render(createElement(Settings)));
