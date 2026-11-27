@@ -70,6 +70,20 @@ pub fn run() {
             return;
         }
     };
+    // Acquire profile ownership before Tauri's setup hook. A second process is
+    // a normal activation race; returning here lets the existing instance keep
+    // running instead of turning a lock conflict into a setup panic/SIGABRT.
+    let ownership = match instance_guard::profile_startup() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            eprintln!("Enki profile is already owned by another running instance; ignoring duplicate launch.");
+            return;
+        }
+        Err(error) => {
+            eprintln!("Cannot acquire Enki profile ownership: {error}");
+            return;
+        }
+    };
     let hot = hub_updates::assets::HotAssets::load();
     let mut context = tauri::generate_context!();
     let mut profile_windows = Vec::new();
@@ -115,7 +129,6 @@ pub fn run() {
         .setup(move |app| {
             // Backstop for simultaneous starts or unavailable OS activation IPC.
             // No runtime/controller is started without exclusive profile ownership.
-            let ownership = instance_guard::profile().map_err(std::io::Error::other)?;
             app.manage(ownership);
             if let Some(profile) = &webview_profile {
                 for window in &profile_windows {
