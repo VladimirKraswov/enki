@@ -262,9 +262,7 @@ mod tests {
             fs::read_to_string(root.join("image-generation.json")).unwrap(),
             current
         );
-        assert!(!root
-            .join("image-generation.before-hub-v1.json")
-            .exists());
+        assert!(!root.join("image-generation.before-hub-v1.json").exists());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -436,7 +434,10 @@ async fn image_api(method: &str, route: &str, timeout: u64) -> Result<reqwest::R
         .await
         .map_err(|_| "Сервис изображений не отвечает. Проверьте URL и доступность".to_string())
 }
-async fn json_bounded(mut response: reqwest::Response, limit: usize) -> Result<serde_json::Value, String> {
+async fn json_bounded(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<serde_json::Value, String> {
     if !response.status().is_success() {
         let status = response.status().as_u16();
         return Err(format!(
@@ -451,7 +452,11 @@ async fn json_bounded(mut response: reqwest::Response, limit: usize) -> Result<s
         ));
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "Ответ сервиса оборвался")? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Ответ сервиса оборвался")?
+    {
         if bytes.len() + chunk.len() > limit {
             return Err("Слишком большой ответ сервиса".into());
         }
@@ -461,25 +466,39 @@ async fn json_bounded(mut response: reqwest::Response, limit: usize) -> Result<s
 }
 /// Progress and result metadata of one image job for the chat card.
 #[tauri::command]
-pub async fn image_job(window: tauri::WebviewWindow, job_id: String) -> Result<serde_json::Value, String> {
+pub async fn image_job(
+    window: tauri::WebviewWindow,
+    job_id: String,
+) -> Result<serde_json::Value, String> {
     if window.label() != "main" {
         return Err("Недоступно в этом окне".into());
     }
     if !valid_job_id(&job_id) {
         return Err("Некорректное задание".into());
     }
-    json_bounded(image_api("GET", &format!("/jobs/{job_id}"), 20).await?, 262144).await
+    json_bounded(
+        image_api("GET", &format!("/jobs/{job_id}"), 20).await?,
+        262144,
+    )
+    .await
 }
 /// Cancel a queued or running job; finished images stay available.
 #[tauri::command]
-pub async fn image_job_cancel(window: tauri::WebviewWindow, job_id: String) -> Result<serde_json::Value, String> {
+pub async fn image_job_cancel(
+    window: tauri::WebviewWindow,
+    job_id: String,
+) -> Result<serde_json::Value, String> {
     if window.label() != "main" {
         return Err("Недоступно в этом окне".into());
     }
     if !valid_job_id(&job_id) {
         return Err("Некорректное задание".into());
     }
-    json_bounded(image_api("DELETE", &format!("/jobs/{job_id}"), 30).await?, 262144).await
+    json_bounded(
+        image_api("DELETE", &format!("/jobs/{job_id}"), 30).await?,
+        262144,
+    )
+    .await
 }
 /// Save the finished images of a job into the open chat's generated-images
 /// folder and return their file URLs. Used when a turn ended before the agent
@@ -493,10 +512,17 @@ pub async fn image_job_result(
     if window.label() != "main" {
         return Err("Недоступно в этом окне".into());
     }
-    if !valid_job_id(&job_id) || directory.len() > 4096 || !std::path::Path::new(&directory).is_absolute() {
+    if !valid_job_id(&job_id)
+        || directory.len() > 4096
+        || !std::path::Path::new(&directory).is_absolute()
+    {
         return Err("Некорректный запрос результата".into());
     }
-    let state = json_bounded(image_api("GET", &format!("/jobs/{job_id}"), 20).await?, 262144).await?;
+    let state = json_bounded(
+        image_api("GET", &format!("/jobs/{job_id}"), 20).await?,
+        262144,
+    )
+    .await?;
     if state["state"] != "completed" {
         return Err("Задание ещё не завершено".into());
     }
@@ -515,13 +541,19 @@ pub async fn image_job_result(
     for segment in [".enki", "generated-images"] {
         folder = folder.join(segment);
         fs::create_dir_all(&folder).map_err(|_| "Папка результатов недоступна")?;
-        if fs::symlink_metadata(&folder).map_err(|_| "Папка результатов недоступна")?.is_symlink() {
+        if fs::symlink_metadata(&folder)
+            .map_err(|_| "Папка результатов недоступна")?
+            .is_symlink()
+        {
             return Err("Папка результатов не должна быть ссылкой".into());
         }
     }
     folder = folder.join(&job_id);
     fs::create_dir_all(&folder).map_err(|_| "Папка результатов недоступна")?;
-    if fs::symlink_metadata(&folder).map_err(|_| "Папка результатов недоступна")?.is_symlink() {
+    if fs::symlink_metadata(&folder)
+        .map_err(|_| "Папка результатов недоступна")?
+        .is_symlink()
+    {
         return Err("Папка результатов не должна быть ссылкой".into());
     }
     let mut saved = Vec::new();
@@ -532,7 +564,11 @@ pub async fn image_job_result(
             return Err("Сервис не вернул файл изображения".into());
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "Передача PNG оборвалась")? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "Передача PNG оборвалась")?
+        {
             if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
                 return Err("PNG больше 8 МБ".into());
             }
@@ -543,8 +579,14 @@ pub async fn image_job_result(
         }
         use std::io::Write as _;
         let path = folder.join(name);
-        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => file.write_all(&bytes).map_err(|_| "Не удалось сохранить PNG")?,
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => file
+                .write_all(&bytes)
+                .map_err(|_| "Не удалось сохранить PNG")?,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let existing = fs::read(&path).map_err(|_| "Файл результата недоступен")?;
                 if existing != bytes {
@@ -642,7 +684,10 @@ mod png_tests {
 }
 
 fn asset_name(name: &str) -> bool {
-    let Some(number) = name.strip_suffix(".png").and_then(|s| s.strip_prefix("image-")) else {
+    let Some(number) = name
+        .strip_suffix(".png")
+        .and_then(|s| s.strip_prefix("image-"))
+    else {
         return false;
     };
     number.len() == 2 && number.bytes().all(|b| b.is_ascii_digit())
@@ -693,7 +738,13 @@ mod job_tests {
     #[test]
     fn accepts_only_hub_job_ids() {
         assert!(valid_job_id("01234567-1234-1234-1234-123456789abc"));
-        for value in ["", "../jobs", "01234567-1234-1234-1234-123456789ab", "01234567-1234-1234-1234-123456789abc/", "zzzzzzzz-1234-1234-1234-123456789abc"] {
+        for value in [
+            "",
+            "../jobs",
+            "01234567-1234-1234-1234-123456789ab",
+            "01234567-1234-1234-1234-123456789abc/",
+            "zzzzzzzz-1234-1234-1234-123456789abc",
+        ] {
             assert!(!valid_job_id(value), "{value}")
         }
     }
@@ -704,12 +755,21 @@ mod remote_tests {
     #[test]
     fn references_do_not_depend_on_client_os() {
         for root in ["file:///C:/project", "file:///private/tmp/project"] {
-            let u=url::Url::parse(&format!("{root}/.enki/generated-images/01234567-1234-1234-1234-123456789abc/image-02.png")).unwrap();
+            let u = url::Url::parse(&format!(
+                "{root}/.enki/generated-images/01234567-1234-1234-1234-123456789abc/image-02.png"
+            ))
+            .unwrap();
             assert_eq!(remote_reference(&u).unwrap().1, "image-02.png")
         }
-        let u=url::Url::parse("file:///w/.enki/generated-images/01234567-1234-1234-1234-123456789abc/image-01.png").unwrap();
+        let u = url::Url::parse(
+            "file:///w/.enki/generated-images/01234567-1234-1234-1234-123456789abc/image-01.png",
+        )
+        .unwrap();
         assert_eq!(remote_reference(&u).unwrap().1, "image-01.png");
-        let u=url::Url::parse("file:///w/.enki/generated-images/01234567-1234-1234-1234-123456789abc/preview-01.png").unwrap();
+        let u = url::Url::parse(
+            "file:///w/.enki/generated-images/01234567-1234-1234-1234-123456789abc/preview-01.png",
+        )
+        .unwrap();
         assert!(remote_reference(&u).is_none());
     }
 }
