@@ -281,7 +281,8 @@ export function Composer() {
       {switchError && !switchState?.error && <div className="composer-error" role="alert">{switchError}</div>}
       {attachmentProgress && <div className="workspace-progress" role="status">{attachmentProgress}</div>}
       <PendingCorrections items={pendingCorrections}
-        connected={connected && s.connection.streamState === "open"} visible={visibleSteering}/>
+        connected={connected && s.connection.streamState === "open"} visible={visibleSteering}
+        onAction={(command, action) => void store.correctionAction(command, action)}/>
       {store.getQueue().length > 0 && (
         <Suspense fallback={null}><PromptQueue attachments={attachments} removeFile={removeFile} focusEditor={() => textareaRef.current?.focus()} switching={switching}/></Suspense>
       )}

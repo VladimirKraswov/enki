@@ -285,6 +285,36 @@ export function buildRoutes(runtime: Runtime, relay: ClientRelayBroker | null): 
     return { stopped: true };
   });
 
+  // --------------------------------------------------------- corrections
+  // A correction is a steer command. It may be cancelled until the agent takes
+  // it, closed when its delivery was never confirmed, or resent as a new turn.
+  r("POST", "/sessions/:id/corrections/:command/cancel", async (request) => {
+    const current = scoped(request), worker = await runtime.registry.worker(current.id);
+    return worker.cancelSteer(String(request.params.command));
+  });
+  r("POST", "/sessions/:id/corrections/:command/close", async (request) => {
+    const current = scoped(request), worker = await runtime.registry.worker(current.id);
+    return worker.closeCorrection(String(request.params.command));
+  });
+  r("POST", "/sessions/:id/corrections/:command/retry", async (request) => {
+    const current = scoped(request);
+    if (isReadOnlyOrigin(current.origin)) throw new HttpError(409, "Архив доступен только для чтения.");
+    const receipt = runtime.ledger.get(String(request.params.command));
+    if (!receipt || receipt.kind !== "steer") throw new HttpError(404, "Уточнение не найдено.");
+    if (receipt.state !== "uncertain" && receipt.state !== "cancelled" && receipt.state !== "rejected")
+      throw new HttpError(409, "Уточнение ещё выполняется.");
+    const ledged = runtime.ledger.getRequest(receipt.id);
+    const payload = ledged?.payload as { parts?: PromptPart[]; model?: ModelRef } | undefined;
+    const parts = payload?.parts ?? [];
+    if (!parts.length) throw new HttpError(409, "Текст уточнения не сохранён; повторите вручную.");
+    const model = isModelRef(payload?.model) ? payload.model : (current.model ?? null);
+    if (!model) throw new HttpError(409, "Уточнение отправлено до выбора модели; повторите как обычный запрос.");
+    const worker = await runtime.registry.worker(current.id);
+    const resent = await worker.resendCorrection(receipt.id, parts, model);
+    runtime.ledger.update(receipt.id, "cancelled", { error: "Переотправлено новым уточнением." });
+    return resent;
+  });
+
   // --------------------------------------------------------------- queue
   r("GET", "/sessions/:id/queue", (request) => runtime.queue.state(scoped(request).id));
   r("POST", "/sessions/:id/queue", (request) => {

@@ -3598,3 +3598,4 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .image-job-actions{display:flex;align-items:center;gap:10px;margin-top:10px}
 .image-job-actions:empty{display:none}
 @media (prefers-reduced-motion:reduce){.image-job-bar>span{transition:none}}
+.correction-actions { display: flex; gap: 6px; padding: 0 10px 8px; }

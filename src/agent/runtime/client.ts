@@ -340,6 +340,13 @@ export class RuntimeClient {
   holdQueueItem(id: string, directory: string, item: string) {
     return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(item)}/hold`, { query: { directory }, body: {} });
   }
+
+  /** A correction (steer) is a durable command: cancel, close or resend it. */
+  correctionAction(id: string, directory: string, command: string, action: "cancel" | "close" | "retry") {
+    return this.request<CommandReceipt>("POST",
+      `/sessions/${encodeURIComponent(id)}/corrections/${encodeURIComponent(command)}/${action}`,
+      { query: { directory }, body: {}, timeoutMs: 120000 });
+  }
   releaseQueueItem(id: string, directory: string, item: string, drain = true) {
     return this.request<QueueStateDTO>("POST", `/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(item)}/release`, { query: { directory }, body: { drain } });
   }

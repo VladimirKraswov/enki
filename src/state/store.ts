@@ -3578,6 +3578,23 @@ class Store {
     }
   }
 
+  /** Cancel, close or resend a correction receipt of the open chat. */
+  async correctionAction(command: string, action: "cancel" | "close" | "retry"): Promise<void> {
+    const id = this.state.activeSessionId, directory = this.state.directory, backend = this.runtime;
+    if (!id || !directory || !backend) return;
+    const generation = this.connectionGeneration;
+    try {
+      await backend.correctionAction(id, directory, command, action);
+      if (backend !== this.runtime || generation !== this.connectionGeneration || directory !== this.state.directory) return;
+      ++this.interactionSnapshotVersion;
+      if (action === "retry") this.patchUi({ toast: "Уточнение отправлено заново." });
+      await this.refreshPermissionSnapshot?.(backend, generation, directory).catch(() => {});
+      this.mutate(() => ({}));
+    } catch (error) {
+      this.patchUi({ toast: `Не удалось ${action === "cancel" ? "отменить" : action === "close" ? "закрыть" : "переотправить"} уточнение: ${(error as Error).message}` });
+    }
+  }
+
   async rejectQuestion(req: QuestionRequest): Promise<void> {
     const directory = this.state.directory, backend = this.runtime, generation = this.connectionGeneration;
     if (!directory || !backend) return;

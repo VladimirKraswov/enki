@@ -13,8 +13,9 @@ export function correctionIsVisible(item: PendingCorrectionDTO, visible: readonl
 }
 
 /** Durable receipts: never dispatch, replay or interrupt the active turn. */
-export const PendingCorrections = memo(function PendingCorrections({ items, connected, visible = [] }: {
+export const PendingCorrections = memo(function PendingCorrections({ items, connected, visible = [], onAction }: {
   items: PendingCorrectionDTO[]; connected: boolean; visible?: readonly VisibleSteering[];
+  onAction?: (command: string, action: "cancel" | "close" | "retry") => void;
 }) {
   const pending = items.filter(item => !correctionIsVisible(item, visible));
   if (!pending.length) return null;
@@ -27,6 +28,12 @@ export const PendingCorrections = memo(function PendingCorrections({ items, conn
       <div className="correction-body"><p>{item.text || "Приложенные файлы"}</p><CopyButton text={item.text} label="Скопировать уточнение" compact/></div>
       {!!item.attachments?.length && <p className="correction-files">{item.attachments.map(a => a.name).join(" · ")}</p>}
       {item.state === "uncertain" && <p className="correction-warning" role="alert">{item.error || "Проверьте историю перед повторной отправкой."}</p>}
+      {onAction && <div className="correction-actions">
+        {item.state === "uncertain"
+          ? <><button className="btn small" onClick={() => onAction(item.id, "retry")}>Отправить заново</button>
+            <button className="btn small" onClick={() => onAction(item.id, "close")}>Закрыть</button></>
+          : <button className="btn small" title="Пока агент не взял уточнение в работу" onClick={() => onAction(item.id, "cancel")}>Отменить</button>}
+      </div>}
     </details>)}
   </section>;
 });

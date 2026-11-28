@@ -196,6 +196,10 @@ export class RuntimeBackend implements AgentBackend {
 
   // ---- queue / schedules (owned by the runtime) ----
   queue(sessionID: string, directory: string): Promise<QueueStateDTO> { return this.client.queue(sessionID, directory); }
+  /** Durable correction receipt: cancel before pickup, close, or resend. */
+  correctionAction(sessionID: string, directory: string, command: string, action: "cancel" | "close" | "retry") {
+    return this.client.correctionAction(sessionID, directory, command, action);
+  }
   schedules(directory?: string): Promise<{ tasks: ScheduleDTO[] }> { return this.client.schedules(directory ? { directory } : {}); }
 
   // ---- events ----

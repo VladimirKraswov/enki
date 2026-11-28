@@ -211,3 +211,32 @@ describe("steering, editing and attachments", () => {
     expect(queue.state("s1")).toMatchObject({ armed: false, items: [expect.objectContaining({ id: "only", state: "ready", error: expect.stringContaining("не найдено") })] });
   });
 });
+
+describe("correction receipts do not hang forever", () => {
+  const steerRow = (id: string, updated: number) => {
+    db.run(
+      "INSERT INTO commands (id,kind,session_id,directory,payload_hash,state,entry_id,error,source,source_id,created,updated,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      id, "steer", "s1", "/p", "h", "uncertain", null, "Не удалось сопоставить уточнение с сохранённой историей.", "manual", null, updated, updated,
+      JSON.stringify({ parts: [{ type: "text", text: "уточнение" }] }),
+    );
+  };
+  it("keeps a fresh unconfirmed correction visible", () => {
+    steerRow("c-fresh", Date.now() - 60_000);
+    expect(queue.state("s1").corrections?.map(c => c.id)).toEqual(["c-fresh"]);
+  });
+  it("drops the same correction once it is older than the notice window", () => {
+    steerRow("c-old", Date.now() - 11 * 60_000);
+    expect(queue.state("s1").corrections ?? []).toEqual([]);
+  });
+});
+
+describe("correction lifecycle endpoints", () => {
+  it("closes only settled corrections and reports the save in the receipt", () => {
+    const id = "c-uncertain";
+    db.run("INSERT INTO commands (id,kind,session_id,directory,payload_hash,state,entry_id,error,source,source_id,created,updated,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      id, "steer", "s1", "/p", "h", "uncertain", null, "не сопоставлено", "manual", null, Date.now(), Date.now(),
+      JSON.stringify({ parts: [{ type: "text", text: "уточнение" }] }));
+    const closed = queue.state("s1").corrections ?? [];
+    expect(closed.map(c => c.state)).toEqual(["uncertain"]);
+  });
+});

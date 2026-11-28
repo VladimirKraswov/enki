@@ -85,6 +85,9 @@ export interface EnqueueInput {
   model: ModelRef;
 }
 
+/** How long an unconfirmed correction stays visible before it becomes history. */
+const CORRECTION_NOTICE_MS = 10 * 60_000;
+
 export class PromptQueue {
   private host: QueueHost | null = null;
   private readonly unsubscribe: () => void;
@@ -112,7 +115,10 @@ export class PromptQueue {
   close(): void { this.closed = true; this.correctionUpdates.clear(); this.unsubscribe(); }
 
   private corrections(sessionID: string): PendingCorrectionDTO[] {
-    return this.db.all("SELECT id,payload,state,created,error FROM commands WHERE session_id=? AND kind='steer' AND entry_id IS NULL AND state IN ('accepted','dispatching','running','uncertain') ORDER BY created", sessionID).flatMap(row => {
+    // "uncertain" never resolves: the turn ended without a matching entry. Showing
+    // it forever turned a one-off notice into a permanent card in the chat.
+    const stale = Date.now() - CORRECTION_NOTICE_MS;
+    return this.db.all("SELECT id,payload,state,created,updated,error FROM commands WHERE session_id=? AND kind='steer' AND entry_id IS NULL AND state IN ('accepted','dispatching','running','uncertain') ORDER BY created", sessionID).flatMap(row => {
       const raw = optionalText(row, "payload");
       if (!raw) return []; // Old schema-1 receipts contain no recoverable input.
       const payload = JSON.parse(raw) as { parts?: PromptPart[] };
@@ -120,6 +126,7 @@ export class PromptQueue {
       const value = visiblePromptText(parts.flatMap(p => p.type === "text" && !p.synthetic ? [p.text] : []).join("\n"), sessionID);
       const attachments = parts.flatMap(p => p.type === "file" ? [{ name: p.filename ?? "Файл" }] : []);
       const state = text(row, "state") as PendingCorrectionDTO["state"];
+      if (state === "uncertain" && integer(row, "updated") < stale) return [];
       return [{ id: text(row, "id"), text: value, state, createdAt: integer(row, "created"),
         ...(optionalText(row, "error") ? { error: optionalText(row, "error")! } : {}), ...(attachments.length ? { attachments } : {}) }];
     });

@@ -742,6 +742,55 @@ export class SessionWorker {
     });
   }
 
+  /** Cancel a correction that the agent has not taken yet. The SDK keeps its
+   * pending steers as texts, so the queue is drained and the rest re-queued —
+   * nothing else is dropped and no input is replayed. */
+  async cancelSteer(commandId: string): Promise<CommandReceipt> {
+    return this.serial(async () => {
+      this.assertOpen();
+      const receipt = this.deps.ledger.get(commandId);
+      if (!receipt || receipt.kind !== "steer") throw new Error("Это не уточнение.");
+      if (receipt.entryId) throw new Error("Уточнение уже передано агенту; отменить нельзя.");
+      if (receipt.state !== "accepted" && receipt.state !== "dispatching" && receipt.state !== "running")
+        throw new Error("Уточнение уже завершено.");
+      const pending = [...(this.session.getSteeringMessages() ?? [])];
+      const text = pending.find(value => this.correlations.some(item => item.command === commandId && value === item.text));
+      if (text === undefined) throw new Error("Агент уже взял уточнение в работу; отменить нельзя.");
+      const { steering, followUp } = this.session.clearQueue();
+      const keep = [...steering];
+      keep.splice(keep.indexOf(text), 1);
+      for (const value of keep) await this.session.steer(value);
+      for (const value of followUp) await this.session.followUp(value);
+      this.steeringCommands.delete(commandId);
+      const index = this.correlations.findIndex(item => item.command === commandId);
+      if (index >= 0) this.correlations.splice(index, 1);
+      this.deps.journal.append(this.directory, this.id, { type: "session.outcome", properties: {
+        sessionID: this.id, commandID: commandId, state: "cancelled", reason: "correction-cancelled",
+        error: "Уточнение отменено до передачи агенту." } });
+      return this.deps.ledger.update(commandId, "cancelled", { error: "Уточнение отменено до передачи агенту." })!;
+    });
+  }
+
+  /** Resend an unconfirmed correction: a new steer while the turn is running,
+   * otherwise an ordinary prompt. The old receipt is closed by the caller. */
+  async resendCorrection(commandId: string, parts: PromptPart[], model: ModelRef): Promise<CommandReceipt> {
+    const id = `${commandId}:retry:${Date.now().toString(36)}`;
+    const payload = { parts, model } as PromptCommand["payload"];
+    return this.session.isStreaming
+      ? this.steer({ id, kind: "steer", sessionID: this.id, directory: this.directory, payload })
+      : this.startPrompt({ id, kind: "prompt", sessionID: this.id, directory: this.directory, payload });
+  }
+
+  /** Close a correction whose delivery was never confirmed: the text stays in
+   * the durable receipt, the chat stops showing it as a pending step. */
+  closeCorrection(commandId: string): CommandReceipt {
+    const receipt = this.deps.ledger.get(commandId);
+    if (!receipt || receipt.kind !== "steer") throw new Error("Это не уточнение.");
+    if (receipt.state !== "uncertain" && receipt.state !== "cancelled" && receipt.state !== "rejected")
+      throw new Error("Это уточнение ещё выполняется.");
+    return this.deps.ledger.update(commandId, "cancelled", { error: receipt.error ?? "Закрыто пользователем." })!;
+  }
+
   /** Stop: undelivered corrections are handed back, pending approvals denied.
    * `reason` (e.g. a lost Hub reservation) becomes the truthful receipt text. */
   async abort(reason?: string): Promise<void> {
