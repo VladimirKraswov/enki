@@ -137,6 +137,18 @@ pub fn cleanup_legacy_previous() -> Result<usize, String> {
         .find(|p| p.extension().is_some_and(|x| x == "app"))
         .ok_or("Enki application bundle not found")?;
     let parent = bundle.parent().ok_or("Application parent not found")?;
+    // Some capability helpers may still be executing from a legacy bundle
+    // while the new desktop/runtime is starting. A failed process listing is
+    // deliberately fatal to cleanup: retain the old files rather than risk
+    // unlinking code an Enki-owned process is still using.
+    let processes = Command::new("/bin/ps")
+        .args(["-axo", "command="])
+        .output()
+        .map_err(|e| format!("Could not inspect processes before legacy bundle cleanup: {e}"))?;
+    if !processes.status.success() {
+        return Err("Could not inspect processes before legacy bundle cleanup".into());
+    }
+    let processes = String::from_utf8_lossy(&processes.stdout);
     let mut removed = 0;
     for entry in fs::read_dir(parent).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -146,6 +158,13 @@ pub fn cleanup_legacy_previous() -> Result<usize, String> {
             continue;
         }
         let path = entry.path();
+        if process_listing_references_bundle(&processes, &path) {
+            eprintln!(
+                "Keeping legacy Enki bundle while a process still references it: {}",
+                path.display()
+            );
+            continue;
+        }
         let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         if metadata.file_type().is_dir() {
             fs::remove_dir_all(path).map_err(|e| e.to_string())?;
@@ -160,6 +179,12 @@ fn legacy_previous_name(name: &str) -> bool {
     name.strip_prefix(".Enki-previous-")
         .and_then(|n| n.strip_suffix(".app"))
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+#[cfg(target_os = "macos")]
+fn process_listing_references_bundle(listing: &str, bundle: &Path) -> bool {
+    let prefix = format!("{}/", bundle.display());
+    listing.lines().any(|line| line.contains(&prefix))
 }
 
 /// Current application backup metadata for the one-click rollback UI.
@@ -894,6 +919,21 @@ mod tests {
         ] {
             assert!(!legacy_previous_name(name), "unexpected match: {name}");
         }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_rollback_cleanup_keeps_bundles_referenced_by_live_processes() {
+        let active = Path::new("/Applications/.Enki-previous-9376.app");
+        let listing = "/Applications/.Enki-previous-9376.app/Contents/Resources/agent/node/bin/node --proxy\n/Applications/Enki.app/Contents/MacOS/enki";
+        assert!(process_listing_references_bundle(listing, active));
+        assert!(!process_listing_references_bundle(
+            listing,
+            Path::new("/Applications/.Enki-previous-123.app")
+        ));
+        assert!(!process_listing_references_bundle(
+            listing,
+            Path::new("/Applications/.Enki-previous-9376.app.bak")
+        ));
     }
     #[test]
     #[cfg(unix)]

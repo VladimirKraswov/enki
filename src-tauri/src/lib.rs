@@ -131,12 +131,6 @@ pub fn run() {
                 }
             };
             app.manage(ownership);
-            #[cfg(target_os = "macos")]
-            std::thread::spawn(|| {
-                if let Err(error) = hub_updates::install::cleanup_legacy_previous() {
-                    eprintln!("Could not clean obsolete Enki rollback bundles: {error}");
-                }
-            });
             if let Some(profile) = &webview_profile {
                 for window in &profile_windows {
                     profile
@@ -169,6 +163,13 @@ pub fn run() {
                 let supervisor = handle.state::<runtime::RuntimeSupervisor>().inner().clone();
                 if let Err(error) = supervisor.ensure(&handle) {
                     eprintln!("Enki Runtime: {error}");
+                }
+                // Retire old PID-named bundles only after Runtime startup was
+                // attempted; cleanup itself also checks that no process still
+                // references any candidate bundle.
+                #[cfg(target_os = "macos")]
+                if let Err(error) = hub_updates::install::cleanup_legacy_previous() {
+                    eprintln!("Could not clean obsolete Enki rollback bundles: {error}");
                 }
             });
             runtime::start_rotation(app.handle().clone());
