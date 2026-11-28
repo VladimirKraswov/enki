@@ -21,6 +21,7 @@ API (all under /api/images, Authorization: Bearer <token>)
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -210,8 +211,17 @@ class Images:
         self.pending: "queue.Queue[str]" = queue.Queue()
         self.current: str | None = None
         self.current_prompt: str | None = None
+        self._stopping = threading.Event()
         self._init_db()
-        threading.Thread(target=self._worker, daemon=True).start()
+        self._worker_thread = threading.Thread(target=self._worker, name="enki-images-worker", daemon=True)
+        self._worker_thread.start()
+
+    def stop(self, timeout: float = 5.0) -> bool:
+        """Stop accepting queued work and wait briefly for the owned worker to exit."""
+        self._stopping.set()
+        self.pending.put("")
+        self._worker_thread.join(timeout=max(0.0, timeout))
+        return not self._worker_thread.is_alive()
 
     # ---------- storage ----------
     def _connect(self) -> sqlite3.Connection:
@@ -219,8 +229,18 @@ class Images:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextlib.contextmanager
+    def _connection(self):
+        """Commit/rollback and always release SQLite's file handle (notably on Windows)."""
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def _init_db(self):
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS jobs(
@@ -236,7 +256,7 @@ class Images:
         os.chmod(self.db, 0o600)
 
     def _trim(self):
-        with self._connect() as connection:
+        with self._connection() as connection:
             stale = connection.execute(
                 "SELECT id FROM jobs ORDER BY created DESC LIMIT -1 OFFSET ?", (KEEP_JOBS,)).fetchall()
             for row in stale:
@@ -249,7 +269,7 @@ class Images:
                 folder.rmdir()
 
     def _row(self, job_id: str) -> sqlite3.Row:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
             raise ImagesError(404, "job_not_found", "Задача не найдена")
@@ -370,7 +390,7 @@ class Images:
         request = {"prompt": prompt, "items": items, "width": width, "height": height,
                    "seed": seed, "strength": strength, "source": bool(source),
                    "quality": quality, "variants": variants}
-        with self.lock, self._connect() as connection:
+        with self.lock, self._connection() as connection:
             connection.execute(
                 "INSERT INTO jobs(id,state,created,mode,width,height,seed,phase,step,steps,prompts,images,request) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -390,7 +410,7 @@ class Images:
 
     def jobs(self, state: str | None = None, limit: int = 20) -> dict:
         limit = max(1, min(100, int(limit)))
-        with self._connect() as connection:
+        with self._connection() as connection:
             if state:
                 if state not in STATES:
                     raise ImagesError(422, "invalid_state", "state: " + ", ".join(STATES))
@@ -449,6 +469,8 @@ class Images:
         while True:
             job_id = self.pending.get()
             try:
+                if not job_id and self._stopping.is_set():
+                    return
                 self._run(job_id)
             except ImagesError as error:
                 self._fail(job_id, error.code, error.message)
@@ -464,7 +486,7 @@ class Images:
         if not fields:
             return
         assignments = ", ".join(f"{key}=?" for key in fields)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(f"UPDATE jobs SET {assignments} WHERE id=?", (*fields.values(), job_id))
 
     def _fail(self, job_id: str, code: str, message: str):

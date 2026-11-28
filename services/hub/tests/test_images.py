@@ -22,6 +22,8 @@ class ImagesService(unittest.TestCase):
         self.service = images.Images(self.root)
 
     def tearDown(self):
+        # The service owns a background worker; stop it before removing its SQLite database.
+        self.service.stop()
         self.env.stop()
         self.tmp.cleanup()
 
@@ -32,6 +34,22 @@ class ImagesService(unittest.TestCase):
         self.assertEqual(health["engine"]["device"], "Tesla V100")
         self.assertEqual(health["model"]["qualities"]["best"]["steps"], 40)
         self.assertEqual(health["queue"], {"pending": 0, "running": 0})
+
+    def test_database_connections_are_closed_after_each_operation(self):
+        original_connect = self.service._connect
+        opened = []
+
+        def tracked_connect():
+            connection = original_connect()
+            opened.append(connection)
+            return connection
+
+        with patch.object(self.service, "_connect", side_effect=tracked_connect):
+            self.service.jobs()
+
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(images.sqlite3.ProgrammingError):
+            opened[0].execute("SELECT 1")
 
     def test_auth_uses_constant_time_bearer_check(self):
         self.service.authorize({"Authorization": "Bearer test-secret"})

@@ -108,16 +108,15 @@ pub fn synchronize(source: &Path, profile: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
     fn fixture() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "enki-resource-sync-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         fs::canonicalize(dir).unwrap()
     }
     fn source(base: &Path, bytes: &[u8]) -> std::path::PathBuf {

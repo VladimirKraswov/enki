@@ -223,6 +223,10 @@ class Hub:
         self.model_services = _services_module.ModelServices(root, self.model_catalog, Fault)
         self.images = _images_module.Images(root)
 
+    def close(self):
+        """Stop Hub-owned background services during shutdown and test teardown."""
+        self.images.stop()
+
     @contextlib.contextmanager
     def connection(self):
         c = sqlite3.connect(self.db, timeout=10)
@@ -832,4 +836,8 @@ if __name__=='__main__':
         server=Server((args.listen,args.port),hub,Path(__file__).parent/'web')
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(args.cert,args.key);server.socket=context.wrap_socket(server.socket,server_side=True,do_handshake_on_connect=False)
-        server.serve_forever()
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+            hub.close()

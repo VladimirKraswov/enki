@@ -303,4 +303,17 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 ## Межплатформенный PDF test 2.0.133
 
 - [x] Исправить PDF.js fake worker URL в Windows-тесте через `pathToFileURL`.
-- [ ] Полный gate, Hub receipt и сборка установщиков 2.0.133.
+- [x] Windows UI suite прошёл после исправления; Windows Hub suite нашёл
+  незакрытые SQLite-соединения image-service при завершении тестов.
+- [x] Linux и macOS package jobs прошли; Windows UI tests прошли, но Windows
+  Hub suite обнаружил открытые SQLite-дескрипторы. Workflow 2.0.133 завершился
+  ошибкой только на Windows Hub tests; исправление включено в 2.0.134.
+
+## Ресурсы image-service и MCP 2.0.134
+
+- [x] Закрывать SQLite-соединение image-service после каждой транзакции; на
+  Windows `with sqlite3.Connection` сам по себе не закрывает файловый дескриптор.
+- [x] Останавливать собственный image worker при штатном завершении Hub.
+- [x] Добавлен регрессионный тест на закрытое соединение; image и полный Hub
+  наборы проходят на Mac.
+- [ ] Канонический gate, Hub receipt, платформенные сборки и MCP smoke для 2.0.134.

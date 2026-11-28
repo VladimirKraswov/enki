@@ -601,3 +601,29 @@ platform workflow публикуются в 2.0.133.
 URL со схемой `file:`. Исправлено только в тестовой загрузке worker, продуктовый
 PDF.js worker path не менялся. `test/pdf-local.test.ts` проходит на Mac.
 Полный gate и Hub publication 2.0.133 ещё не выполнялись.
+
+## 2.0.134 — MCP Runtime path и дескрипторы image-service
+
+Продолжение проверки MCP показало источник общего отказа серверов: запись
+shared runtime содержала абсолютный путь к удалённому Node. В установленном
+Enki локальная конфигурация исправлена на подписанный Node из app bundle;
+прямой smoke connect/listTools подтвердил 9/9 MCP серверов. Инвентарь skills
+подтвердил включённые global/project scopes и файлы SKILL.md. Исходниковое
+исправление stale Node path и regression test уже находятся в опубликованных
+2.0.131+.
+
+Платформенный workflow 2.0.133 подтвердил macOS и Linux; Windows UI suite
+прошёл, но Windows Hub suite обнаружил `PermissionError [WinError 32]` на
+`images.sqlite`. Workflow завершился ошибкой только на Windows Hub tests. Причина:
+контекст `with sqlite3.Connection` завершает транзакцию, но не закрывает файл.
+В 2.0.134 добавлен закрывающий context manager для всех соединений image-service,
+остановка принадлежащего Hub worker при штатном завершении, regression test
+на закрытый handle и корректное завершение worker в image/workshop tests.
+
+Проверено локально: `python3 -m unittest services.hub.tests.test_images` — 6
+passed; `python3 -m unittest discover -s services/hub/tests` — 143 passed,
+2 skipped. Это пока подтверждение на macOS; Windows CI обязателен. Полный
+canonical release gate, публикация 2.0.134 и package workflow ещё не выполнены.
+Первый полный gate нашёл flaky Rust fixture: два parallel теста создавали
+каталоги по timestamp и могли столкнуться. В `build_runtime_resources` имя
+теперь использует уникальный монотонный atomic ID процесса; повторяю Rust gate.

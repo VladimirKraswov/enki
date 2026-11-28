@@ -17,6 +17,7 @@ class Exchange(unittest.TestCase):
         self.win = self.h.authenticate(self.h.provision('Windows', 'windows')['token'])
 
     def tearDown(self):
+        self.h.close()
         self.tmp.cleanup()
 
     def call(self, route, actor=None, data=None, query=None):
@@ -34,6 +35,7 @@ class Exchange(unittest.TestCase):
 
     def test_changes_survive_restart_and_do_not_publish_or_execute(self):
         receipt = self.call('changes', data=self.change())
+        self.h.close()
         self.h = m.Hub(Path(self.tmp.name))
         received = self.call('changes/'+receipt['id'], self.win)
         self.assertEqual(received['payload'], self.change())
