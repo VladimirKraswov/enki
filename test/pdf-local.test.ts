@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
-vi.mock("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url", () => ({ default: createRequire(import.meta.url).resolve("pdfjs-dist/legacy/build/pdf.worker.min.mjs") }));
+import { pathToFileURL } from "node:url";
+vi.mock("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url", () => ({ default: pathToFileURL(createRequire(import.meta.url).resolve("pdfjs-dist/legacy/build/pdf.worker.min.mjs")).href }));
 import { convertPdfLocally } from "../src/attachments/pdfLocal";
 
 it("extracts text from a real PDF without the helper service", async () => {

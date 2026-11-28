@@ -587,6 +587,17 @@ Release gate и публикация 2.0.132 ещё не выполнены.
 Промежуточная проверка 2.0.132: после realpath-fix целевые lease tests прошли
 на системном macOS TMPDIR (2/2); `prepare.test.mjs` — 26 passed / 1 skipped;
 Runtime — 532/532 и SDK compatibility — 171 passed / 1 skipped без подмены TMPDIR;
-macOS `cargo clippy --all-targets -- -D warnings` и `sdk:check` прошли. Windows
-native-port coverage требует проверки workflow, где есть реальный подписанный
-runner; Rust Linux cfg guard также проверяется Linux job.
+macOS `cargo clippy --all-targets -- -D warnings` и `sdk:check` прошли. В CI
+2.0.132 Windows подтвердил native-port adapter, а Linux clippy и macOS lease
+suite прошли. Windows UI suite нашёл отдельную ошибку фикстуры PDF worker: она
+передавала `D:\...` как URL. В тесте заменил строку пути на корректный `file:`
+URL через `pathToFileURL`; локальный PDF test прошёл. Исправление и повтор
+platform workflow публикуются в 2.0.133.
+
+## 2.0.133 — Windows PDF test URL
+
+Подготовка 2.0.132 обнаружила, что PDF extraction integration test задавал
+`GlobalWorkerOptions.workerSrc` сырым абсолютным Windows-путём; Node ESM требует
+URL со схемой `file:`. Исправлено только в тестовой загрузке worker, продуктовый
+PDF.js worker path не менялся. `test/pdf-local.test.ts` проходит на Mac.
+Полный gate и Hub publication 2.0.133 ещё не выполнялись.
