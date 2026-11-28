@@ -26,7 +26,7 @@ it('creates one authenticated job with the hub contract and never replays a fail
  const created=await run('generate_icon_pack',{prompt:'flat blue icons',items:['sword','shield'],request_key:'stable'});
  expect(created.id).toBe(JOB);expect(calls.map(c=>c.options.method??'GET')).toEqual(['GET','POST']);
  const post=calls[1];expect(post.options.headers.Authorization).toBe('Bearer private-token');expect(post.options.headers['Idempotency-Key']).toBeUndefined();
- const body=JSON.parse(post.options.body);expect(body).toEqual({prompt:'flat blue icons',items:['sword','shield'],width:1024,height:1024,seed:42});
+ const body=JSON.parse(post.options.body);expect(body).toEqual({prompt:'flat blue icons',items:['sword','shield'],width:1024,height:1024,seed:42,quality:'fast'});
  await expect(run('generate_image',{prompt:'x',request_key:'k',width:801})).rejects.toThrow(/кратны 16/);expect(calls.filter(c=>(c.options.method??'GET')==='POST')).toHaveLength(1);
  let attempts=0;const failed=createImages({configFile:config,fetcher:async(url:string)=>{if(url.endsWith('/health'))return new Response(health);attempts++;throw Error('lost acknowledgement')}});
  await expect(failed('generate_image',{prompt:'x',request_key:'same'})).rejects.toThrow('lost acknowledgement');expect(attempts).toBe(1);

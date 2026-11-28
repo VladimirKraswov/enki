@@ -379,3 +379,33 @@ deepseek: Enki Runtime готовится к обновлению», а посл
 
 Проверки: agent-пакет 526+ (queue-unit 17, включая окно неподтверждённых), репозиторий
 1380 PASS, build чистый.
+
+## Срез 16 (2.0.126): правка изображений перестала игнорировать инструкцию
+
+Симптом: «поменяй цвет волос» возвращало ту же картинку — на 4 шагах Lightning, на 40
+шагах CFG 4, с разными формулировками, и на смене фона тоже.
+
+Причина: Hub собирал правку на устаревшем `TextEncodeQwenImageEdit` с `image`-входом.
+Официальный граф 2511 — `TextEncodeQwenImageEditPlus` (источник в `image1`) →
+`FluxKontextMultiReferenceLatentMethod` (`index_timestep_zero`) → KSampler, модель через
+`ModelSamplingAuraFlow` shift 3.1. Старый узел отдавал conditioning, который модель
+трактовала как «воспроизведи исходник».
+
+Сделано в хабе (`/opt/enki-hub/images.py`, бэкапы `images.py.bak-v2/v3`): новый граф;
+пресеты `quality` — `fast` (4 шага, Lightning), `balanced` (8 шагов), `best` (40 шагов,
+CFG 4, shift 3.1, без LoRA); `variants` 1–4 (тот же промпт, сиды +1); `/health` отдаёт
+`qualities`/`max_variants`; метаданные задачи — фактический quality/steps/cfg.
+
+Клиент: `quality` и `variants` в инструментах генерации и правки, проверка по `/health`;
+описания объясняют, когда нужен `best` и что он занимает GPU на минуты.
+
+Проверено вживую: «зелёные волосы» на 4 шагах — сработало (раньше нет), «платиновый
+блонд» через `edit_image(source=latest)` — сработало, лицо/импланты/свет сохранены;
+`best` на 40 шагах — 1176 с, инструкция выполняется.
+
+Отдельная авария по пути: на хосте pve `/dev/null` оказался обычным файлом (uid 100000),
+из-за чего lxc-attach и systemd в CT 206 падали с «Failed to set up standard input».
+Восстановлено `mknod /dev/null c 1 3`, контейнер перезагружен.
+
+Тесты: `npx vitest run test/image-generation.test.ts test/image-editing.test.ts
+test/image-job-card.test.ts test/image-jobs.test.ts` — 18 passed.

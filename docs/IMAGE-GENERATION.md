@@ -14,6 +14,19 @@ Settings → **Генерация изображений**: enabled switch, base
 - `GET /jobs/{id}/images/{name}` — PNG;
 - `GET /jobs/{id}/metadata` — request and inference parameters.
 
+Sampling presets (`quality` in the job body, `qualities` in `/health`):
+
+| preset | graph | time (1024², V100) |
+|---|---|---|
+| `fast` (default) | 4-step Lightning LoRA, CFG 1 | ~30 s |
+| `balanced` | 8-step Lightning LoRA, CFG 1 | ~60 s |
+| `best` | base model, 40 steps, CFG 4, aura-flow shift 3.1 | ~20 min |
+
+`fast` is enough for ordinary edits; a change that has to win over a strong reference
+(hair colour, swapping a small object, precise text) needs `best`. Ask the owner before a
+`best` job: it occupies the only GPU for many minutes. `variants` (1–4) renders the same
+prompt one seed apart for a choice.
+
 States: `queued → running → completed | failed | cancelled`. Progress is real: step counters arrive from ComfyUI over its WebSocket, so `sampling 1/4 … 4/4` and percent are actual sampling, not a timer. Limits: sides 256–1536, multiples of 16, `width×height ≤ 1048576`, prompt ≤ 2000 characters, source ≤ 8 MiB.
 
 ## Shared MCP `enki-images / «Генерация изображений»`
@@ -52,6 +65,19 @@ Attach a PNG/JPEG/WebP and ask «Перерисуй это в стиле ани�
 Results are saved without overwriting files in the agent workspace `.enki/generated-images/<job>/image-NN.png`; generated cards stay visible when «Ход работы» is folded and duplicate retrievals do not duplicate cards. PNG dimensions/bytes and generated-file paths are bounded. When an agent’s file is on another device, Enki fetches only the exact job image from its configured authenticated service (`/jobs/{id}/images/{name}`), never a tool-supplied URL.
 
 No previews, ZIP bundles or material maps exist any more: the Hub returns one PNG per generated item and optional edit metadata. Whole-frame editing is what the model does; exact pixel preservation, masks and transparency are not promised.
+
+## The edit graph matters more than the instruction
+
+The vendor's 2511 workflow conditions the edit through
+`TextEncodeQwenImageEditPlus` with the source as `image1`, wraps both conditionings in
+`FluxKontextMultiReferenceLatentMethod` (`index_timestep_zero`) and samples the model
+through `ModelSamplingAuraFlow` with shift 3.1. The older
+`TextEncodeQwenImageEdit` node accepted the same-looking inputs but produced an edit that
+reproduced the source pixel-for-pixel: hair colour, background and object swaps were all
+ignored, even at 40 steps and CFG 4. After switching to the Plus encoder plus reference
+latents, the same four-step job turns dark hair neon green and platinum blonde while
+keeping face, implants, lighting and background. When an edit "does nothing", check the
+graph, not the prompt.
 
 ## The model always uses these tools
 

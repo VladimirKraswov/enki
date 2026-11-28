@@ -136,6 +136,15 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
    if(input&&items.length)throw Error('Редактирование принимает один исходник и один prompt, без набора');
    const health=await ready(c,signal);
    const model=health.model??{},multiple=model.multiple??16,maxSide=model.max_side??1536,maxPixels=model.max_pixels??1048576;
+   // Sampling presets come from the service: fast is the 4-step Lightning pass,
+   // best is the base model at CFG 4 and takes minutes. A stubborn instruction
+   // (hair colour, small objects) needs best; anything else stays fast.
+   const qualities=model.qualities??{};
+   const quality=args.quality??model.default_quality??'fast';
+   if(Object.keys(qualities).length&&!qualities[quality])throw Error('Неизвестное качество: '+quality+'. Доступно: '+Object.keys(qualities).join(', '));
+   const variants=args.variants??1;
+   if(!Number.isInteger(variants)||variants<1||variants>(model.max_variants??1))throw Error('variants: целое число от 1 до '+(model.max_variants??1));
+   if(variants>1&&items.length)throw Error('Варианты и набор предметов вместе не поддерживаются');
    let width=args.width??1024,height=args.height??1024;
    if(input&&(args.width===undefined||args.height===undefined)&&Number.isFinite(input.width)&&Number.isFinite(input.height)&&input.width>0&&input.height>0){
     const ratio=Math.max(1/6,Math.min(6,input.width/input.height));
@@ -152,7 +161,7 @@ export function createImages({configFile,cwd=process.cwd(),fetcher=fetch,token=(
     if(typeof args.strength!=='number'||!Number.isFinite(args.strength)||args.strength<0||args.strength>1)throw Error('strength: число от 0 до 1');
     strength=args.strength;
    }
-   const payload={prompt:args.prompt.trim(),...(items.length?{items}:{}),width,height,seed,...(strength!==undefined?{strength}:{}),...(input?{source_image:{data_base64:input.bytes.toString('base64')}}:{})};
+   const payload={prompt:args.prompt.trim(),...(items.length?{items}:{}),width,height,seed,quality,...(variants>1?{variants}:{}),...(strength!==undefined?{strength}:{}),...(input?{source_image:{data_base64:input.bytes.toString('base64')}}:{})};
    const reserved=await reserveImage(ctx,args.request_key,{...payload,...(input?{source_image:{sha256:input.sha256,ref:input.ref}}:{})},order);if(reserved.cached)return reserved.cached;
    if(reserved.pending){const previous=await recover(c,payload,signal);await recordImage(ctx,args.request_key,previous);return previous;}
    const result=await request(c,'/jobs',{method:'POST',body:payload,signal,timeout:60000});
