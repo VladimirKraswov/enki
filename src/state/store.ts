@@ -33,6 +33,7 @@ import { attachmentParts, stageArchive, type ArchiveStager } from '../attachment
 import { applyAppearance, normalizeAppearance, type Appearance } from "./appearance";
 import { validRemote, type RemoteHost } from "../native/hosts";
 import { contextUsage } from "./context";
+import { reportTransportFailure } from "../hub/transportDiagnostics";
 import { accessRules, accessMode, type AccessMode } from "./access";
 import { newMessageId, type QueuedPrompt } from "./queue";
 import type { AsrSettings } from "../voice/asr";
@@ -3653,8 +3654,7 @@ class Store {
         if ((state === "error" || state === "reconnecting" && detail === "stream ended") && detail) {
           // Keep chat; report transport trouble without claiming the model is dead.
           const session = this.state.activeSessionId;
-          void import('../hub/transportDiagnostics').then(({ reportTransportFailure }) =>
-            reportTransportFailure(session, detail, "event-stream")).catch(() => {});
+          reportTransportFailure(session, detail, "event-stream");
         }
       },
     });

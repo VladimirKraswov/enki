@@ -13,7 +13,7 @@ import type {
   UserMessage,
 } from "../api/types";
 import { store, useAppState, useAppSelector } from "../state/store";
-import { Markdown } from "./Markdown";
+const Markdown = lazy(() => import("./Markdown").then(m => ({ default: m.Markdown })));
 import { CopyButton } from "./CopyButton";
 import { sessionSources } from "../state/taskContext";
 import { AttachmentThumbnail, AttachmentViewer } from "./AttachmentViewer";
@@ -23,7 +23,6 @@ import { exactTime, messageTime } from "../chat/time";
 import { describeMessageError, isAbortedError, isModelConnectionError } from "../chat/errors";
 import { ModelConnectionCheck } from "./ModelConnectionCheck";
 import { ToolActivity } from "./ToolActivity";
-export { Markdown } from "./Markdown";
 const GeneratedImages = lazy(() => import("./GeneratedImages"));
 const ImageJobs = lazy(() => import("./ImageJobProgress").then(m => ({default: m.ImageJobs})));
 const OutputLimitNotice = lazy(() => import("./OutputLimitNotice"));
@@ -156,7 +155,7 @@ export function PartView({ part, evidence }: { part: MessagePart; evidence?: Exe
   switch (part.type) {
     case "text":
       if (part.ignored || part.synthetic) return null;
-      return part.text ? <Markdown source={part.text} /> : null;
+      return part.text ? <Suspense fallback={<div className="md-loading" role="status" aria-label="Загружается форматирование ответа" />}><Markdown source={part.text} /></Suspense> : null;
     case "reasoning":
       return part.text ? (
         <Fold label="Размышления" tone="reasoning">

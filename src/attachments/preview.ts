@@ -1,5 +1,7 @@
 import { MAX_ATTACHMENT_BYTES } from './drafts';
 import { isNative } from '../native/platform';
+import { invoke } from '@tauri-apps/api/core';
+import { readFile, stat } from '@tauri-apps/plugin-fs';
 export interface AttachmentSource { key: string; name: string; mime?: string; url?: string; messageID?: string }
 const raster = new Set(['image/png','image/jpeg','image/gif','image/webp','image/avif']);
 export function previewKind(mime = ''): 'image'|'pdf'|'text'|'audio'|'video'|'other' {
@@ -26,10 +28,9 @@ export async function attachmentBlob(file: AttachmentSource, remote: boolean): P
     let path=decodeURIComponent(parsed.pathname);if(/^\/[A-Za-z]:\//.test(path))path=path.slice(1);
     const archive = /\/attachments\/([a-f0-9-]{36})\/archive\.zip$/i.exec(parsed.pathname);
     if (file.mime === 'application/zip' && archive) {
-      const {invoke} = await import('@tauri-apps/api/core');
       path = await invoke<string>('archive_access', {id:archive[1],expectedUrl:url});
     }
-    const {stat,readFile}=await import('@tauri-apps/plugin-fs');const info=await stat(path);
+    const info=await stat(path);
     if(!info.isFile||info.isSymlink||info.size>MAX_ATTACHMENT_BYTES)throw Error('Файл недоступен или больше 50 МБ.');
     const bytes=await readFile(path);if(bytes.byteLength>MAX_ATTACHMENT_BYTES)throw Error('Файл больше 50 МБ.');
     return new Blob([bytes.buffer as ArrayBuffer],{type:file.mime||'application/octet-stream'});

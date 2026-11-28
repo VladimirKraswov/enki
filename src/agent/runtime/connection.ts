@@ -10,6 +10,8 @@ import { validRemote } from "../../native/hosts";
 import type { RuntimeConnection } from "./client";
 import type { NativeUiScope } from "./pluginUi/types";
 import { parseStartup, type RuntimeStartup } from './startup';
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export const CONTRACT = 1;
 
@@ -21,7 +23,6 @@ function checked(connection: RuntimeConnection): RuntimeConnection {
 
 export async function localConnection(progress?: (value: RuntimeStartup) => void): Promise<RuntimeConnection> {
   if (!isNative()) throw new Error("Среда выполнения Enki доступна в установленном приложении.");
-  const { invoke } = await import("@tauri-apps/api/core");
   let stopped = false, reading: Promise<void> | null = null;
   const poll = (): Promise<void> => {
     if (!progress || stopped) return Promise.resolve();
@@ -48,7 +49,6 @@ export async function localConnection(progress?: (value: RuntimeStartup) => void
 export async function remoteConnection(host: RemoteHost): Promise<RuntimeConnection> {
   if (!validRemote(host)) throw new Error("Укажите SSH-алиас или user@host.");
   if (!isNative()) throw new Error("SSH-подключения доступны в установленном Enki.");
-  const { invoke } = await import("@tauri-apps/api/core");
   const remote = await invoke<RuntimeConnection & { target: string }>("connect_remote_runtime", { target: host.target });
   return checked({ endpoint: remote.endpoint, token: remote.token, instance: remote.instance, version: "remote", contract: remote.contract });
 }
@@ -56,7 +56,6 @@ export async function remoteConnection(host: RemoteHost): Promise<RuntimeConnect
 /** Rotated bearer tokens are announced natively; the client refreshes lazily on 401 too. */
 export async function onTokenRotated(listener: () => void): Promise<() => void> {
   if (!isNative()) return () => {};
-  const { listen } = await import("@tauri-apps/api/event");
   return listen("enki-runtime://token", () => listener());
 }
 
@@ -69,7 +68,6 @@ export type NativeUiAction = "clipboard.read" | "clipboard.write" | "open-url";
  */
 export async function authorizeNativeUi(scope: NativeUiScope, actions: readonly NativeUiAction[]): Promise<void> {
   if (!isNative() || !actions.length) return;
-  const { invoke } = await import("@tauri-apps/api/core");
   await invoke("runtime_ui_authorize", {
     scope: { hostId: scope.hostId, sessionId: scope.sessionId, sessionEpoch: scope.sessionEpoch, surfaceId: scope.surfaceId, directory: scope.directory, principal: scope.principal },
     actions: [...actions],
@@ -79,6 +77,5 @@ export async function authorizeNativeUi(scope: NativeUiScope, actions: readonly 
 /** Remote runtimes ask the attached desktop for Hub operations (never for local secrets). */
 export async function relayBroker(method: string, params: Record<string, unknown>): Promise<unknown> {
   if (!isNative()) throw new Error("Hub доступен в установленном Enki.");
-  const { invoke } = await import("@tauri-apps/api/core");
   return invoke("runtime_broker_relay", { method, params });
 }

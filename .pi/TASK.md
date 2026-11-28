@@ -487,6 +487,36 @@ hub_updates::install::tests` — 6 прошли; `cargo fmt --check` — про�
 GitHub package workflow 2.0.128 не запущен: изолированная `gh` сообщает, что
 нужен `gh auth login`; Hub source publication 2.0.128 и push `main` успешны.
 
+## Рефакторинг загрузки интерфейса (2.0.130)
+
+Источник Vite warnings: event API загружался и статически, и через `import()`;
+та же смесь была у capabilities/computer, plugin-fs и transport diagnostics.
+Привёл их к единому статическому импорту там, где код уже входил в eager graph.
+Контекст панели вынес в отдельный ID-модуль, а BrowserPanel, контекст, правую и
+нижнюю панели, палитру, диалоги Pi/удалённой отправки, handoff и Plugin UI сделал
+реально отложенными по их состояниям UI. Markdown/highlight теперь загружаются
+при показе сообщения. PDF viewer и локальный экстрактор используют один legacy
+pdf.js runtime/worker, без дубля worker и двух копий библиотеки.
+
+Промежуточная Vite сборка после правок: начальный index уменьшен с 1,353 КБ
+(gzip 383 КБ) до 351 КБ (gzip 104 КБ); тяжёлые зависимости вынесены в отдельные
+chunks, в том числе pdf.js 490 КБ, syntax highlight 86 КБ и markdown vendor
+154 КБ. Устранены все warnings о неэффективных dynamic imports и превышении
+500 КБ; `npm run build` проходит без предупреждений. `npm run check:docs` — 76
+Markdown / 219 ссылок, `npm test` — 229 файлов / 1383 теста, целевые browser и
+turn-render тесты — 53/53. Усилен `check:bundle`: он фиксирует бюджеты для
+начального, PDF, Markdown и syntax-highlight chunks и остановит будущий рост.
+Полный gate 2.0.130 и установленная приёмка ещё впереди.
+
+2.0.129 опубликована в Hub с точной квитанцией и push в `main`. Первый вызов
+release:packages из изолированного инструментария остановился из-за отдельного
+пустого GH_CONFIG_DIR; затем тот же workflow был успешно отправлен системным
+`gh` (keyring) из чистого worktree точного опубликованного commit. Установка
+пока отложена до проверки финального 2.0.130. Полный canonical gate для 2.0.129 прошёл: UI
+1383/1383, Runtime 532/532, SDK compatibility 171 pass/1 skip, artifacts 106
+pass/4 skip, Hub 138/2 skip, ASR 3, native Rust 303/7 ignored, runner 12/1 ignored,
+оба clippy чистые; pair-device проверил Hub head и обе подписи.
+
 ## Срез 16 (2.0.128: канал заняли 2.0.127): вокруг чата не рисуется ничего
 
 После 2.0.126 осталась «полурамка» — тонкая линия по нижней кромке истории (мой

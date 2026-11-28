@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { browserNative } from "../browser/integration";
 import { parseFrame, type BrowserFrame } from "../browser/view";
 import { Icon } from "./Icon";
+import { listen } from "@tauri-apps/api/event";
 
 /** A passive projection: never installs a resize observer or input handlers.
  * Only the two presentation controls invoke native commands. Chromium, agent
@@ -26,9 +27,9 @@ export function BrowserMonitor() {
   useEffect(() => {
     let cancelled = false, failures = 0, revision = 0;
     let stop: (() => void) | undefined;
-    void import("@tauri-apps/api/event").then(({listen}) => listen("browser-monitor://scope", () => {
+    void listen("browser-monitor://scope", () => {
       revision++; scopeRevision.current++; selectionEpoch.current++; observed.current = undefined; setCatalog([]); setOrder([]); setDragged(undefined); setDropTarget(undefined); setFrame(undefined); setStale(false); setError(""); setChanging(false);
-    })).then(unlisten => { if(cancelled) unlisten(); else stop = unlisten; }).catch(() => {});
+    }).then(unlisten => { if(cancelled) unlisten(); else stop = unlisten; }).catch(() => {});
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       let delay = 800;

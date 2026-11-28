@@ -16,9 +16,9 @@ import { ProjectMapSection } from "./ProjectMapSection";
 import type { Outcome } from "../outcomes/store";
 import { AttachmentThumbnail, AttachmentViewer } from "./AttachmentViewer";
 import { Icon } from "./Icon";
+import { CONTEXT_PANEL_ID } from "./contextPanelId";
 import { skillAuthoringRequest } from "../capabilities/authoring";
 
-export const CONTEXT_PANEL_ID = "chat-context-panel";
 const PREVIEW = 3;
 const CHILD_POLL_MS = 10_000;
 

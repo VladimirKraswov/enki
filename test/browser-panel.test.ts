@@ -12,7 +12,8 @@ vi.mock("../src/native/platform", () => ({ isNative: () => fake.native }));
 vi.mock("../src/state/store", () => ({ useAppState: () => fake.state, store: {
   get state() { return fake.state; }, engineIdFor: () => "opencode", currentHost: () => fake.host, setUi: fake.setUi, setBrowserSettings: fake.setBrowserSettings, setLayout: fake.setLayout,
 } }));
-import { BrowserPanel, BrowserPresence } from "../src/components/BrowserPanel";
+import { BrowserPanel } from "../src/components/BrowserPanel";
+import { BrowserPresence } from "../src/components/BrowserPresence";
 import { openFileInput } from "../src/attachments/composerBridge";
 let root: Root;
 const frame = { scope: {directory:"/test",engine:"opencode",sessionID:"ses_test"}, scopeKey: "fixture-key", browserOpen: true, busy: false, tabs: [{ index: 0, title: "Real page", url: "https://example.com", active: true }],

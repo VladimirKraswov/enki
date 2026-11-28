@@ -1,3 +1,5 @@
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import {scheduleCommand} from "../schedules/control";
 // Native agent-control bridge.
 //
@@ -854,10 +856,6 @@ let stopBridge: (() => void) | null = null;
 
 export async function startAgentControl(): Promise<() => void> {
   if (!isNative() || stopBridge) return stopBridge ?? (() => {});
-  const [{ listen }, { invoke }] = await Promise.all([
-    import("@tauri-apps/api/event"),
-    import("@tauri-apps/api/core"),
-  ]);
   const unlisten = await listen<ControlCommand>("agent-control://command", (event) => {
     const command = event.payload;
     void execute(command.method, command.params ?? {})

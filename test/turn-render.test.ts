@@ -17,13 +17,14 @@ function mount(messages:AssistantMessage[],active=false) {
  act(()=>root!.render(createElement(AssistantTurnView,{sessionId:'s',messages,active})));
 }
 const toggle=()=>document.querySelector<HTMLButtonElement>('.turn-progress-toggle')!;
-it('keeps a substantive answer visible when the model calls a tool afterwards',()=>{
+it('keeps a substantive answer visible when the model calls a tool afterwards',async()=>{
  // Сценарий владельца: развёрнутый разбор написан до последнего вызова bash,
  // а на экране осталась только короткая финальная фраза.
  const analysis='## Анализ\n\n'+('Подробное предложение по улучшению. '.repeat(20));
  parts('a',[{text:analysis},{type:'tool',tool:'bash',state:{status:'completed',input:{command:'true'},output:'ok'}}]);
  parts('b',[{text:'Жду вашего решения.'}]);
  mount([message('a'),message('b','stop')]);
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Анализ'));
  expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(false);
  expect(document.body.textContent).toContain('Анализ');
  expect(document.body.textContent).toContain('Подробное предложение по улучшению.');
@@ -34,6 +35,7 @@ it('renders a completed task with one final copy/footer and readable, expandable
  const clipboard=vi.fn().mockResolvedValue(undefined);Object.defineProperty(navigator,'clipboard',{value:{writeText:clipboard},configurable:true});
  parts('a',[{type:'reasoning',text:'Thinking privately'},{text:'Проверяю сборку'},{type:'tool',tool:'bash',state:{status:'completed',title:'npm test',input:{command:'npm test',description:'Проверка тестов'},output:'PASS',time:{start:100,end:101}}}]);
  parts('b',[{text:'## Готово\n\nТесты прошли.'}]);mount([message('a'),message('b','stop')]);
+ await vi.waitFor(()=>expect(document.querySelector('.turn-step')?.textContent).toContain('Проверяю сборку'));
  expect(toggle().getAttribute('aria-expanded')).toBe('false');
  // Шаг, где ассистент написал текст, — это содержание, а не скрытый трейс.
  expect(document.querySelector('.turn-step')?.hasAttribute('hidden')).toBe(false);
@@ -61,10 +63,11 @@ it('keeps explicit collapse through updates while surfacing tool errors and abor
  mount([message('a'),{...message('b','stop'),error:{name:'MessageAbortedError'}}]);
  expect(document.querySelector('[role="alert"]')?.textContent).toBe('Ответ остановлен.');expect(document.querySelector('[role="alert"]')?.closest('[hidden]')).toBeNull();
 });
-it('does not keep an abort banner after a later assistant step continues the turn',()=>{
+it('does not keep an abort banner after a later assistant step continues the turn',async()=>{
  parts('a',[{text:'Начало ответа'}]);
  parts('b',[{text:'Продолжение после остановки'}]);
  mount([{...message('a'),error:{name:'MessageAbortedError'}},message('b','stop')]);
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Продолжение после остановки'));
  expect(document.querySelector('[role="alert"]')).toBeNull();
  expect(document.body.textContent).not.toContain('Ответ остановлен');
  expect(document.body.textContent).toContain('Продолжение после остановки');
@@ -167,12 +170,13 @@ it('a new active request cannot revive pending tools from an older turn',()=>{
  expect(document.body.textContent).toContain('выполнение не подтверждено сервером');
 });
 
-it('shows one SDK transport failure with the real retry count but preserves distinct failures',()=>{
+it('shows one SDK transport failure with the real retry count but preserves distinct failures',async()=>{
  const failures=['a','b','c','d'].map(id=>({...message(id,'error'),error:{name:'ProviderError',message:'Connection error.'}}));
  mount(failures);
  expect(document.querySelectorAll('.msg-error')).toHaveLength(1);
  expect(document.body.textContent).toContain('Попыток: 4');
  parts('a',[{text:'Partial output that must survive'}]);mount(failures.map(m=>({...m})));
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Partial output that must survive'));
  expect(document.querySelectorAll('.msg-error')).toHaveLength(4);
  expect(document.body.textContent).toContain('Partial output that must survive');
 });

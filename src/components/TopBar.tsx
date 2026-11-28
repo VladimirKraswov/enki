@@ -5,7 +5,7 @@ import { FloatingPopover } from "./FloatingPopover";
 import { RUNTIME_CAPABILITIES } from "../agent/runtime/backend";
 import { store, useAppState } from "../state/store";
 import { Icon } from "./Icon";
-import { CONTEXT_PANEL_ID } from "./ContextPanel";
+import { CONTEXT_PANEL_ID } from "./contextPanelId";
 
 /** Stable compact controls; named secondary actions share one keyboard menu. */
 export function TopBar() {

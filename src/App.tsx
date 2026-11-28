@@ -1,17 +1,13 @@
+import { useEffect, lazy, Suspense } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { UpdateRuntime } from "./updates/runtime";
 import { MemoryRuntime } from "./memory/Runtime";
 import { HubRuntime } from "./hub/Runtime";
-import { ContextPanel } from "./components/ContextPanel";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ScheduleRuntime } from "./schedules/Runtime";
-import { HandoffDialog } from "./components/HandoffDialog";
-import { RemoteSendDialog } from "./components/RemoteSendDialog";
 import { RemotePasteInbox } from "./components/RemotePasteInbox";
-import { BrowserPanel, BrowserPresence } from "./components/BrowserPanel";
-import { PiDialog } from "./components/PiDialog";
+import { BrowserPresence } from "./components/BrowserPresence";
 import { HostDialogs } from "./components/HostDialogs";
-import { PluginUiBelowComposer, PluginUiPanel } from "./components/PluginUiPanel";
-import { McpRecoveryNotice } from "./components/McpRecoveryNotice";
 import { PermissionRuntime } from "./components/PermissionCenter";
 import { RUNTIME_CAPABILITIES } from "./agent/runtime/backend";
 import { store, useAppSelector, applyTheme } from "./state/store";
@@ -19,18 +15,26 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { ChatView } from "./components/ChatView";
 import { Composer } from "./components/Composer";
-import { RightPanel } from "./components/RightPanel";
-import {
-  ConnectionGate,
-  DeleteConfirm,
-  Toast,
-} from "./components/Dialogs";
-import { TerminalPanel } from "./components/TerminalPanel";
-import { Palette } from "./components/Palette";
-const SettingsScreen = lazy(() => import("./components/SettingsScreen").then(m => ({default:m.SettingsScreen})));
-import { useEffect, lazy, Suspense } from "react";
+import { ConnectionGate, DeleteConfirm, Toast } from "./components/Dialogs";
 import { hasOverlayWindowControls, isNative, platform } from "./native/platform";
 import { startResize } from "./util/resize";
+import { COMPUTER_SERVER, setReservedServer } from "./capabilities/reserved";
+import { invalidateCapabilities } from "./capabilities/integration";
+import { isLocalComputer } from "./state/computer";
+import { restoreComputerAfterUpdate } from "./computer/restore";
+
+const HandoffDialog = lazy(() => import("./components/HandoffDialog").then(m => ({ default: m.HandoffDialog })));
+const RemoteSendDialog = lazy(() => import("./components/RemoteSendDialog").then(m => ({ default: m.RemoteSendDialog })));
+const PiDialog = lazy(() => import("./components/PiDialog").then(m => ({ default: m.PiDialog })));
+const PluginUiBelowComposer = lazy(() => import("./components/PluginUiPanel").then(m => ({ default: m.PluginUiBelowComposer })));
+const PluginUiPanel = lazy(() => import("./components/PluginUiPanel").then(m => ({ default: m.PluginUiPanel })));
+const McpRecoveryNotice = lazy(() => import("./components/McpRecoveryNotice").then(m => ({ default: m.McpRecoveryNotice })));
+const ContextPanel = lazy(() => import("./components/ContextPanel").then(m => ({ default: m.ContextPanel })));
+const RightPanel = lazy(() => import("./components/RightPanel").then(m => ({ default: m.RightPanel })));
+const TerminalPanel = lazy(() => import("./components/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
+const Palette = lazy(() => import("./components/Palette").then(m => ({ default: m.Palette })));
+const SettingsScreen = lazy(() => import("./components/SettingsScreen").then(m => ({default:m.SettingsScreen})));
+const BrowserPanel = lazy(() => import("./components/BrowserPanel").then(m => ({ default: m.BrowserPanel })));
 
 
 const shellSnapshot = (s: import('./state/types').AppState) => ({
@@ -60,12 +64,6 @@ export default function App() {
       // Any unavailable piece (a host without the desktop store, a hidden setting)
       // must stay a no-op: startup never fails because of this repair.
       try {
-        const { restoreComputerAfterUpdate } = await import("./computer/restore");
-        const { invoke } = await import("@tauri-apps/api/core");
-        const { COMPUTER_SERVER, setReservedServer } = await import("./capabilities/reserved");
-        const { invalidateCapabilities } = await import("./capabilities/integration");
-        const { isNative } = await import("./native/platform");
-        const { isLocalComputer } = await import("./state/computer");
         if (cancelled) return;
         await restoreComputerAfterUpdate({
           native: isNative(),
@@ -168,16 +166,16 @@ export default function App() {
         <div className="center-col">
           <TopBar />
           <div className="center-main">
-            <ChatWorkspace open={s.ui.contextOpen} panel={<ContextPanel active={s.ui.contextOpen} />}>
+            <ChatWorkspace open={s.ui.contextOpen} panel={<Suspense fallback={null}><ContextPanel active={s.ui.contextOpen} /></Suspense>}>
               {s.connection.phase === "connected" ||
               s.connection.phase === "connecting" ? (
                 <>
                   <ChatView />
                   {/* Sibling keys must be distinct: duplicate keys retain orphaned notices when the chat changes. */}
-                  {pluginChat && <McpRecoveryNotice key={`mcp:${JSON.stringify(pluginChat)}`} {...pluginChat} />}
-                  {pluginChat && <PluginUiPanel key={`ui:${JSON.stringify(pluginChat)}`} {...pluginChat} />}
+                  {pluginChat && <Suspense fallback={null}><McpRecoveryNotice key={`mcp:${JSON.stringify(pluginChat)}`} {...pluginChat} /></Suspense>}
+                  {pluginChat && <Suspense fallback={null}><PluginUiPanel key={`ui:${JSON.stringify(pluginChat)}`} {...pluginChat} /></Suspense>}
                   <Composer />
-                  {pluginChat && <PluginUiBelowComposer />}
+                  {pluginChat && <Suspense fallback={null}><PluginUiBelowComposer /></Suspense>}
                 </>
               ) : (
                 <ConnectionGate />
@@ -205,7 +203,7 @@ export default function App() {
                     });
                   }}
                 />
-                <RightPanel />
+                <Suspense fallback={null}><RightPanel /></Suspense>
               </>
             )}
           </div>
@@ -232,19 +230,19 @@ export default function App() {
                 className="bottom-panel"
                 style={{ height: layout.bottomHeight }}
               >
-                <TerminalPanel />
+              <Suspense fallback={null}><TerminalPanel /></Suspense>
               </div>
             </>
           )}
         </div>
       </div>
-      {s.ui.paletteOpen && <Palette />}
+      {s.ui.paletteOpen && <Suspense fallback={null}><Palette /></Suspense>}
       {s.ui.settingsOpen && <Suspense fallback={<div role="status">Загрузка настроек…</div>}><SettingsScreen /></Suspense>}
       <HostDialogs />
-      {capabilities.fork && <HandoffDialog />}
-      <RemoteSendDialog />
+      {capabilities.fork && <Suspense fallback={null}><HandoffDialog /></Suspense>}
+      {s.ui.remoteSend && <Suspense fallback={null}><RemoteSendDialog /></Suspense>}
       <RemotePasteInbox />
-      <PiDialog />
+      {s.ui.agentDialog && <Suspense fallback={null}><PiDialog /></Suspense>}
       <DeleteConfirm />
       <Toast />
     </div>
