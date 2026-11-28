@@ -18,17 +18,15 @@ const MAX_PROBES: usize = 8;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn executable(path: &Path) -> bool {
-    if !path.is_absolute() || !path.is_file() {
-        return false;
-    }
+    let candidate = path.is_absolute() && path.is_file();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+        candidate && fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
     }
     #[cfg(not(unix))]
     {
-        true
+        candidate
     }
 }
 

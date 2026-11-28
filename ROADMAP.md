@@ -334,4 +334,12 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 
 - [x] Переписать `stable()` в `runtime/artifact.rs` как булево условие с теми
   же проверками metadata; Unix ctime/ns остаются включены только на Unix.
+- [x] Linux job прошёл; Windows compile-check прошёл, но второй Windows-only
+  Clippy lint нашёл такой же ранний `return false` в `browser/node.rs`; macOS
+  package собирался.
+
+## Windows Clippy follow-up 2.0.137
+
+- [x] Сохранить проверку absolute/file и Unix executable bit одним условием,
+  не меняя Windows проверки.
 - [ ] Канонический gate, Hub receipt и платформенные пакеты.

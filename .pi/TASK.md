@@ -646,3 +646,10 @@ CI workflow 2.0.135: Linux job завершился успешно, Windows пр
 В 2.0.136 `stable()` теперь возвращает булево сочетание тех же проверок; Unix
 ctime/ctime_nsec условия сохранены. Нужны local canonical gate и новый Windows
 Clippy/package workflow, чтобы принять это исправление.
+
+CI 2.0.136 подтвердил первый lint исправленным (`runtime/artifact.rs` прошёл),
+затем нашёл ещё один Windows-only `needless_bool` в `browser/node.rs:21`.
+`executable()` теперь объединяет absolute/file и Unix executable-bit checks в
+одно выражение; Windows сохраняет проверку абсолютного существующего файла,
+Unix по-прежнему требует executable bit. Это 2.0.137; полный gate и Windows CI
+нужны до готовых пакетов.
