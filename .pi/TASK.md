@@ -627,3 +627,15 @@ canonical release gate, публикация 2.0.134 и package workflow ещё 
 Первый полный gate нашёл flaky Rust fixture: два parallel теста создавали
 каталоги по timestamp и могли столкнуться. В `build_runtime_resources` имя
 теперь использует уникальный монотонный atomic ID процесса; повторяю Rust gate.
+
+Платформенный workflow 2.0.134: Linux package прошёл; macOS выполнялся, Windows
+остановился на Hub suite (144 tests, 3 errors). Получен точный runner log:
+1) `test_images.ImagesService.test_cancel_only_interrupts...` оставлял открытые
+тестовые `_connect()` handles; фикстура переведена на `_connection()`.
+2) Hub credentials тест предполагал, что Windows поддерживает POSIX `chmod`
+   mode bits; теперь тест моделирует Linux `stat` contract, не ослабляя Hub
+   security checks.
+3) `console.html` читался в системной cp1252 вместо UTF-8; тест задаёт UTF-8.
+Точечные image/credentials/console тесты локально: 10/10. Это патч 2.0.135;
+изменения 2.0.134 уже опубликованы Hub, но Windows-пакет не готов. Требуется
+полный gate и новый Windows platform workflow для 2.0.135.

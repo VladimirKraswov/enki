@@ -316,4 +316,15 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 - [x] Останавливать собственный image worker при штатном завершении Hub.
 - [x] Добавлен регрессионный тест на закрытое соединение; image и полный Hub
   наборы проходят на Mac.
-- [ ] Канонический gate, Hub receipt, платформенные сборки и MCP smoke для 2.0.134.
+- [x] Канонический gate и Hub receipt 2.0.134; Linux package passed, macOS
+  package ещё выполнялся при обновлении заметки.
+- [x] Windows UI suite прошёл; Hub suite выявил три межплатформенные фикстуры:
+  открытый тестовый SQLite handle, неявная Windows cp1252 вместо UTF-8, и
+  невозможность выразить POSIX mode bits на Windows runner.
+
+## Межплатформенные Hub test fixtures 2.0.135
+
+- [x] Закрывать SQLite соединение в тестовой фикстуре; POSIX права для
+  Linux-only Hub credential config моделировать в Windows test stat; читать
+  UTF-8 HTML с явной кодировкой.
+- [ ] Канонический gate, Hub receipt и повторные пакеты macOS/Windows/Linux.

@@ -25,12 +25,12 @@ class HubConsoleTest(unittest.TestCase):
 
     def test_console_shell_is_a_self_contained_page(self):
         root = Path(__file__).resolve().parents[1]
-        html = (root / "console.html").read_text()
+        html = (root / "console.html").read_text(encoding="utf-8")
         self.assertIn("/console.js", html)
         self.assertIn("/console.css", html)
         for name in ("console.js", "console.css"):
             self.assertTrue((root / name).is_file())
-        self.assertIn("/api/console/overview", (root / "console.js").read_text())
+        self.assertIn("/api/console/overview", (root / "console.js").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

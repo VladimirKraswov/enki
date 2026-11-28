@@ -2,6 +2,8 @@ import json
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,28 +26,43 @@ class HubCredentialsTest(unittest.TestCase):
         catalog = type("Catalog", (), {"get": lambda self: {"models": []}})()
         return tmp, ModelServices(root, catalog, Fault, config=config)
 
+    def with_posix_private_mode(self, services):
+        # The Hub is deployed on Linux. Windows CI cannot represent POSIX
+        # owner-only mode bits, so model the stat result required by this test.
+        original_stat = Path.stat
+
+        def portable_stat(path, *args, **kwargs):
+            result = original_stat(path, *args, **kwargs)
+            if path == services.config:
+                return SimpleNamespace(st_mode=0o100600, st_size=result.st_size)
+            return result
+
+        return patch.object(Path, "stat", autospec=True, side_effect=portable_stat)
+
     def test_credentials_are_served_to_devices_and_never_leak_into_the_catalog(self):
         tmp, services = self.make({"services": {}, "credentials": {
             "deepseek": {"type": "api_key", "key": "hub-key"},
             "kimi-coding": {"type": "oauth", "access": "a", "refresh": "r", "expires": 1}}})
         try:
-            result = services.api("POST", "credentials", {"id": "device"}, {"providerID": "deepseek"})
-            self.assertEqual(result["credential"]["key"], "hub-key")
-            result = services.api("POST", "credentials", {"id": "device"}, {"providerID": "kimi-coding"})
-            self.assertEqual(result["credential"]["type"], "oauth")
-            with self.assertRaises(Fault) as missing:
-                services.api("POST", "credentials", {"id": "device"}, {"providerID": "unknown"})
-            self.assertEqual(missing.exception.code, 404)
-            self.assertNotIn("hub-key", json.dumps(services.api("GET", "catalog", {"id": "device"}, {})))
+            with self.with_posix_private_mode(services):
+                result = services.api("POST", "credentials", {"id": "device"}, {"providerID": "deepseek"})
+                self.assertEqual(result["credential"]["key"], "hub-key")
+                result = services.api("POST", "credentials", {"id": "device"}, {"providerID": "kimi-coding"})
+                self.assertEqual(result["credential"]["type"], "oauth")
+                with self.assertRaises(Fault) as missing:
+                    services.api("POST", "credentials", {"id": "device"}, {"providerID": "unknown"})
+                self.assertEqual(missing.exception.code, 404)
+                self.assertNotIn("hub-key", json.dumps(services.api("GET", "catalog", {"id": "device"}, {})))
         finally:
             tmp.cleanup()
 
     def test_malformed_credential_fails_closed(self):
         tmp, services = self.make({"services": {}, "credentials": {"deepseek": {"type": "api_key", "key": ""}}})
         try:
-            with self.assertRaises(Fault) as failure:
-                services.api("POST", "credentials", {"id": "device"}, {"providerID": "deepseek"})
-            self.assertEqual(failure.exception.code, 503)
+            with self.with_posix_private_mode(services):
+                with self.assertRaises(Fault) as failure:
+                    services.api("POST", "credentials", {"id": "device"}, {"providerID": "deepseek"})
+                self.assertEqual(failure.exception.code, 503)
         finally:
             tmp.cleanup()
 

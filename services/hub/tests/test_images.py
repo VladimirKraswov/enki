@@ -67,7 +67,7 @@ class ImagesService(unittest.TestCase):
 
     def test_cancel_only_interrupts_the_running_job_that_owns_comfy(self):
         def add_job(job_id, state):
-            with self.service._connect() as db:
+            with self.service._connection() as db:
                 db.execute("INSERT INTO jobs(id,state,created,mode,width,height,seed,phase,step,steps,prompts,images,request) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (job_id, state, time.time(), "text-to-image", 1024, 1024, 1, state, 0, 4, json.dumps(["test"]), "[]", "{}"))
 
