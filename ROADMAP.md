@@ -327,4 +327,11 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 - [x] Закрывать SQLite соединение в тестовой фикстуре; POSIX права для
   Linux-only Hub credential config моделировать в Windows test stat; читать
   UTF-8 HTML с явной кодировкой.
-- [ ] Канонический gate, Hub receipt и повторные пакеты macOS/Windows/Linux.
+- [x] Windows UI и Hub suites прошли; затем Windows Clippy нашёл bool-lint в
+  общем Rust модуле артефактов. Linux package прошёл; macOS package собирался.
+
+## Windows Clippy contract 2.0.136
+
+- [x] Переписать `stable()` в `runtime/artifact.rs` как булево условие с теми
+  же проверками metadata; Unix ctime/ns остаются включены только на Unix.
+- [ ] Канонический gate, Hub receipt и платформенные пакеты.

@@ -639,3 +639,10 @@ canonical release gate, публикация 2.0.134 и package workflow ещё 
 Точечные image/credentials/console тесты локально: 10/10. Это патч 2.0.135;
 изменения 2.0.134 уже опубликованы Hub, но Windows-пакет не готов. Требуется
 полный gate и новый Windows platform workflow для 2.0.135.
+
+CI workflow 2.0.135: Linux job завершился успешно, Windows прошёл Hub suite и
+упал на `cargo clippy` в `src-tauri/src/runtime/artifact.rs:241` (`needless_bool`
+для `if return false` перед финальным `true`); macOS package ещё выполнялся.
+В 2.0.136 `stable()` теперь возвращает булево сочетание тех же проверок; Unix
+ctime/ctime_nsec условия сохранены. Нужны local canonical gate и новый Windows
+Clippy/package workflow, чтобы принять это исправление.

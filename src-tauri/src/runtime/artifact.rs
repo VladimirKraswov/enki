@@ -238,17 +238,16 @@ fn same_file(a: &Metadata, b: &Metadata) -> bool {
 }
 
 fn stable(a: &Metadata, b: &Metadata) -> bool {
-    if !same_file(a, b) || a.len() != b.len() || a.modified().ok() != b.modified().ok() {
-        return false;
-    }
+    let unchanged = same_file(a, b) && a.len() == b.len() && a.modified().ok() == b.modified().ok();
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if a.ctime() != b.ctime() || a.ctime_nsec() != b.ctime_nsec() {
-            return false;
-        }
+        unchanged && a.ctime() == b.ctime() && a.ctime_nsec() == b.ctime_nsec()
     }
-    true
+    #[cfg(not(unix))]
+    {
+        unchanged
+    }
 }
 
 fn open_regular(paths: &mut CheckedPaths, full: &Path) -> Result<File, String> {
