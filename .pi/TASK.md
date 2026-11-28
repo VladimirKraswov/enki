@@ -565,4 +565,28 @@ artifacts: 106 passed / 4 skipped. Первый runtime-прогон с сист
 защищённого каталога; повтор с `TMPDIR=/private/tmp` прошёл 532/532, отдельный
 повтор двух тестов — 2/2. Точечный Rust-тест починки Node прошёл; полный Rust
 набор и canonical release gate ещё впереди. Hub source publication, commit и
-установленная приёмка 2.0.131 ещё не выполнены.
+установленная приёмка 2.0.131 ещё не выполнены. Commit `6666896` опубликован на
+Hub с проверенным receipt и отправлен в GitHub `main`. Первичный платформенный
+workflow `46153411604` завершился ошибкой на трёх независимых проверках: macOS
+lease fixture использовал неприведённый `/var/...` temp path, Windows
+`prepare.test.mjs` не импортировал native directory-flush port в отдельный test
+worker, Linux clippy видел macOS-only импорты/константу. Исправляю эти CI
+контракты и Linux cfg guard отдельным patch-релизом; установленное приложение не
+объявляю обновлённым.
+
+## 2.0.132 — межплатформенные проверки релиза
+
+Исправлены три причины, найденные в workflow 2.0.131: secure-path тесты теперь
+canonicalize macOS temp fixture (проверка безопасности пути не ослабляется);
+`prepare.test.mjs` импортирует test-only адаптер, который связывает операции
+durable directory flush с точным runner receipt; Linux больше не компилирует
+неиспользуемые macOS-only `json`, `Command` и `BUNDLE_ID`. Повтор CI обязателен
+для подтверждения Windows native adapter, Linux clippy и обеих macOS проверок.
+Release gate и публикация 2.0.132 ещё не выполнены.
+
+Промежуточная проверка 2.0.132: после realpath-fix целевые lease tests прошли
+на системном macOS TMPDIR (2/2); `prepare.test.mjs` — 26 passed / 1 skipped;
+Runtime — 532/532 и SDK compatibility — 171 passed / 1 skipped без подмены TMPDIR;
+macOS `cargo clippy --all-targets -- -D warnings` и `sdk:check` прошли. Windows
+native-port coverage требует проверки workflow, где есть реальный подписанный
+runner; Rust Linux cfg guard также проверяется Linux job.

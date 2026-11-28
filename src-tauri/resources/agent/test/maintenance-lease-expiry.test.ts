@@ -23,7 +23,7 @@ function runtimeFake() {
 it("releases a fence restored after a restart once its lease expires", () => {
   vi.useFakeTimers();
   try {
-    const data = fs.mkdtempSync(path.join(os.tmpdir(), "enki-maint-"));
+    const data = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "enki-maint-")));
     const runtime = runtimeFake();
     const lease = acquireStartLease(data);
     const maintenance = new DaemonMaintenance(data, identity, runtime as never, lease.nonce);
@@ -38,7 +38,7 @@ it("releases a fence restored after a restart once its lease expires", () => {
 it("an expired fence is not reported as held by the next snapshot", () => {
   vi.useFakeTimers();
   try {
-    const data = fs.mkdtempSync(path.join(os.tmpdir(), "enki-maint-"));
+    const data = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "enki-maint-")));
     const runtime = runtimeFake();
     const lease = acquireStartLease(data);
     const maintenance = new DaemonMaintenance(data, identity, runtime as never, lease.nonce);

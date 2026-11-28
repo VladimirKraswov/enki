@@ -6,9 +6,13 @@
 //! for the rest. This module is deliberately separate from computer control:
 //! a missing permission is reported, never silently treated as granted.
 use serde::Serialize;
-use serde_json::{json, Value};
+#[cfg(target_os = "macos")]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
+#[cfg(target_os = "macos")]
 const BUNDLE_ID: &str = "dev.local.opencodedesktop";
 
 #[derive(Serialize)]
