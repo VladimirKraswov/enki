@@ -72,6 +72,9 @@ export function UpdateSettings(){
         <button className="btn" disabled={disabled||running} onClick={()=>void managePrevious('restore_previous')}>{busy==='restore_previous'?'Готовлю откат…':'Восстановить предыдущую версию'}</button>
         <button className="btn" disabled={disabled} onClick={()=>void managePrevious('delete_previous')}>Удалить резервную копию</button>
       </div>
+    </>:previousApp?.error?<>
+      <p role="alert">{previousApp.error}</p>
+      <button className="btn" disabled={disabled} onClick={()=>void managePrevious('delete_previous')}>Удалить запись резервной копии</button>
     </>:<p className="muted">Резервной копии приложения пока нет. Она появится после первого обновления.</p>}
     <h2>Резервная копия данных</h2>
     <button className="btn" disabled={disabled||running} onClick={()=>void maintain('backup')}>Создать резервную копию</button>

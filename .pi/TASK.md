@@ -448,11 +448,15 @@ Enki 2.0.127. В `launchctl list` и `launchctl print gui/501/enki-install-127`
 удаление и откат из Настройки → Обновления. Откат повторно проверяет hash,
 ожидает authoritative idle Runtime и использует тот же helper/rename lifecycle.
 При успешном старте очищаются только legacy bundles с точным PID-именем.
+Очистка идёт в фоне и сначала сверяет полный hash канонического rollback,
+поэтому удаление старых копий не задерживает запуск и не выполняется без
+проверенной резервной версии.
 
 Проверки до канонического релизного gate: `npm run build` — прошёл;
+`npm test` — 229 файлов / 1383 теста прошли;
 `npx vitest run test/update-settings.test.ts` — 5 прошли;
 `npm run check:docs` — 76 Markdown, 219 ссылок прошли;
-`CARGO_BUILD_JOBS=2 cargo test --manifest-path src-tauri/Cargo.toml --lib
+`CARGO_BUILD_JOBS=2 cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 hub_updates::install::tests` — 6 прошли; `cargo fmt --check` — прошёл.
 Публикация/пакет/установка ещё не выполнены; acceptance остаётся открытой до
 подтверждённой Hub-квитанции и проверки установленной 2.0.128.

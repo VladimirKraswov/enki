@@ -119,6 +119,18 @@ pub fn launch(plan: Plan) -> Result<(), String> {
 /// retire those obsolete copies and leave the canonical rollback untouched.
 #[cfg(target_os = "macos")]
 pub fn cleanup_legacy_previous() -> Result<usize, String> {
+    let backup = previous_status()?;
+    if backup["available"] != true {
+        return Ok(0);
+    }
+    let record: serde_json::Value = read_json(&root()?.join("previous-app.json"))?;
+    let rollback = PathBuf::from(record["path"].as_str().ok_or("Invalid rollback path")?);
+    let expected = record["hash"].as_str().ok_or("Invalid rollback hash")?;
+    if tree_hash(&rollback)? != expected {
+        return Err(
+            "Не удаляю старые копии: единственная резервная версия не прошла проверку".into(),
+        );
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let bundle = exe
         .ancestors()
@@ -181,9 +193,7 @@ pub fn previous_status() -> Result<serde_json::Value, String> {
             serde_json::json!({"available":false,"error":"Резервная копия отсутствует или имеет некорректную запись."}),
         );
     }
-    Ok(
-        serde_json::json!({"available":true,"version":version,"createdAt":value["createdAt"],"hash":hash}),
-    )
+    Ok(serde_json::json!({"available":true,"version":version,"createdAt":value["createdAt"]}))
 }
 
 #[cfg(target_os = "macos")]
@@ -199,11 +209,16 @@ pub fn delete_previous() -> Result<(), String> {
     if path.file_name().is_none_or(|n| n != ".Enki-previous.app")
         || path.parent() != current.parent()
         || path.is_symlink()
-        || !path.is_dir()
     {
         return Err("Путь резервной копии не прошёл проверку".into());
     }
-    fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_dir() => {
+            fs::remove_dir_all(path).map_err(|e| e.to_string())?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err("Тип резервной копии не прошёл проверку".into()),
+    }
     fs::remove_file(record).map_err(|e| e.to_string())
 }
 
@@ -218,6 +233,9 @@ pub fn rollback_plan() -> Result<Plan, String> {
     let hash = record["hash"].as_str().ok_or("Invalid backup hash")?;
     let version = record["version"].as_str().ok_or("Invalid backup version")?;
     let dir = root()?.join(format!("build-{hash}"));
+    if fs::symlink_metadata(&dir).is_ok() {
+        return Err("Каталог отката уже существует; повторите после очистки подготовки".into());
+    }
     let attempt = dir.join(format!("attempt-rollback-{}", std::process::id()));
     fs::create_dir_all(&attempt).map_err(|e| e.to_string())?;
     crate::updates::private(&dir)?;

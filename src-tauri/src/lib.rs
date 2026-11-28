@@ -132,9 +132,11 @@ pub fn run() {
             };
             app.manage(ownership);
             #[cfg(target_os = "macos")]
-            if let Err(error) = hub_updates::install::cleanup_legacy_previous() {
-                eprintln!("Could not clean obsolete Enki rollback bundles: {error}");
-            }
+            std::thread::spawn(|| {
+                if let Err(error) = hub_updates::install::cleanup_legacy_previous() {
+                    eprintln!("Could not clean obsolete Enki rollback bundles: {error}");
+                }
+            });
             if let Some(profile) = &webview_profile {
                 for window in &profile_windows {
                     profile
