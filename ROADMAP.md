@@ -351,3 +351,10 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 - [x] Ограничить Clippy исключение модулем `baseline` в read-only A/B example;
   fixture остаётся неизменным, текущий product code продолжает проверяться.
 - [ ] Канонический gate и повторные пакеты Windows/macOS/Linux.
+
+## Белое окно macOS 2.0.139
+
+- [x] Подтверждена причина: CSP `connect-src` блокировал Tauri IPC (`ipc://localhost/plugin:event|listen`), из-за чего фронтенд падал до рендера.
+- [x] Разрешены `ipc:` и `http://ipc.localhost`; временная диагностика удалена; добавлен CSP regression test.
+- [x] UI tests 230/230 (1387), `npm run build`, `npm run check:docs`, DMG macOS arm64 собран.
+- [ ] Установить и проверить видимое приложение, опубликовать Hub receipt 2.0.139.

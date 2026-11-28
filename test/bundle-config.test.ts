@@ -92,3 +92,9 @@ it("keeps one product version across package, Cargo and Tauri", () => {
   expect(base.version).toBe(pkg.version);
   expect(cargo).toContain(`version = "${pkg.version}"`);
 });
+
+it("allows Tauri IPC endpoints in the webview CSP", () => {
+  const connect = base.app.security.csp["connect-src"] as string;
+  expect(connect.split(/\s+/)).toContain("ipc:");
+  expect(connect.split(/\s+/)).toContain("http://ipc.localhost");
+});

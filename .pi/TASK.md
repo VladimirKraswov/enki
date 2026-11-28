@@ -661,3 +661,25 @@ read-only A/B example. Fixture является историческим сре�
 `#[allow(clippy::needless_bool)]` только для baseline-модуля в example; текущий
 runtime/product code продолжает Clippy проверяться отдельно. Полный gate и
 следующий Windows Clippy/package workflow ещё не запускались.
+
+## Продолжение 2026-11-28: белое окно macOS Enki 2.0.139
+
+Запрос владельца: обновить штатный Enki на Mac, который показывает пустое окно.
+
+Временная `on_page_load` диагностика в изолированном bundle зафиксировала CSP
+нарушение `connect-src: ipc://localhost/plugin%3Aevent%7Clisten` и JS ошибку
+`ConnectionError: Среда выполнения Enki ещё не подключена.`. Причина — отсутствие
+схемы/host Tauri IPC в `connect-src`; React падал до рендера.
+
+Исправлено: `src-tauri/tauri.conf.json` разрешает `ipc:` и `http://ipc.localhost`.
+Диагностический hook удалён. Добавлен regression test `bundle-config.test.ts`.
+Версия синхронно повышена до 2.0.139 (package, Cargo, Tauri, lockfiles).
+
+Проверки: bundle-config 9/9; полный UI 230 файлов / 1387 тестов; `npm run build`;
+`npm run check:docs`; `npm run build:macos` собрал DMG
+`src-tauri/target/release/bundle/dmg/Enki_2.0.139_aarch64.dmg` (114 MB).
+Notarization пропущена: Apple ID credentials отсутствуют.
+
+При проверке `/Applications/Enki.app` AX tree показывал пустой WebView до
+применения новой версии. Установка 2.0.139, Hub release и пост-инсталляционная
+приёмка ещё не выполнены.
