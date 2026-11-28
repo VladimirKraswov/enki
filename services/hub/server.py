@@ -27,6 +27,10 @@ _services_spec = importlib.util.spec_from_file_location('enki_model_services', P
 _services_module = importlib.util.module_from_spec(_services_spec)
 _services_spec.loader.exec_module(_services_module)
 
+_images_spec = importlib.util.spec_from_file_location('enki_images', Path(__file__).with_name('images.py'))
+_images_module = importlib.util.module_from_spec(_images_spec)
+_images_spec.loader.exec_module(_images_module)
+
 _cache_spec = importlib.util.spec_from_file_location('enki_build_cache', Path(__file__).with_name('build_cache.py'))
 _cache_module = importlib.util.module_from_spec(_cache_spec)
 _cache_spec.loader.exec_module(_cache_module)
@@ -217,6 +221,7 @@ class Hub:
         self.build_cache = _cache_module.BuildCache(root / 'build-cache')
         self.model_catalog = _catalog_module.ModelCatalog(root, self.lock, Fault)
         self.model_services = _services_module.ModelServices(root, self.model_catalog, Fault)
+        self.images = _images_module.Images(root)
 
     @contextlib.contextmanager
     def connection(self):
@@ -747,6 +752,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not download_slot:raise Fault(429,'Загрузка обновлений занята. Повторите позже.')
             if self.command=='POST' and path=='/api/remote/asr':
                 return self.server.hub.remote.asr(self)
+            if path.startswith('/api/images/'):
+                # Hub is the authenticated image gateway; ComfyUI remains inside the inference VM.
+                return self.server.hub.images.handle(self, path.removeprefix('/api/images/'))
             data={}
             if self.command=='POST':
                 size=int(self.headers.get('Content-Length','0'))
@@ -804,6 +812,7 @@ class Handler(BaseHTTPRequestHandler):
     do_POST=dispatch
     do_PUT=dispatch
     do_HEAD=dispatch
+    do_DELETE=dispatch
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()

@@ -416,6 +416,14 @@ fn runtime_ready_at(runtime: &Path) -> bool {
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .is_some_and(|s| s["version"] == "1.32.0")
 }
+fn runtime_node(recorded: Option<&str>) -> Result<PathBuf, String> {
+    match recorded {
+        Some(path) => {
+            crate::browser::node_program(Some(path)).or_else(|_| crate::browser::node_program(None))
+        }
+        None => crate::browser::node_program(None),
+    }
+}
 pub fn runtime_ready() -> bool {
     root().is_ok_and(|p| runtime_ready_at(&p.join("runtime")))
 }
@@ -674,10 +682,9 @@ pub(crate) fn repair_shared_runtime(
     }
     // The registry records the Node it launches. Keep that record even when the
     // scripts already match, so a profile that lost it still registers tools.
-    if recorded_node(&path)?.is_none() {
-        let node = crate::browser::node_program(None)?;
-        save_node(&path, &node)?;
-    }
+    let recorded = recorded_node(&path)?;
+    let node = runtime_node(recorded.as_deref())?;
+    save_node(&path, &node)?;
     if runtime_ready_at(&path) {
         return Ok(true);
     }
@@ -715,7 +722,10 @@ fn install(node: Option<&str>, state: &SharedRuntime) -> Result<bool, String> {
     let runtime = root.join("runtime");
     private(&runtime)?;
     let recorded = recorded_node(&runtime)?;
-    let node = crate::browser::node_program(node.or(recorded.as_deref()))?;
+    let node = match node {
+        Some(configured) => crate::browser::node_program(Some(configured))?,
+        None => runtime_node(recorded.as_deref())?,
+    };
     save_node(&runtime, &node)?;
     if runtime_ready_at(&runtime) {
         return Ok(true);
@@ -1089,6 +1099,31 @@ mod tests {
         let before = fs::read_to_string(root.join("node.json")).unwrap();
         save_node(&root, &node).unwrap();
         assert_eq!(fs::read_to_string(root.join("node.json")).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_stale_recorded_node_is_replaced_even_when_the_sdk_files_are_ready() {
+        let root = std::env::temp_dir().join(format!(
+            "enki-stale-node-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("node_modules/@modelcontextprotocol/sdk")).unwrap();
+        fs::write(
+            root.join("node_modules/@modelcontextprotocol/sdk/package.json"),
+            r#"{"version":"1.32.0"}"#,
+        )
+        .unwrap();
+        sync_scripts(&root).unwrap();
+        save_node(&root, &root.join("removed-node")).unwrap();
+        assert!(runtime_ready_at(&root));
+
+        assert!(repair_shared_runtime(&SharedRuntime::default(), Some(&root)).unwrap());
+        let repaired = recorded_node(&root).unwrap().unwrap();
+        assert_ne!(repaired, root.join("removed-node").to_string_lossy());
+        assert!(crate::browser::node_program(Some(&repaired)).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

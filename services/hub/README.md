@@ -1,5 +1,13 @@
 # Enki Hub
 
+The authenticated image API is implemented in `images.py` and dispatched by
+`server.py`. Hub CT206 owns job metadata/files and forwards inference to ComfyUI
+on VM 5400 `v100-inference` (`192.168.31.96:8188`); clients never receive the
+ComfyUI endpoint or service credential. See
+[`docs/IMAGE-GENERATION.md`](../../docs/IMAGE-GENERATION.md) for routes, model
+presets, and operations. Do not replace this gateway with the historical CPU
+service under `services/images` without an explicit architecture change.
+
 Private single-account LAN library and session observability. Python3 standard library + SQLite/WAL; no inference or agent loop. Uploaded files are **stored, never executed by the server**. Plain-text skills can include supporting scripts; existing agent tools and permissions remain responsible for execution on the device.
 
 ## Operator deployment

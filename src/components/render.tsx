@@ -3,6 +3,8 @@ import {turnImageResults} from "../images/results";
 import {imageJobRefs} from "../images/jobs";
 import { imageReference } from '../../src-tauri/resources/agent/src/policy/image-reference';
 import { partsPresentation } from '../chat/presentation';
+import { groupToolActivities } from '../chat/activity';
+import { toolActivitySummary } from '../chat/activity';
 import { executionEvidence, executionLabel, type ExecutionEvidence } from '../chat/execution';
 import { lazy, Suspense, memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { attachmentParts } from '../attachments/archive';
@@ -18,7 +20,7 @@ import { CopyButton } from "./CopyButton";
 import { sessionSources } from "../state/taskContext";
 import { AttachmentThumbnail, AttachmentViewer } from "./AttachmentViewer";
 import { MessageEdit } from "./MessageEdit";
-import { actionCountLabel, answerText, finalAnswer, stepCountLabel, turnMetrics, visibleParts } from "../chat/turns";
+import { answerText, finalAnswer, stepCountLabel, turnMetrics, visibleParts } from "../chat/turns";
 import { exactTime, messageTime } from "../chat/time";
 import { describeMessageError, isAbortedError, isModelConnectionError } from "../chat/errors";
 import { ModelConnectionCheck } from "./ModelConnectionCheck";
@@ -151,6 +153,15 @@ function ToolDetails({state: st}: {state: NonNullable<MessagePart['state']>}) {
   </>;
 }
 
+function ToolActivityGroup({parts, label, evidence}: {parts: MessagePart[]; label: string; evidence?: ExecutionEvidence}) {
+  const errors = parts.filter(part => part.state?.status === 'error').length;
+  const running = parts.some(part => part.state?.status === 'running' || part.state?.status === 'pending');
+  return <Fold label={<>{label}{errors > 0 && <span className="tool-state-error"> · ошибок {errors}</span>}</>}
+    tone="tool" spinner={running && evidence === 'active'} defaultOpen={errors > 0}>
+    <div className="tool-activity-list">{parts.map(part => <ToolPartView key={part.id} part={part} evidence={evidence}/>)}</div>
+  </Fold>;
+}
+
 export function PartView({ part, evidence }: { part: MessagePart; evidence?: ExecutionEvidence }) {
   switch (part.type) {
     case "text":
@@ -236,9 +247,11 @@ export const AssistantMessageView = memo(function AssistantMessageView({
     );
   return (
     <div className="msg-assistant" data-scroll-anchor={`message:${message.id}`}>
-      {parts.map((p) => (
-        <div key={p.id} data-scroll-anchor={`part:${p.id}`}><PartView part={p} evidence={evidence} /></div>
-      ))}
+      {groupToolActivities(parts).map(item => item.kind === 'tools'
+        ? <div key={`tools:${item.parts[0]?.id}`} data-scroll-anchor={`part:${item.parts[0]?.id}`}>
+          {item.parts.length === 1 ? <ToolPartView part={item.parts[0]} evidence={evidence}/> : <ToolActivityGroup parts={item.parts} label={item.label} evidence={evidence}/>}
+        </div>
+        : <div key={item.part.id} data-scroll-anchor={`part:${item.part.id}`}><PartView part={item.part} evidence={evidence} /></div>)}
       {running && parts.length === 0 && (
         <div className="status-line">
           <span className="tool-spinner" /> Работаю…
@@ -292,6 +305,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
   const imageJobs = imageJobRefs(allParts);
   const imageUrls = generated.flatMap(result => result.images.map(image => image.url));
   const actions = allParts.filter(p => p.type === 'tool').length;
+  const activitySummary = toolActivitySummary(allParts);
   const errors = allParts.filter(p => p.type === 'tool' && p.state?.status === 'error').length;
   const metrics = turnMetrics(messages);
   const terminal = !!last.time.completed && last.finish !== 'tool-calls' && last.finish !== 'tool_calls';
@@ -308,7 +322,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({sessionId, mes
     {progress.length > 0 && <button className="turn-progress-toggle" data-scroll-anchor={`disclosure:${progressKey ?? messages[0].id}`} aria-expanded={expanded} aria-controls={progress.map(m => `${regionId}-${m.id}`).join(' ')} onClick={toggle}>
       <span className={`turn-chevron${expanded ? ' expanded' : ''}`} aria-hidden>›</span>
       {confirmedActive && <span className="tool-spinner" aria-hidden />}
-      <span>{label}</span>{actions > 0 && <span className="turn-count">{actionCountLabel(actions)}</span>}
+      <span>{label}</span>{actions > 0 && <span className="turn-count turn-activity-summary">{activitySummary.join(' · ') || `${actions} действий`}</span>}
       {partial && <span className="turn-count">продолжение</span>}
       {errors > 0 && <span className="turn-tool-errors">Ошибок инструментов: {errors}</span>}
     </button>}

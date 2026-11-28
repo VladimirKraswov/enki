@@ -4,7 +4,7 @@ Settings → **Генерация изображений**: enabled switch, base
 
 ## The service
 
-`<endpoint>` is the Hub's image route, normally `http://192.168.31.59:8080/api/images`. The Hub is the single gateway: callers talk to the Hub, the Hub talks to ComfyUI running **Qwen-Image-Edit 2511** (GGUF Q6_K, Lightning 4 steps) on a Tesla V100. Text-to-image and image editing are the same model. All routes need `Authorization: Bearer <token>`:
+`<endpoint>` is the Hub's authenticated image route: `https://192.168.31.223:8443/api/images`. CT201 `192.168.31.59` may proxy that route for older clients; it is not the inference host. The Hub CT206 `enki-hub` is the only gateway and calls ComfyUI on **VM 5400 `v100-inference`** (`192.168.31.96:8188`), a Tesla V100-SXM2-32GB. Text-to-image and image editing use **Qwen-Image-Edit 2511** (GGUF Q6_K). All `/api/images` routes require `Authorization: Bearer <token>`:
 
 - `GET /health` → `{status: ready|degraded, model:{id,title,steps,multiple,max_side,max_pixels,max_items,modes}, engine:{name,device,vram_total_mib,vram_free_mib}, queue:{pending,running}}`;
 - `POST /jobs` → **201** job. Body: `prompt`, `width`, `height`, `seed`, `items[]` (≤8), `source_image.data_base64`, `strength` 0…1. Unknown fields are ignored;
@@ -104,3 +104,16 @@ half-installed: the next session start reconciles the files with the new build.
 Native update required for settings commands and shared runtime. A UI-only activation cannot install the native reader, OS vault integration or shared tool files. Publication does not interrupt active agents; install through the normal idle native-update flow.
 
 Upgrade to this schema is one-time: `image-generation.json` keeps `enabled`/`endpoint`, the retired `provider`/`model` fields are dropped, the previous file is saved as `image-generation.before-hub-v1.json` and a `image-hub-v1.json` marker is written.
+
+## Inference service operations
+
+ComfyUI is managed by `comfyui.service` on VM 5400. The Hub's private
+`images.py` gateway calls this VM; the Enki client never connects to ComfyUI or
+receives its address/key. Keep the service in systemd and check both its unit
+state and `/system_stats` before declaring image generation ready. A manually
+launched ComfyUI can occupy port 8188 while systemd repeatedly fails to start a
+second copy; check `/queue` first and only move an idle instance into systemd.
+Do not change the V100 model flags or the model's local uncommitted attention
+workaround without a quality comparison. The deploy on 2026-11-28 was
+reconciled to one systemd-owned process; its restart counter reset to zero and
+the queue remained empty. Existing local model changes and backup were kept.

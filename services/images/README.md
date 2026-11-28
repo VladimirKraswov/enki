@@ -1,5 +1,12 @@
 # CPU image generation for Enki
 
+> Historical implementation and deployment notes. The active Enki image API is
+> currently served by Hub CT206 and ComfyUI on VM 5400 `v100-inference`; this
+> CPU service description is not the live production topology. See
+> [`docs/IMAGE-GENERATION.md`](../../docs/IMAGE-GENERATION.md) before operating
+> or changing image generation. Keep this implementation only for its explicit
+> historical/test use; do not infer that CT201 currently runs image inference.
+
 Resident **OpenVINO GenAI + SDXL Lightning / FLUX.2 Klein 4B** on CPU. `enki-image-auto` selects SDXL for new pictures/materials and the qualified instruction-following Klein profile for edits of an existing image. `sdxl-lightning` explicitly retains the older redraw workflow; `lcm-dreamshaper-v7` remains an explicit draft option for new pictures, never an editing fallback. No CUDA, GPU offload or second language-agent loop. Startup constructs/compiles both primary pipelines without generating dummy images and reports ready only after both have loaded. They remain resident when switching between drawing and editing. One serialized worker keeps at most one additional optional pipeline (periodic SDXL, legacy SDXL redraw or draft); it evicts that optional variant before loading the next and never evicts either primary. ASR remains a separate higher-priority service.
 
 ## Proven deployment

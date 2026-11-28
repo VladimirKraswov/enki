@@ -18,14 +18,47 @@ import { store, useAppState } from "../state/store";
 import { attachmentDrafts, attachmentScope } from "../attachments/drafts";
 import { LARGE_PASTE_THRESHOLD, pastedTextFile } from "../attachments/prepare";
 import { filesFromNativeDrop, nativeDropTargetsQuestion } from "../attachments/native-drop";
-import { pathBasename } from "../util/paths";
+import { isAbsoluteLocalPath, normalizeLocalPath, pathBasename, pathIsWithin } from "../util/paths";
 import { openFileInput, registerComposer } from "../attachments/composerBridge";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readFile, stat } from "@tauri-apps/plugin-fs";
 import { deepseekPeakStatus, formatUntilCheap } from "../usage/peak";
+import type { SessionDiffFile } from "../api/types";
+import { sessionPatchFiles } from "../state/chatReducer";
 
 const PromptQueue = lazy(() => import("./PromptQueue").then(m => ({default: m.PromptQueue})));
+
+function ChangeSummary({sessionId, directory, revision}: {sessionId: string | null; directory: string | null; revision: number}) {
+  const [files, setFiles] = useState<SessionDiffFile[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    setFiles(null);
+    if (!sessionId || !directory) return () => { live = false; };
+    const client = store.client;
+    const controller = new AbortController();
+    void client.sessionDiff(sessionId, directory, controller.signal).then(result => {
+      if (live && client === store.client && sessionId === store.state.activeSessionId && directory === store.state.directory) setFiles(result);
+    }).catch(() => { if (live) setFiles(null); });
+    return () => { live = false; controller.abort(); };
+  }, [sessionId, directory, revision]);
+  if (!sessionId || !files) return null;
+  const root = normalizeLocalPath(directory ?? '').replace(/^\/private(?=\/)/, '');
+  const toRelative = (value: string) => {
+    const clean = normalizeLocalPath(isAbsoluteLocalPath(value) ? value : `${directory}/${value}`).replace(/^\/private(?=\/)/, '');
+    return pathIsWithin(clean, root) && clean !== root ? clean.slice(root.length + (root.endsWith('/') ? 0 : 1)) : clean.replace(/^\/+/, '');
+  };
+  const known = new Set(files.map(file => toRelative(file.file)));
+  const missingPatchFiles = new Set(sessionPatchFiles(store.state.chat.sessions[sessionId]).map(toRelative).filter(file => !known.has(file)));
+  const fileCount = files.length + missingPatchFiles.size;
+  if (fileCount === 0) return null;
+  const additions = files.reduce((n, file) => n + (file.additionsTotal ?? file.additions ?? 0), 0);
+  const deletions = files.reduce((n, file) => n + (file.deletionsTotal ?? file.deletions ?? 0), 0);
+  return <button className="composer-change-summary" type="button" onClick={() => store.setLayout({rightOpen: true, rightTab: "changes"})}
+    aria-label={`Открыть изменения: ${fileCount} файлов, добавлено ${additions}, удалено ${deletions}`}>
+    Изменено {fileCount} {fileCount === 1 ? 'файл' : fileCount < 5 ? 'файла' : 'файлов'} <span>+{additions}</span> <em>−{deletions}</em>
+  </button>;
+}
 
 /** A file the runtime already stores for the edited queue item: metadata only, never fetched. */
 function KeptAttachmentChip({ file, onRemove, disabled }: { file: { name: string; size: number }; onRemove: () => void; disabled: boolean }) {
@@ -79,6 +112,7 @@ export function Composer() {
   const switching = isSwitching(switchState);
   const providers = store.configuredProvidersWithModels();
   const session = store.activeSession() ?? null;
+  const changeRevision = s.activeSessionId ? (s.chat.sessionPatched[s.activeSessionId] ?? 0) + (s.chat.sessions[s.activeSessionId]?.patchRevision ?? 0) : 0;
   const archive = !!session && store.isLegacySession(session.id);
   const continuing = !!session && store.isArchiveContinuing(session.id);
   const status = session
@@ -295,6 +329,7 @@ export function Composer() {
         <span>Редактирование запроса в очереди</span>
         <button type="button" disabled={s.ui.sending} onClick={() => void store.cancelQueueEdit()}>Отмена</button>
       </div>}
+      <ChangeSummary sessionId={s.activeSessionId} directory={s.directory} revision={changeRevision}/>
       <div className={`composer ${dragging ? "composer-drop-target" : ""} ${voiceActive ? "composer-voice-active" : ""}`}>
         {dragging && <div className="composer-drop-label">Перетащите файлы сюда</div>}
         {(attachments.length > 0 || kept.length > 0) && <div className="attachment-list" aria-label="Вложения">

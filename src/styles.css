@@ -2810,6 +2810,12 @@ kbd {
 .assistant-turn { min-width:0; }
 .turn-progress-toggle { display:flex; align-items:center; gap:9px; flex-wrap:wrap; width:100%; text-align:left; padding:6px 0; background:none; border:0; color:var(--text-dim); font-size: 0.857143rem; cursor:pointer; }
 .turn-progress-toggle:hover { color:var(--text); }
+.tool-activity-list { display:flex; flex-direction:column; gap:2px; padding-left:10px; border-left:1px solid var(--border); }
+.tool-activity-list > .fold { margin:0; }
+.composer-change-summary { display:flex; align-items:center; gap:6px; width:max-content; max-width:100%; margin:0 auto 7px; padding:5px 11px; border:1px solid var(--border); border-radius:999px; background:var(--panel); color:var(--text-dim); font-size:.78rem; cursor:pointer; }
+.composer-change-summary:hover { color:var(--text); background:var(--panel-hover,var(--panel)); }
+.composer-change-summary span { color:var(--ok,var(--accent)); }
+.composer-change-summary em { color:var(--err); font-style:normal; }
 .turn-chevron { font-size: 1.42857rem; line-height:14px; transform:rotate(0); }
 .turn-chevron.expanded { transform:rotate(90deg); }
 .turn-count { color:var(--text-faint); font-size: 0.785714rem; }
