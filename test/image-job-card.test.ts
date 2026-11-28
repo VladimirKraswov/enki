@@ -18,6 +18,8 @@ it('shows the real engine phase and cancels through the native proxy',async()=>{
  expect(node.textContent).toContain('Рисую 2 из 4');
  expect(node.textContent).toContain('50%');
  expect(node.querySelector('[role=progressbar]')?.getAttribute('aria-valuenow')).toBe('50');
+ expect(node.querySelector('.image-skeleton')).not.toBeNull();
+ expect(node.querySelector('.image-skeleton')?.getAttribute('style')).toContain('aspect-ratio');
  await act(async()=>{Array.from(node.querySelectorAll('button')).find(b=>b.textContent==='Отменить')!.click()});
  expect(calls.invoke).toHaveBeenCalledWith('image_job_cancel',{jobId:ID});
  expect(node.textContent).toContain('Генерация отменена');
@@ -45,6 +47,7 @@ it('saves a finished result itself when the turn ended before the agent retrieve
 it('shows the service error instead of a fake success',async()=>{
  calls.invoke.mockResolvedValue({id:ID,state:'failed',progress:{phase:'failed',step:0,steps:4,percent:0},error:{code:'engine_error',message:'ComfyUI вернул ошибку генерации'}});
  await render({hasImages:false});
+ expect(node.querySelector('.image-skeleton')).toBeNull();
  expect(node.textContent).toContain('Генерация не удалась');
  expect(node.textContent).toContain('ComfyUI вернул ошибку генерации');
  expect(Array.from(node.querySelectorAll('button')).some(b=>b.textContent==='Отменить')).toBe(false);

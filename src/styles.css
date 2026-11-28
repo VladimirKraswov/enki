@@ -3602,3 +3602,9 @@ button.message-file{display:inline-flex;align-items:center;gap:10px;color:var(--
 .image-job-actions:empty{display:none}
 @media (prefers-reduced-motion:reduce){.image-job-bar>span{transition:none}}
 .correction-actions { display: flex; gap: 6px; padding: 0 10px 8px; }
+
+.image-skeleton{position:relative;width:100%;max-width:340px;min-height:170px;margin:0 0 10px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel);display:grid;place-items:center}
+.image-skeleton-shimmer{position:absolute;inset:-40%;background:linear-gradient(100deg,transparent 30%,rgba(128,128,128,.22) 45%,rgba(128,128,128,.32) 50%,rgba(128,128,128,.22) 55%,transparent 70%);background-size:220% 100%;animation:image-skeleton-shimmer 1.8s linear infinite}
+.image-skeleton-label{position:relative;display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:.857143rem;font-variant-numeric:tabular-nums}
+@keyframes image-skeleton-shimmer{from{background-position:140% 0}to{background-position:-60% 0}}
+@media (prefers-reduced-motion:reduce){.image-skeleton-shimmer{animation:none;opacity:.5}}

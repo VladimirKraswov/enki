@@ -5,7 +5,7 @@ import type {ImageResult} from '../images/results';
 import GeneratedImages from './GeneratedImages';
 import {useAppSelector} from '../state/store';
 import type {ImageJobRef} from '../images/jobs';
-interface JobView{id:string;state:string;mode?:string;progress?:{phase?:string;step?:number;steps?:number;percent?:number};images?:{name:string}[];error?:{code?:string;message?:string}}
+interface JobView{id:string;state:string;mode?:string;width?:number;height?:number;progress?:{phase?:string;step?:number;steps?:number;percent?:number};images?:{name:string}[];error?:{code?:string;message?:string}}
 const POLL_MS=1500;
 /** Live progress of one image job, driven by the native proxy: the WebView never
  * sees the service key. Finished images are pulled in only when the turn has
@@ -41,7 +41,12 @@ export default function ImageJobProgress({jobId,directory,hasImages,knownState}:
  const cancel=async()=>{setCancelling(true);setError('');try{setJob(await capabilityNative<JobView>('image_job_cancel',{jobId}))}catch(e){setError(String(e))}finally{setCancelling(false)}};
  const percent=Math.max(0,Math.min(100,job?.progress?.percent??0));
  const failed=state==='failed';
+ const ratio=job?.width&&job?.height?`${job.width} / ${job.height}`:'1 / 1';
  return <div className={`image-job-card${failed?' failed':''}`} aria-live="polite">
+  {active&&<div className="image-skeleton" style={{aspectRatio:ratio}} aria-hidden>
+   <span className="image-skeleton-shimmer"/>
+   <span className="image-skeleton-label"><span className="tool-spinner" aria-hidden/>{jobPhaseLabel(job?.progress)} · {percent}%</span>
+  </div>}
   <p className="image-job-head">
    {active?<span className="tool-spinner" aria-hidden/>:<span className={`image-job-dot ${state}`} aria-hidden/>}
    <span>{active?jobPhaseLabel(job?.progress):failed?'Генерация не удалась':state==='cancelled'?'Генерация отменена':'Готово'}</span>
