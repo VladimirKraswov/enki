@@ -11,10 +11,14 @@ interface MaintenanceRuntime {
 }
 interface Command { requestId: string; instance: string; dataHash: string; startOwner: string; mode: "begin" | "end"; lease?: string }
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+/** A held maintenance lease that is never ended would refuse every action.
+ * The fence therefore expires on its own; the app can always begin again. */
+export const MAINTENANCE_TTL_MS = 10 * 60_000;
 const nonce = /^[A-Za-z0-9_-]{43}$/;
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 export class DaemonMaintenance {
-  private held: { lease: string; requestId: string; ready: boolean; receipt?: HeldMaintenanceReceipt } | null = null;
+  private held: { lease: string; requestId: string; ready: boolean; receipt?: HeldMaintenanceReceipt; expires?: number } | null = null;
+  private timer?: ReturnType<typeof setTimeout>;
   private readonly receipts = new Map<string, { body: string; result: Promise<unknown>; value?: unknown }>();
   constructor(private readonly data: string, private readonly identity: Identity, private readonly runtime: MaintenanceRuntime, initialOwner?: string) {
     if (initialOwner) {
@@ -22,9 +26,31 @@ export class DaemonMaintenance {
       const receipt: HeldMaintenanceReceipt = { ok: true, op: "maintenance", id: randomUUID(), identity, lease: randomBytes(32).toString("base64url"), initial: true };
       this.held = { lease: receipt.lease, requestId: receipt.id, ready: true, receipt };
       writePrivate(data, "daemon-maintenance.json", JSON.stringify(receipt));
+      this.arm();
     }
   }
-  snapshot(): HeldMaintenanceReceipt | undefined { return this.held?.ready ? this.held.receipt : undefined; }
+  snapshot(): HeldMaintenanceReceipt | undefined {
+    if (this.held && this.held.expires !== undefined && Date.now() >= this.held.expires) this.expire();
+    return this.held?.ready ? this.held.receipt : undefined;
+  }
+
+  /** Release a lease nobody ended (crashed or postponed update) so the runtime
+   * keeps working instead of answering every action with "maintenance". */
+  expire(): void {
+    if (!this.held) return;
+    clearTimeout(this.timer); this.timer = undefined;
+    this.held = null;
+    this.runtime.endMaintenance();
+    writePrivate(this.data, "daemon-maintenance.json", JSON.stringify({ ok: true, op: "maintenance", expired: true, at: Date.now() }));
+  }
+
+  private arm(): void {
+    clearTimeout(this.timer);
+    if (!this.held) return;
+    this.held.expires = Date.now() + MAINTENANCE_TTL_MS;
+    this.timer = setTimeout(() => this.expire(), MAINTENANCE_TTL_MS);
+    this.timer.unref?.();
+  }
   private command(input: unknown): Command {
     if (!record(input) || input.instance !== this.identity.instance || input.dataHash !== this.identity.dataHash
       || typeof input.requestId !== "string" || !uuid.test(input.requestId) || !["begin", "end"].includes(String(input.mode))
@@ -50,7 +76,7 @@ export class DaemonMaintenance {
   private async apply(command: Command): Promise<unknown> {
     if (command.mode === "end") {
       if (!this.held?.ready || command.lease !== this.held.lease) throw new HttpError(409, "Требуется совпадающая удержанная квитанция обслуживания.");
-      this.runtime.endMaintenance(); this.held = null;
+      this.runtime.endMaintenance(); this.held = null; clearTimeout(this.timer); this.timer = undefined;
       const receipt = { ok: true, op: "maintenance", id: command.requestId, identity: this.identity };
       writePrivate(this.data, "daemon-maintenance.json", JSON.stringify(receipt));
       return receipt;
@@ -66,10 +92,10 @@ export class DaemonMaintenance {
       const receipt: MaintenanceReceipt = { ok: true, op: "maintenance", id: command.requestId, identity: this.identity, lease: held.lease, backup };
       // Backup is complete and private before success is externally observable.
       writePrivate(this.data, "daemon-maintenance.json", JSON.stringify(receipt));
-      held.receipt = receipt; held.ready = true; return receipt;
+      held.receipt = receipt; held.ready = true; this.arm(); return receipt;
     } catch (error) {
       if (fenced) this.runtime.endMaintenance();
-      this.held = null; throw error;
+      this.held = null; clearTimeout(this.timer); this.timer = undefined; throw error;
     }
   }
   lookup(id: string): unknown {

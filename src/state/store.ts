@@ -109,6 +109,9 @@ export const MCP_STATUS_LIMIT = 64;
 
 /** How long a pre-dispatch refusal stays visible in its chat before it must be handled. */
 const NOT_SENT_WINDOW_MS = 14 * 24 * 3600 * 1000;
+/** After this age a refusal is history, not a live notice: it resurfaces after
+ * every restart otherwise, long after the person retried or moved on. */
+const NOT_SENT_STALE_MS = 15 * 60_000;
 const EMPTY_MCP_STATUSES: RuntimeServerStatus[] = [];
 
 /** Runtime compaction settings → the context meter's thresholds. */
@@ -1789,6 +1792,9 @@ class Store {
       for (const record of records) {
         if (record.sessionId !== sessionId || (record.state !== 'refused' && record.state !== 'cancelled')) continue;
         if (Date.now() - record.updatedAt > NOT_SENT_WINDOW_MS) continue;
+        // A restart replays the durable journal; without events yet, "the chat
+        // moved on" cannot be proven, so age decides instead of showing it again.
+        if (Date.now() - record.updatedAt > NOT_SENT_STALE_MS) continue;
         if ((this.state.prefs.recoveredOperations ?? []).includes(record.id)) continue;
         if ((this.state.prefs.dismissedOperations ?? []).includes(record.id)) continue;
         // Positive proof in the transcript outranks everything: the message is there.

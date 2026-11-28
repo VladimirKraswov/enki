@@ -168,3 +168,11 @@ it("keeps only the newest refusal when several attempts were refused", async () 
   await store.refreshNotSent("s1");
   expect(store.notSent.get("s1")!.map(item => item.id)).toEqual(["msg_b"]);
 });
+
+it("does not resurrect a refusal that is hours old after a restart", async () => {
+  // Real case: two "доставка не подтверждена" cards came back after every launch.
+  setup([acceptedRecord("msg_old", "s1", { state: "refused", updatedAt: Date.now() - 3 * 3600_000 })]);
+  Object.defineProperty(store, "backend", { configurable: true, get: () => ({ client: { receipt: vi.fn(async () => ({ id: "msg_old", state: "rejected", error: "старое" })) } }) });
+  await store.refreshNotSent("s1");
+  expect(store.notSent.get("s1")).toBeUndefined();
+});
