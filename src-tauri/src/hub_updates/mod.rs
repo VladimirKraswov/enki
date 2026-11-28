@@ -232,8 +232,13 @@ async fn hub_update_app(
         let downloaded = cached
             .as_ref()
             .is_some_and(|c| root().is_ok_and(|p| p.join(format!("{}.json", c.digest)).is_file()));
+        #[cfg(target_os = "macos")]
+        let previous_app = install::previous_status()
+            .unwrap_or_else(|error| json!({"available":false,"error":error}));
+        #[cfg(not(target_os = "macos"))]
+        let previous_app = json!({"available":false});
         return Ok(
-            json!({"nativeVersion":env!("CARGO_PKG_VERSION"),"nativeFingerprint":FINGERPRINT,"hot":hot,"build":state.build.status(),"installation":read_json::<Value>(&root()?.join("last-install.json")).ok(),"release":cached.as_ref().map(|c|json!({"available":true,"version":c.version,"kind":c.kind,"channel":c.channel,"digest":c.digest,"notes":c.notes,"binary":{"state":c.binary["state"],"message":c.binary["message"]}})),"downloaded":downloaded}),
+            json!({"nativeVersion":env!("CARGO_PKG_VERSION"),"nativeFingerprint":FINGERPRINT,"hot":hot,"build":state.build.status(),"installation":read_json::<Value>(&root()?.join("last-install.json")).ok(),"previousApp":previous_app,"release":cached.as_ref().map(|c|json!({"available":true,"version":c.version,"kind":c.kind,"channel":c.channel,"digest":c.digest,"notes":c.notes,"binary":{"state":c.binary["state"],"message":c.binary["message"]}})),"downloaded":downloaded}),
         );
     }
     if action == "ready" {
@@ -273,6 +278,42 @@ async fn hub_update_app(
         crate::updates::ensure_writable()?;
         Some(lease()?)
     };
+    if action == "delete_previous" {
+        #[cfg(target_os = "macos")]
+        {
+            install::delete_previous()?;
+            return Ok(json!({"deleted":true}));
+        }
+        #[cfg(not(target_os = "macos"))]
+        return Err("Откат приложения доступен только на macOS".into());
+    }
+    if action == "restore_previous" {
+        #[cfg(target_os = "macos")]
+        {
+            let maintenance = crate::updates::Maintenance::acquire(&app).await?;
+            crate::updates::idle(&app).await?;
+            let plan = tauri::async_runtime::spawn_blocking(install::rollback_plan)
+                .await
+                .map_err(|e| e.to_string())??;
+            let supervisor = app
+                .state::<crate::runtime::RuntimeSupervisor>()
+                .inner()
+                .clone();
+            let stopping = supervisor.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                stopping.shutdown_checked(std::time::Duration::from_secs(20))
+            })
+            .await
+            .map_err(|_| "Остановка ядра прервана")??;
+            install::launch(plan)?;
+            supervisor.retire();
+            std::mem::forget(maintenance);
+            app.exit(0);
+            return Ok(json!({"restarting":true,"rollback":true}));
+        }
+        #[cfg(not(target_os = "macos"))]
+        return Err("Откат приложения доступен только на macOS".into());
+    }
     match action.as_str() {
         "check" => {
             if state.build.running() {

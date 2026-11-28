@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import {beforeEach,afterEach,it,expect,vi} from 'vitest';
 import {act,createElement} from 'react';import {createRoot,type Root} from 'react-dom/client';
-const f=vi.hoisted(()=>({state:{} as any,prerequisites:{available:true} as any,download:vi.fn(),build:vi.fn(),cancel:vi.fn()}));
+const f=vi.hoisted(()=>({state:{} as any,prerequisites:{available:true} as any,download:vi.fn(),build:vi.fn(),cancel:vi.fn(),invoke:vi.fn()}));
 vi.mock('../src/state/store',()=>({store:{},useAppState:()=>({})}));
 vi.mock('../src/operations/backups',()=>({makeBackup:vi.fn(),restoreBackup:vi.fn()}));
 vi.mock('../src/operations/maintenance',()=>({maintenance:{}}));
 vi.mock('../src/components/SettingHelp',()=>({SettingField:({children}:any)=>children}));
-vi.mock('@tauri-apps/api/core',()=>({invoke:async(_cmd:string,args:any)=>args.action==='prerequisites'?f.prerequisites:[]}));
+vi.mock('@tauri-apps/api/core',()=>({invoke:(cmd:string,args:any)=>{f.invoke(cmd,args);return Promise.resolve(args.action==='prerequisites'?f.prerequisites:[]);}}));
 vi.mock('../src/updates/runtime',()=>({useUpdates:()=>f.state,agentsRunning:()=>false,updates:{refresh:async()=>{},compiling:()=>['downloading','unpacking'].includes(f.state.status.build.stage),prepared:()=>f.state.status.build.stage==='ready',download:f.download,build:f.build,cancel:f.cancel}}));
 import {UpdateSettings} from '../src/components/UpdateSettings';
 let root:Root;
@@ -41,4 +41,16 @@ it('offers local build without waiting for GitHub, only after an explicit click'
  expect(document.querySelector('details')?.open).toBe(true);expect(f.build).not.toHaveBeenCalled();
  const build=buttons().find(b=>b.textContent==='Собрать на этом компьютере')!;
  await act(async()=>build.click());expect(f.build).toHaveBeenCalledTimes(1);expect(f.download).not.toHaveBeenCalled();
+});
+
+it('shows one app rollback with restore and delete actions when the native updater reports it',async()=>{
+ f.state.status.previousApp={available:true,version:'2.0.127',createdAt:1795890000000};
+ vi.stubGlobal('confirm',()=>true);await render();
+ expect(document.body.textContent).toContain('Сохранена одна предыдущая версия Enki 2.0.127');
+ expect(buttons().filter(b=>b.textContent==='Восстановить предыдущую версию')).toHaveLength(1);
+ expect(buttons().filter(b=>b.textContent==='Удалить резервную копию')).toHaveLength(1);
+ await act(async()=>buttons().find(b=>b.textContent==='Восстановить предыдущую версию')!.click());
+ expect(f.invoke).toHaveBeenCalledWith('hub_update',expect.objectContaining({action:'restore_previous'}));
+ await act(async()=>buttons().find(b=>b.textContent==='Удалить резервную копию')!.click());
+ expect(f.invoke).toHaveBeenCalledWith('hub_update',expect.objectContaining({action:'delete_previous'}));
 });

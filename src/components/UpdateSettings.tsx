@@ -25,6 +25,15 @@ export function UpdateSettings(){
   };
   const disabled=!!u.busy||!!busy;
   const hot=u.release?.kind==='hot',built=updates.prepared(),stage=u.status?.build.stage;
+  const previousApp=u.status?.previousApp;
+  const managePrevious=async(action:'restore_previous'|'delete_previous')=>{
+    if(action==='delete_previous'&&!window.confirm('Удалить единственную резервную копию Enki?'))return;
+    setBusy(action);setNotice('');try{
+      if(action==='restore_previous'&&agentsRunning())throw Error('Сначала дождитесь завершения всех задач.');
+      await invoke('hub_update',{action,channel:null,data:null,digest:null});
+      if(action==='delete_previous'){await updates.refresh();setNotice('Резервная копия приложения удалена.');}
+    }catch(e){setNotice(String(e));}finally{setBusy('');}
+  };
   const releaseDescription=hot?'Обновление интерфейса без остановки агентов'
     :u.release?.binary?.state==='ready'?'Готовое приложение с GitHub. Скачайте пакет, затем обновите и перезапустите Enki.'
     :[u.release?.version?`Enki ${u.release.version}.`:'',u.release?.binary?.message??'Проверяем готовность установщика.',
@@ -56,7 +65,15 @@ export function UpdateSettings(){
     {u.status?.installation?.error&&<p role="alert">{u.status.installation.error}</p>}
     {u.release?.notes&&<p>{u.release.notes}</p>}
     {u.error&&<p role="alert">{u.error}</p>}{u.notice&&<p role="status">{u.notice}</p>}
-    <h2>Резервные копии</h2>
+    <h2>Резервная копия приложения</h2>
+    {previousApp?.available?<>
+      <p>Сохранена одна предыдущая версия Enki {previousApp.version??''}{previousApp.createdAt?` · ${new Date(previousApp.createdAt).toLocaleString()}`:''}. Она заменяется только после подготовки следующего обновления и нужна для отката.</p>
+      <div className="btn-row">
+        <button className="btn" disabled={disabled||running} onClick={()=>void managePrevious('restore_previous')}>{busy==='restore_previous'?'Готовлю откат…':'Восстановить предыдущую версию'}</button>
+        <button className="btn" disabled={disabled} onClick={()=>void managePrevious('delete_previous')}>Удалить резервную копию</button>
+      </div>
+    </>:<p className="muted">Резервной копии приложения пока нет. Она появится после первого обновления.</p>}
+    <h2>Резервная копия данных</h2>
     <button className="btn" disabled={disabled||running} onClick={()=>void maintain('backup')}>Создать резервную копию</button>
     <SettingField label="Копия"><select value={selected} onChange={e=>setSelected(e.target.value)} disabled={disabled}><option value="">Выберите копию</option>{backups.map(b=><option key={b.id} value={b.id}>{new Date(Number(b.id.slice(7))).toLocaleString()} · {b.version}</option>)}</select></SettingField>
     <button className="btn" disabled={disabled||running||!selected} onClick={()=>void maintain('restore')}>Восстановить и перезапустить</button>

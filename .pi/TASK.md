@@ -431,3 +431,38 @@ test/image-job-card.test.ts test/image-jobs.test.ts` — 18 passed.
 
 Тесты: `test/image-job-card.test.ts` — скелетон есть во время работы (с `aspect-ratio`) и
 исчезает при ошибке; `npx vitest run` 1382 прошли.
+
+## Задача владельца 28.11.2026: перезапуски и одна резервная версия приложения (2.0.128)
+
+Диагностика этого Mac: логи `/tmp/install127.log` показывали запуск внешнего
+`/tmp/install127.sh` каждые ~20 секунд, каждый раз он завершал и заново открывал
+Enki 2.0.127. В `launchctl list` и `launchctl print gui/501/enki-install-127`
+на момент проверки задания уже не было; активного цикла при проверке не осталось.
+Текущая `/Applications/Enki.app` — 2.0.127; статус updater показывал native/UI
+2.0.127, а historical `installedVersion` — 2.0.125 (локальная установка скриптом
+не создала штатный receipt). Старые bundle-копии от updater имели 50 имён вида
+`.Enki-previous-<pid>.app`.
+
+В 2.0.128 реализовано: один канонический rollback `.Enki-previous.app`, атомарная
+замена после подготовки нового bundle; metadata с версией/hash/датой; статус,
+удаление и откат из Настройки → Обновления. Откат повторно проверяет hash,
+ожидает authoritative idle Runtime и использует тот же helper/rename lifecycle.
+При успешном старте очищаются только legacy bundles с точным PID-именем.
+
+Проверки до канонического релизного gate: `npm run build` — прошёл;
+`npx vitest run test/update-settings.test.ts` — 5 прошли;
+`npm run check:docs` — 76 Markdown, 219 ссылок прошли;
+`CARGO_BUILD_JOBS=2 cargo test --manifest-path src-tauri/Cargo.toml --lib
+hub_updates::install::tests` — 6 прошли; `cargo fmt --check` — прошёл.
+Публикация/пакет/установка ещё не выполнены; acceptance остаётся открытой до
+подтверждённой Hub-квитанции и проверки установленной 2.0.128.
+
+## Срез 16 (2.0.128: канал заняли 2.0.127): вокруг чата не рисуется ничего
+
+После 2.0.126 осталась «полурамка» — тонкая линия по нижней кромке истории (мой
+inset-акцент). Владелец: никаких рамок вокруг основного чата.
+
+Сделано: `.chat-scroll:focus-visible, .chat-scroll:focus { outline: none;
+box-shadow: none; }` — контейнер остаётся фокусируемым (прокрутка с клавиатуры
+работает), но не рисует ничего. Тест `test/chat-focus-ring.test.ts` обновлён:
+проверяет отсутствие и рамки, и inset-акцента.

@@ -113,6 +113,140 @@ pub fn launch(plan: Plan) -> Result<(), String> {
         .map_err(|e| format!("Не запущен установщик: {e}"))?;
     Ok(())
 }
+
+/// The installed Mac bundle keeps exactly one rollback copy. Older releases
+/// used PID-suffixed names; once the current bundle has started successfully,
+/// retire those obsolete copies and leave the canonical rollback untouched.
+#[cfg(target_os = "macos")]
+pub fn cleanup_legacy_previous() -> Result<usize, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let bundle = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|x| x == "app"))
+        .ok_or("Enki application bundle not found")?;
+    let parent = bundle.parent().ok_or("Application parent not found")?;
+    let mut removed = 0;
+    for entry in fs::read_dir(parent).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !legacy_previous_name(name) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_dir() {
+            fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_previous_name(name: &str) -> bool {
+    name.strip_prefix(".Enki-previous-")
+        .and_then(|n| n.strip_suffix(".app"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Current application backup metadata for the one-click rollback UI.
+#[cfg(target_os = "macos")]
+pub fn previous_status() -> Result<serde_json::Value, String> {
+    let record = root()?.join("previous-app.json");
+    if !record.is_file() || record.is_symlink() {
+        return Ok(serde_json::json!({"available":false}));
+    }
+    let value: serde_json::Value = read_json(&record)?;
+    let path = value["path"].as_str().map(PathBuf::from);
+    let version = value["version"].as_str().unwrap_or_default();
+    let hash = value["hash"].as_str().unwrap_or_default();
+    let Some(path) = path else {
+        return Ok(serde_json::json!({"available":false}));
+    };
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let current = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|x| x == "app"))
+        .ok_or("Enki application bundle not found")?;
+    let valid_name = path.file_name().is_some_and(|n| n == ".Enki-previous.app");
+    if !valid_name
+        || path.parent() != current.parent()
+        || path.is_symlink()
+        || !path.is_dir()
+        || !packet::hash_ok(hash)
+        || semver::Version::parse(version).is_err()
+    {
+        return Ok(
+            serde_json::json!({"available":false,"error":"Резервная копия отсутствует или имеет некорректную запись."}),
+        );
+    }
+    Ok(
+        serde_json::json!({"available":true,"version":version,"createdAt":value["createdAt"],"hash":hash}),
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub fn delete_previous() -> Result<(), String> {
+    let record = root()?.join("previous-app.json");
+    let value: serde_json::Value = read_json(&record)?;
+    let path = PathBuf::from(value["path"].as_str().ok_or("Invalid backup record")?);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let current = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|x| x == "app"))
+        .ok_or("Enki application bundle not found")?;
+    if path.file_name().is_none_or(|n| n != ".Enki-previous.app")
+        || path.parent() != current.parent()
+        || path.is_symlink()
+        || !path.is_dir()
+    {
+        return Err("Путь резервной копии не прошёл проверку".into());
+    }
+    fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    fs::remove_file(record).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+pub fn rollback_plan() -> Result<Plan, String> {
+    let status = previous_status()?;
+    if status["available"] != true {
+        return Err("Проверенная резервная копия не найдена".into());
+    }
+    let record: serde_json::Value = read_json(&root()?.join("previous-app.json"))?;
+    let source = PathBuf::from(record["path"].as_str().ok_or("Invalid backup record")?);
+    let hash = record["hash"].as_str().ok_or("Invalid backup hash")?;
+    let version = record["version"].as_str().ok_or("Invalid backup version")?;
+    let dir = root()?.join(format!("build-{hash}"));
+    let attempt = dir.join(format!("attempt-rollback-{}", std::process::id()));
+    fs::create_dir_all(&attempt).map_err(|e| e.to_string())?;
+    crate::updates::private(&dir)?;
+    crate::updates::private(&attempt)?;
+    let artifact = attempt.join("Enki.app");
+    let status = Command::new("/usr/bin/ditto")
+        .arg(&source)
+        .arg(&artifact)
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() || tree_hash(&artifact)? != hash {
+        let _ = fs::remove_dir_all(&dir);
+        return Err("Резервную копию не удалось проверить при подготовке отката".into());
+    }
+    let current = std::env::current_exe().map_err(|e| e.to_string())?;
+    let target = current
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|x| x == "app"))
+        .ok_or("Enki application bundle not found")?
+        .to_path_buf();
+    Ok(Plan {
+        artifact,
+        target,
+        version: version.into(),
+        hash: hash.into(),
+        parent: std::process::id(),
+    })
+}
 pub fn cli() -> Result<(), String> {
     let file = PathBuf::from(std::env::args_os().nth(2).ok_or("Missing update plan")?);
     let base = fs::canonicalize(root()?).map_err(|e| e.to_string())?;
@@ -217,9 +351,9 @@ pub(crate) trait BundleOps {
     fn record_previous(&mut self, previous: &Path) -> Result<(), String>;
 }
 
-/// copy → target→previous → staging→destination (the commit) → previous record.
-/// Every failure is classified by the phase it happened in; the old bundle is
-/// never deleted.
+/// copy → retire the older rollback → target→previous → staging→destination
+/// (the commit) → previous record. The just-installed bundle remains the only
+/// rollback copy.
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn replace_bundle(
     ops: &mut impl BundleOps,
@@ -232,6 +366,27 @@ pub(crate) fn replace_bundle(
     if let Err(e) = ops.copy(artifact, staging) {
         let _ = fs::remove_dir_all(staging);
         return Applied::NotCommitted(e);
+    }
+    // Keep exactly one rollback: after the new bundle is safely staged, retire
+    // the older backup before moving the currently running version into place.
+    match fs::symlink_metadata(previous) {
+        Ok(meta) if meta.file_type().is_dir() => {
+            if let Err(e) = fs::remove_dir_all(previous) {
+                let _ = fs::remove_dir_all(staging);
+                return Applied::NotCommitted(format!(
+                    "Не удалось заменить прежнюю резервную копию: {e}"
+                ));
+            }
+        }
+        Ok(_) => {
+            let _ = fs::remove_dir_all(staging);
+            return Applied::NotCommitted("Резервная копия имеет небезопасный тип".into());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            let _ = fs::remove_dir_all(staging);
+            return Applied::NotCommitted(e.to_string());
+        }
     }
     if let Err(e) = ops.rename(target, previous) {
         let _ = fs::remove_dir_all(staging);
@@ -254,7 +409,7 @@ pub(crate) fn replace_bundle(
             },
         };
     }
-    // Committed. The previous bundle stays beside the installation for manual recovery.
+    // Committed. The previous bundle is the single rollback exposed in Settings.
     let warning = ops.record_previous(previous).err().map(|e| {
         format!(
             "Новая версия установлена, но запись о прежней версии не сохранена: {e}. Прежняя версия лежит в {}",
@@ -281,11 +436,33 @@ impl BundleOps for SystemBundle {
         fs::rename(from, to)
     }
     fn record_previous(&mut self, previous: &Path) -> Result<(), String> {
+        let version = bundle_version(previous)?;
+        let hash = tree_hash(previous)?;
         atomic(
             &root()?.join("previous-app.json"),
-            &serde_json::json!({ "path": previous }),
+            &serde_json::json!({ "path": previous, "version": version, "hash": hash,
+                "createdAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?.as_millis() }),
         )
     }
+}
+#[cfg(target_os = "macos")]
+fn bundle_version(bundle: &Path) -> Result<String, String> {
+    let output = Command::new("/usr/libexec/PlistBuddy")
+        .arg("-c")
+        .arg("Print :CFBundleShortVersionString")
+        .arg(bundle.join("Contents/Info.plist"))
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("Не удалось определить версию резервной копии".into());
+    }
+    let version = String::from_utf8(output.stdout)
+        .map_err(|e| e.to_string())?
+        .trim()
+        .to_owned();
+    semver::Version::parse(&version).map_err(|_| "Некорректная версия резервной копии")?;
+    Ok(version)
 }
 fn destination(p: &Plan) -> PathBuf {
     #[cfg(target_os = "macos")]
@@ -337,10 +514,8 @@ fn replace(p: &Plan) -> Applied {
     let staging = p
         .target
         .with_file_name(format!(".Enki-update-{}.app", std::process::id()));
-    let previous = p
-        .target
-        .with_file_name(format!(".Enki-previous-{}.app", std::process::id()));
-    if staging.exists() || previous.exists() {
+    let previous = p.target.with_file_name(".Enki-previous.app");
+    if fs::symlink_metadata(&staging).is_ok() {
         return Applied::NotCommitted("Installation staging already exists".into());
     }
     replace_bundle(
@@ -635,6 +810,71 @@ mod tests {
                 }
                 fs::remove_dir_all(dir).unwrap();
             }
+        }
+    }
+    #[test]
+    fn a_new_update_replaces_the_previous_rollback_only_after_staging_succeeds() {
+        let dir = std::env::temp_dir().join(format!("enki-single-rollback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("build/Enki.app")).unwrap();
+        fs::write(dir.join("build/Enki.app/id"), b"new").unwrap();
+        for (name, value) in [
+            ("Enki.app", b"current".as_slice()),
+            (".Enki-previous.app", b"older".as_slice()),
+        ] {
+            fs::create_dir(dir.join(name)).unwrap();
+            fs::write(dir.join(name).join("id"), value).unwrap();
+        }
+        let target = dir.join("Enki.app");
+        let previous = dir.join(".Enki-previous.app");
+        let destination = target.clone();
+        let staging = dir.join(".Enki-update-1.app");
+        let artifact = dir.join("build/Enki.app");
+        let mut failed = Faults {
+            fail: "copy",
+            renames: 0,
+        };
+        let not_committed = replace_bundle(
+            &mut failed,
+            &artifact,
+            &target,
+            &destination,
+            &staging,
+            &previous,
+        );
+        assert!(matches!(not_committed, Applied::NotCommitted(_)));
+        assert_eq!(id(&target).as_deref(), Some("current"));
+        assert_eq!(id(&previous).as_deref(), Some("older"));
+        let mut ops = Faults {
+            fail: "none",
+            renames: 0,
+        };
+        let applied = replace_bundle(
+            &mut ops,
+            &artifact,
+            &target,
+            &destination,
+            &staging,
+            &previous,
+        );
+        assert!(matches!(applied, Applied::Committed { .. }));
+        assert_eq!(id(&target).as_deref(), Some("new"));
+        assert_eq!(id(&previous).as_deref(), Some("current"));
+        assert!(!dir.join(".Enki-update-1.app").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_rollback_cleanup_matches_only_the_old_pid_bundle_names() {
+        assert!(legacy_previous_name(".Enki-previous-9376.app"));
+        assert!(legacy_previous_name(".Enki-previous-123456.app"));
+        for name in [
+            ".Enki-previous.app",
+            ".Enki-previous-abc.app",
+            ".Enki-previous-12.app.bak",
+            ".Other-previous-123.app",
+        ] {
+            assert!(!legacy_previous_name(name), "unexpected match: {name}");
         }
     }
     #[test]
