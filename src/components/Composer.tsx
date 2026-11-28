@@ -14,7 +14,7 @@ import { Icon } from "./Icon";
 import { activePluginUi } from "../agent/runtime/pluginUi/active";
 import { SelectMenu } from "./SelectMenu";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { store, useAppState } from "../state/store";
+import { store, useAppSelector, useAppState } from "../state/store";
 import { attachmentDrafts, attachmentScope } from "../attachments/drafts";
 import { LARGE_PASTE_THRESHOLD, pastedTextFile } from "../attachments/prepare";
 import { filesFromNativeDrop, nativeDropTargetsQuestion } from "../attachments/native-drop";
@@ -29,19 +29,24 @@ import { sessionPatchFiles } from "../state/chatReducer";
 
 const PromptQueue = lazy(() => import("./PromptQueue").then(m => ({default: m.PromptQueue})));
 
-function ChangeSummary({sessionId, directory, revision}: {sessionId: string | null; directory: string | null; revision: number}) {
+export function ChangeSummary({sessionId, directory, revision}: {sessionId: string | null; directory: string | null; revision: number}) {
   const [files, setFiles] = useState<SessionDiffFile[] | null>(null);
+  // The composer is on screen while the runtime is still connecting: a restored
+  // chat has an id and a directory before `store.client` exists. Reading the
+  // client there threw, and the uncaught error unmounted the whole window.
+  const {connected} = useAppSelector(s => ({connected: s.connection.phase === "connected"}));
   useEffect(() => {
     let live = true;
     setFiles(null);
-    if (!sessionId || !directory) return () => { live = false; };
-    const client = store.client;
+    if (!sessionId || !directory || !connected) return () => { live = false; };
+    const client = store.maybeBackend()?.client;
+    if (!client) return () => { live = false; };
     const controller = new AbortController();
     void client.sessionDiff(sessionId, directory, controller.signal).then(result => {
-      if (live && client === store.client && sessionId === store.state.activeSessionId && directory === store.state.directory) setFiles(result);
+      if (live && client === store.maybeBackend()?.client && sessionId === store.state.activeSessionId && directory === store.state.directory) setFiles(result);
     }).catch(() => { if (live) setFiles(null); });
     return () => { live = false; controller.abort(); };
-  }, [sessionId, directory, revision]);
+  }, [sessionId, directory, revision, connected]);
   if (!sessionId || !files) return null;
   const root = normalizeLocalPath(directory ?? '').replace(/^\/private(?=\/)/, '');
   const toRelative = (value: string) => {

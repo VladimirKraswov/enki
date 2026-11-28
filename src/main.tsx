@@ -4,9 +4,14 @@ import App from "./App";
 import { BrowserMonitor } from "./components/BrowserMonitor";
 import { store, applyTheme } from "./state/store";
 import { startAgentControl } from "./control/bridge";
+import { installStartupGuard } from "./startup/guard";
 import "./styles.css";
 
 const observingBrowser = new URLSearchParams(window.location.search).get("view") === "browser-monitor";
+
+// A blank window is unreportable: an uncaught startup error, or a window that
+// never painted, becomes a visible panel instead of white.
+installStartupGuard(document, window);
 
 // Debug handle for development only (not included in production bundles).
 if (import.meta.env.DEV && !observingBrowser) {

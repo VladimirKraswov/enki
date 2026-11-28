@@ -1,6 +1,7 @@
 import { store, useAppState } from "../state/store";
 import { useEffect, useRef } from "react";
 import { RuntimeStartupStatus } from './RuntimeStartupStatus';
+import { toastSummary } from "../util/toast";
 
 export function DeleteConfirm() {
   const s = useAppState();
@@ -63,7 +64,7 @@ export function Toast() {
       className="toast"
       role="status"
     >
-      <span>{s.ui.toast}</span>
+      <span title={s.ui.toast}>{toastSummary(s.ui.toast)}</span>
       <button type="button" className="toast-close" aria-label="Закрыть уведомление" onClick={() => store.setUi({ toast: null })}>×</button>
     </div>
   );

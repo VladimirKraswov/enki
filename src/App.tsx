@@ -182,7 +182,7 @@ export default function App() {
               )}
             </ChatWorkspace>
             {s.ui.browserOpen && s.activeSessionId && <BrowserPanel key={JSON.stringify([s.prefs.workspaceKey ?? s.prefs.endpoint, s.directory, store.engineIdFor(), s.activeSessionId])} />}
-            {!s.ui.browserOpen && layout.rightOpen && store.workspaceToolsAvailable() && (
+            {!s.ui.browserOpen && layout.rightOpen && s.connection.phase === "connected" && store.workspaceToolsAvailable() && (
               <>
                 <div
                   className="resizer-v"
