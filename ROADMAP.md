@@ -367,4 +367,8 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 - [x] Пустое окно больше не может быть молчаливым: `src/startup/guard.ts` показывает реальную ошибку запуска (или сообщение, что интерфейс не отрисовался за 12 с) с кнопкой перезагрузки; когда интерфейс отрисовывается, панель убирается.
 - [x] Поведенческие тесты: `test/preconnect-render.test.ts` (без исправления падает на `Composer.tsx:42`), `test/startup-guard.test.ts` (5 случаев).
 - [x] Простыня уведомления (список непрочитанных ключей всех провайдеров) больше не закрывает окно: `src/util/toast.ts` оставляет одну читаемую строку, полный текст — в подсказке; тест `test/toast-summary.test.ts`.
-- [ ] Канонический gate, публикация Hub 2.0.140, установка и проверка сессий на этом Mac.
+- [x] Канонический gate на закреплённом Node 24.22.1: UI 233 файла / 1396 тестов, Runtime 532, Rust 304 (7 ignored), build-runner 12 (1 ignored), Hub 144 (2 skipped), ASR 3, `cargo fmt`/`clippy -D warnings` для обоих манифестов, SDK contract 0.85.1.
+- [x] Опубликовано в Hub: receipt `.local/releases/2.0.140-stable.json`, revision `8f4f68cb…`, commit `cadfdc9`, оба пакета `source`/`hot` скачаны с Hub и проверены по подписям; `device.mjs` подтвердил head повторно.
+- [x] DMG `src-tauri/target/release/bundle/dmg/Enki_2.0.140_aarch64.dmg` (120 МБ) установлен в `/Applications/Enki.app`; единственная rollback-копия — `/Applications/.Enki-previous.app` (2.0.138).
+- [x] Живая приёмка установленной 2.0.140: UI отвечает через приватный agent-control (`connected`, 22 проекта, 14 сессий в Compute Mesh, включая «Tasks VPS»), окно отрисовано, ошибок запуска нет.
+- [x] Убраны временные копии: 2.0.133 из `/private/tmp/enki-old-backup.Dukpgy` и инструментированная 2.0.139 (в ней был диагностический пробник).
