@@ -409,3 +409,14 @@ CFG 4, shift 3.1, без LoRA); `variants` 1–4 (тот же промпт, си
 
 Тесты: `npx vitest run test/image-generation.test.ts test/image-editing.test.ts
 test/image-job-card.test.ts test/image-jobs.test.ts` — 18 passed.
+
+## Срез 15 (2.0.126): убрана рамка фокуса вокруг чата
+
+Владелец: большой жёлтый квадрат вокруг основного чата мешает.
+
+Причина: `.chat-scroll:focus-visible` рисовал рамку по всему полотну истории, а
+глобальное правило `[tabindex]:focus-visible` перекрашивало её в акцентный цвет.
+
+Сделано: рамка убрана (`outline: none`), признак клавиатурного фокуса остался
+тонкой линией по нижней кромке (`inset` box-shadow, слабый цвет). Тест:
+`test/chat-focus-ring.test.ts` (нет рамки, но подсказка есть).

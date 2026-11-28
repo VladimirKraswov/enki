@@ -2755,7 +2755,10 @@ kbd {
 /* Reading stays anchored during streaming; the viewport controller owns scrolling. */
 .chat-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .chat-scroll { overflow-anchor: none; scroll-behavior: auto; overscroll-behavior-y: contain; }
-.chat-scroll:focus-visible { outline: 1px solid var(--text-faint); outline-offset: -2px; }
+/* The transcript is focusable for keyboard scrolling, but a ring around the whole
+   pane reads as a permanent highlight. A hairline on the bottom edge keeps the
+   keyboard cue without boxing the chat. */
+.chat-scroll:focus-visible { outline: none; box-shadow: inset 0 -2px 0 0 color-mix(in srgb, var(--text-faint) 55%, transparent); }
 .chat-inner { flex-shrink: 0; }
 .history-message { min-width: 0; }
 .history-date { color: var(--text-faint); font-size: 0.857143rem; text-align: center; margin: 14px 0 22px; }
