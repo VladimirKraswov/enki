@@ -342,4 +342,12 @@ CI собирает настоящие пакеты на трёх ОС, но э�
 
 - [x] Сохранить проверку absolute/file и Unix executable bit одним условием,
   не меняя Windows проверки.
-- [ ] Канонический gate, Hub receipt и платформенные пакеты.
+- [x] Windows UI и Hub suites прошли; Clippy выявил `needless_bool` в
+  неизменяемом baseline snapshot 2.0.30, который включён только A/B example;
+  Linux package прошёл.
+
+## Исторический Runtime baseline lint 2.0.138
+
+- [x] Ограничить Clippy исключение модулем `baseline` в read-only A/B example;
+  fixture остаётся неизменным, текущий product code продолжает проверяться.
+- [ ] Канонический gate и повторные пакеты Windows/macOS/Linux.

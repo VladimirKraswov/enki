@@ -1,6 +1,8 @@
 //! Read-only A/B measurement against the immutable 2.0.30 verifier. Never
 //! executes Node or opens an Enki profile. Run only on a test-owned artifact.
-#[allow(dead_code)]
+// The baseline is an immutable historical snapshot; keep its original code
+// while excluding it from today's style-only Clippy lint.
+#[allow(dead_code, clippy::needless_bool)]
 #[path = "../../test/fixtures/runtime-artifact-2.0.30.rs"]
 mod baseline;
 #[allow(dead_code)]

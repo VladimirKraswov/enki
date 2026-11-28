@@ -653,3 +653,11 @@ CI 2.0.136 подтвердил первый lint исправленным (`run
 одно выражение; Windows сохраняет проверку абсолютного существующего файла,
 Unix по-прежнему требует executable bit. Это 2.0.137; полный gate и Windows CI
 нужны до готовых пакетов.
+
+Windows CI 2.0.137 прошёл Hub tests и `cargo check`, затем Clippy нашёл lint в
+`test/fixtures/runtime-artifact-2.0.30.rs`, подключённом как `baseline` в
+read-only A/B example. Fixture является историческим срезом; изменять его ради
+современного style lint нельзя. В 2.0.138 добавлен точечный
+`#[allow(clippy::needless_bool)]` только для baseline-модуля в example; текущий
+runtime/product code продолжает Clippy проверяться отдельно. Полный gate и
+следующий Windows Clippy/package workflow ещё не запускались.
